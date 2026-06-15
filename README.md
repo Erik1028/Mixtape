@@ -67,6 +67,10 @@ Optional: install [FFmpeg](https://ffmpeg.org/) (or point to it in Settings) to 
 - Restore is available from the device page if anything looks wrong.
 - Still: **back up your iPod's contents yourself before writing**, and test with one song first on a device you care about. hash58 writing has had limited real-world testing.
 
+## Troubleshooting
+
+Hit a snag? See **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — fixes for the common ones: the app won't open (SmartScreen), the iPod isn't detected, **"Add music" is greyed out**, an iPod showing "0 songs" after a write, video/FFmpeg, photos, and more. When in doubt, use **Save report…** on the device page and open an issue.
+
 ## Credits
 
 - The hash58 signature tables/algorithm are derived from the open-source [**libgpod**](http://www.gtkpod.org/libgpod/) and **ipod-sharp** projects — credit to their authors for the reverse-engineering.
