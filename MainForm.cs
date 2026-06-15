@@ -186,6 +186,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var statusPanel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.SidebarBg };
         _status.ForeColor = Theme.Subtle;
         _status.BackColor = Theme.SidebarBg;
+        _status.Click += (_, _) => ShowDbWarnings();
         statusPanel.Controls.Add(_status);
 
         _nowPlaying.PrevRequested += () => PlayRelative(-1);
@@ -1021,6 +1022,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.ArtClickable = _viewKind is SidebarRowKind.AllSongs or SidebarRowKind.Playlist; // click the cover to choose art
         string st = $"{list.Count} {noun}{(list.Count == 1 ? "" : "s")}";
         if (_db.Warnings.Count > 0) st += $"   ·   ⚠ {_db.Warnings.Count} warning(s)";
+        _status.Cursor = _db.Warnings.Count > 0 ? Cursors.Hand : Cursors.Default;   // click the status to read them
         if (_device is not null && !_device.Profile.CanWrite) st += "   ·   Read-only — " + _device.Profile.WriteBlockReason;
         _baseStatus = st;
         SetStatus(st);
@@ -2934,6 +2936,18 @@ internal sealed class MainForm : Form, IMessageFilter
         var sel = Theme.Blend(Theme.Bg, Theme.Accent, 0.22);
         _tracks.DefaultCellStyle.SelectionBackColor = sel;
         _tracks.AlternatingRowsDefaultCellStyle.SelectionBackColor = sel;
+    }
+
+    /// <summary>Click the "⚠ N warning(s)" status to read the actual reader warnings.</summary>
+    private void ShowDbWarnings()
+    {
+        var w = _db?.Warnings;
+        if (w is not { Count: > 0 }) return;
+        MessageBox.Show(this,
+            "While reading your iPod's database, Mixtape noticed the following. These are non-fatal — your music still reads and plays normally:\n\n• " +
+            string.Join("\n\n• ", w) +
+            "\n\n(These usually come from how a previous app or sync wrote the database, and are safe to ignore.)",
+            "Database notes", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void SeedDefaultSort()
