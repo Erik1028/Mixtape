@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
@@ -46,3 +47,4 @@ public partial class MainWindow : Window
 
     private void OnPlayPause(object? sender, RoutedEventArgs e) => _vm.PlayPause();
 }
+

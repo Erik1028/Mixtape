@@ -66,6 +66,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // Optional: `Mixtape.App <folder>` opens that PC folder as Local Music on launch.
         var folderArg = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault(Directory.Exists);
         if (folderArg is not null) AddLocalFolders(new[] { folderArg });
+        var q = Environment.GetCommandLineArgs().FirstOrDefault(a => a.StartsWith("--q=")); // test aid
+        if (q is not null) SearchText = q.Substring(4);
     }
 
     // ---- bound header / status ----
@@ -128,6 +130,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void OnSelect(SidebarItem? s)
     {
         if (s is null) return;
+        if (_searchText.Length > 0) { _searchText = ""; OnPropertyChanged(nameof(SearchText)); } // clear search on navigation
         switch (s.Kind)
         {
             case SidebarKind.LocalMusic: ShowLocalMusic(); break;
@@ -151,30 +154,66 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ShowTracks(list, "PLAYLIST", string.IsNullOrEmpty(pl.Name) ? "Untitled playlist" : pl.Name, "song", preserveOrder: true);
     }
 
+    private List<Track> _currentFull = new();
+    private string _curKicker = "LIBRARY", _curTitle = "Mixtape", _curNoun = "song";
+    private bool _localView;
+
+    private string _searchText = "";
+    public string SearchText { get => _searchText; set { if (Set(ref _searchText, value)) RenderCurrent(); } }
+
     private void ShowTracks(IEnumerable<Track> tracks, string kicker, string title, string noun, bool preserveOrder = false)
     {
-        var list = tracks.ToList();
-        Tracks.Clear();
-        foreach (var t in list) Tracks.Add(TrackRow.From(t));
-        long ms = list.Sum(t => (long)t.LengthMs);
-        HeaderKicker = kicker;
-        HeaderTitle = title;
-        HeaderSubtitle = $"{list.Count} {noun}{(list.Count == 1 ? "" : "s")} · {FormatTotal(ms)}";
-        Status = HeaderSubtitle;
+        _currentFull = tracks.ToList();
+        _curKicker = kicker; _curTitle = title; _curNoun = noun; _localView = false;
+        RenderCurrent();
     }
+
+    private void RenderCurrent()
+    {
+        string q = _searchText.Trim();
+        IEnumerable<Track> src = _currentFull;
+        if (q.Length > 0) src = src.Where(t => Match(t, q));
+        var shown = src.ToList();
+        Tracks.Clear();
+        foreach (var t in shown) Tracks.Add(TrackRow.From(t));
+        long ms = shown.Sum(t => (long)t.LengthMs);
+        HeaderKicker = _curKicker;
+        HeaderTitle = _curTitle;
+        HeaderSubtitle = $"{shown.Count} {_curNoun}{(shown.Count == 1 ? "" : "s")} · {FormatTotal(ms)}";
+        Status = _localView
+            ? (_localFolders.Count == 0 ? "Click “Add folder” to add music from your PC."
+               : $"{shown.Count} songs · {_localFolders.Count} folder{(_localFolders.Count == 1 ? "" : "s")}")
+            : HeaderSubtitle;
+    }
+
+    private static bool Match(Track t, string q)
+        => t.DisplayTitle.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || (t.Artist?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (t.Album?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
 
     // ---- Local Music (no iPod required) ----
     private void ShowLocalMusic()
     {
-        Tracks.Clear();
-        foreach (var t in _localTracks) Tracks.Add(TrackRow.From(t));
-        long ms = _localTracks.Sum(t => (long)t.LengthMs);
-        HeaderKicker = "ON THIS PC";
-        HeaderTitle = "Local Music";
-        HeaderSubtitle = _localTracks.Count == 0 ? "" : $"{_localTracks.Count} songs · {FormatTotal(ms)}";
-        Status = _localFolders.Count == 0
-            ? "Click “Add folder” to add music from your PC."
-            : $"{_localTracks.Count} songs · {_localFolders.Count} folder{(_localFolders.Count == 1 ? "" : "s")}";
+        _currentFull = _localTracks.ToList();
+        _curKicker = "ON THIS PC"; _curTitle = "Local Music"; _curNoun = "song"; _localView = true;
+        RenderCurrent();
+    }
+
+    /// <summary>Files/folders dropped on the window → add their folders to Local Music.</summary>
+    public void AddDropped(IEnumerable<string> paths)
+    {
+        var folders = new List<string>();
+        foreach (var p in paths)
+        {
+            if (Directory.Exists(p)) folders.Add(p);
+            else if (File.Exists(p) && AudioExt.Contains(Path.GetExtension(p).ToLowerInvariant()))
+            {
+                var d = Path.GetDirectoryName(p);
+                if (!string.IsNullOrEmpty(d)) folders.Add(d);
+            }
+        }
+        if (folders.Count > 0) AddLocalFolders(folders);
+        else Status = "Drop a music folder — or songs — to add them to Local Music.";
     }
 
     public void AddLocalFolders(IEnumerable<string> folders)

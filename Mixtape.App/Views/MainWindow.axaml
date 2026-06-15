@@ -53,6 +53,11 @@
           </StackPanel>
         </Grid>
 
+        <!-- search -->
+        <TextBox DockPanel.Dock="Top" Margin="24,0,24,8"
+                 Watermark="Search songs, artists, albums…"
+                 Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
         <!-- status bar -->
         <Border DockPanel.Dock="Bottom" Height="28" Background="{StaticResource SidebarBrush}">
           <TextBlock Text="{Binding Status}" Foreground="{StaticResource SubtleBrush}"
