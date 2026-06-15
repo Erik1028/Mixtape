@@ -13,7 +13,14 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--audiotest") { AudioSelfTest(args[1]); return; }
         if (args.Length >= 2 && args[0] == "--makesandbox") { MakeSandbox(args[1]); return; }
         if (args.Length >= 3 && args[0] == "--addtest") { AddSelfTest(args[1], args[2]); return; }
+
+        // Single instance: two copies racing the same iPod DB swap or the shared settings.json
+        // corrupt each other. Named mutexes are cross-process on Windows and Linux. (Skip in tests above.)
+        using var mutex = new System.Threading.Mutex(initiallyOwned: true, @"Global\MixtapeApp.SingleInstance", out bool isFirst);
+        if (!isFirst) return;
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        GC.KeepAlive(mutex);
     }
 
     // Build a throwaway sandbox iPod (synthetic DB) so the copy-to-iPod path can be tested without a real device.

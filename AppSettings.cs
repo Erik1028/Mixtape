@@ -77,7 +77,29 @@ internal sealed class AppSettings
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            var opts = new JsonSerializerOptions { WriteIndented = true };
+            var mine = JsonSerializer.SerializeToNode(this, opts)!.AsObject();
+
+            // Merge over the existing file so we don't wipe keys written by the Avalonia app
+            // (it persists to the same settings.json via its own AppConfig). Our fields win;
+            // any keys we don't know about are preserved.
+            System.Text.Json.Nodes.JsonObject merged = mine;
+            try
+            {
+                if (File.Exists(FilePath) &&
+                    System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(FilePath)) is System.Text.Json.Nodes.JsonObject existing)
+                {
+                    foreach (var kv in mine) existing[kv.Key] = kv.Value?.DeepClone();
+                    merged = existing;
+                }
+            }
+            catch { /* unreadable existing file → just write ours */ }
+
+            // Atomic: write a temp file then swap it in, so a crash mid-write can't truncate settings.
+            string tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, merged.ToJsonString(opts));
+            if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null);
+            else File.Move(tmp, FilePath);
         }
         catch { /* settings are best-effort */ }
     }

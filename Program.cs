@@ -101,11 +101,31 @@ internal static class Program
         // Verify playlist track reordering on a real DB. → ipod-reordertest.txt
         if (args.Length >= 2 && args[0] == "--reordertest") { RunReorderTest(args[1]); return; }
 
+        // GUI launch — enforce a single instance. Two copies racing the same iPod database swap
+        // (or both writing %APPDATA%\Mixtape\settings.json) corrupt each other; a second launch
+        // just surfaces the running window instead of starting a rival process.
+        using var mutex = new System.Threading.Mutex(initiallyOwned: true, @"Local\MixtapeSingleInstance", out bool isFirst);
+        if (!isFirst)
+        {
+            PostMessage(HWND_BROADCAST, ShowInstanceMessage, IntPtr.Zero, IntPtr.Zero);
+            return;
+        }
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.Run(new MainForm());
+        GC.KeepAlive(mutex); // keep the handle (and thus the lock) alive for the app's lifetime
     }
+
+    /// <summary>Broadcast window message a second launch posts so the running instance restores + activates itself.</summary>
+    internal static readonly uint ShowInstanceMessage = RegisterWindowMessage("MixtapeShowExistingInstance");
+    private static readonly IntPtr HWND_BROADCAST = (IntPtr)0xFFFF;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    private static extern uint RegisterWindowMessage(string msg);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private static readonly string[] TestImageExt = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp" };
 

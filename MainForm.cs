@@ -3020,6 +3020,14 @@ internal sealed class MainForm : Form, IMessageFilter
 
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == (int)Program.ShowInstanceMessage)   // a second launch asked us to surface
+        {
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Show();
+            Activate();
+            BringToFront();
+            return;
+        }
         if (m.Msg == WM_DEVICECHANGE)
         {
             int ev = (int)m.WParam;
