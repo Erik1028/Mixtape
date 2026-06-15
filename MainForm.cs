@@ -1884,6 +1884,9 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_lib is null || _device is null || !_device.Profile.CanWrite || files.Length == 0) return;
 
+        files = FilterAlreadyOnIpod(files, "songs", isVideo: false); // skip/keep duplicates already on the iPod
+        if (files.Length == 0) return;
+
         // FLAC/OGG/Opus/WMA (or "always re-encode") need ffmpeg → AAC; mp3/m4a/wav/aiff copy as-is.
         var ffmpeg = FfmpegService.Detect(_settings.FfmpegPath);
         bool anyNeedsTranscode = files.Any(f => !IsNativeAudio(f)); // only non-native files truly require ffmpeg
@@ -1960,6 +1963,69 @@ internal sealed class MainForm : Form, IMessageFilter
             if (errors.Count > 0) msg += $"\n\n{errors.Count} could not be added:\n• " + string.Join("\n• ", errors);
             MessageBox.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         }
+    }
+
+    // ---- duplicate guard (shared by music + video add, for both the button and drag-and-drop) ----
+
+    private static string NormKey(string? s)
+    {
+        s = (s ?? "").Trim().ToLowerInvariant();
+        return string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)); // collapse whitespace
+    }
+
+    /// <summary>Identity for "the same item already on the iPod": music keys on title+artist+album; a video on its title (file name).</summary>
+    private static string ItemKey(string? title, string? artist, string? album, bool isVideo)
+        => isVideo ? "V" + NormKey(title)
+                   : "A" + NormKey(title) + "" + NormKey(artist) + "" + NormKey(album);
+
+    private static string ItemKeyFromAudioFile(string path)
+    {
+        var nt = MetadataExtractor.Read(path);
+        return ItemKey(nt.Title, nt.Artist, nt.Album, isVideo: false);
+    }
+
+    /// <summary>If some incoming files are already on the iPod, ask whether to skip them or add anyway.
+    /// Returns the files to actually add (possibly fewer); an empty array means "add nothing".</summary>
+    private string[] FilterAlreadyOnIpod(string[] files, string mediaWord, bool isVideo)
+    {
+        if (_lib is null || files.Length == 0) return files;
+
+        var existing = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in _lib.View.Tracks)
+            if (MediaType.IsVideo(t.MediaType) == isVideo)
+                existing.Add(ItemKey(t.Title, t.Artist, t.Album, isVideo));
+        if (existing.Count == 0) return files; // nothing of this kind on the iPod yet → no dupes possible
+
+        var fresh = new List<string>();
+        var dups = new List<string>();
+        bool prevCursor = UseWaitCursor; UseWaitCursor = true;
+        try
+        {
+            foreach (var f in files)
+            {
+                string key;
+                try { key = isVideo ? ItemKey(Path.GetFileNameWithoutExtension(f), null, null, true) : ItemKeyFromAudioFile(f); }
+                catch { key = ""; } // unreadable tags → treat as new rather than wrongly skipping
+                if (key.Length > 0 && existing.Contains(key)) dups.Add(f); else fresh.Add(f);
+            }
+        }
+        finally { UseWaitCursor = prevCursor; }
+
+        if (dups.Count == 0) return files; // nothing already present → add them all, no prompt
+
+        string preview = string.Join("\n• ", dups.Take(8).Select(Path.GetFileName));
+        if (dups.Count > 8) preview += $"\n• …and {dups.Count - 8} more";
+        var r = MessageBox.Show(this,
+            $"{dups.Count} of these {files.Length} {mediaWord} look like they're already on your iPod:\n\n• {preview}\n\n" +
+            "Yes   —   Skip the duplicates, add only what's new   (recommended)\n" +
+            "No    —   Add everything anyway (you'll get duplicates)\n" +
+            "Cancel —  Don't add anything",
+            "Already on your iPod", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+
+        if (r == DialogResult.No) return files;                 // add anyway
+        if (r == DialogResult.Cancel) return Array.Empty<string>();
+        if (fresh.Count == 0) SetStatus($"All {dups.Count} {mediaWord} are already on your iPod — nothing to add.");
+        return fresh.ToArray();                                 // skip the duplicates
     }
 
     private void OnDelete()
@@ -2336,6 +2402,9 @@ internal sealed class MainForm : Form, IMessageFilter
     private void AddVideoFiles(string[] files)
     {
         if (_lib is null || _device is null || !_device.Profile.CanWrite || files.Length == 0) return;
+
+        files = FilterAlreadyOnIpod(files, "videos", isVideo: true); // skip/keep duplicates already on the iPod
+        if (files.Length == 0) return;
 
         var ffmpeg = FfmpegService.Detect(_settings.FfmpegPath);
         if (ffmpeg is null)
