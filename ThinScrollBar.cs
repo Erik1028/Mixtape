@@ -73,13 +73,18 @@ internal sealed class ThinScrollBar : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        e.Graphics.Clear(BackColor);
+        // Paint the track live from the current theme (not the BackColor baked at field-init,
+        // which would still be the default variant if a non-default theme was saved).
+        e.Graphics.Clear(Theme.Bg);
         if (Total <= Visible) return; // nothing to scroll → no thumb
         var (y, h) = Thumb();
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         var r = new RectangleF((Width - 6) / 2f, y, 6, h);
         using var path = Theme.RoundedRect(r, 3);
-        using var b = new SolidBrush(_dragging || _hover ? Color.FromArgb(112, 118, 126) : Color.FromArgb(72, 76, 82));
+        // Thumb derived from the theme so it reads on every variant (was a fixed gray).
+        var thumb = _dragging || _hover ? Theme.Blend(Theme.Bg, Theme.TextCol, 0.42)
+                                        : Theme.Blend(Theme.Bg, Theme.TextCol, 0.22);
+        using var b = new SolidBrush(thumb);
         e.Graphics.FillPath(b, path);
     }
 

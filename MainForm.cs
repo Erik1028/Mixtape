@@ -2926,6 +2926,8 @@ internal sealed class MainForm : Form, IMessageFilter
         _status.BackColor = Theme.SidebarBg;
         _search.Restyle();
         if (_search.Parent is Control searchHost) searchHost.BackColor = Theme.Bg;
+        _scrollbar.BackColor = Theme.Bg;       // music-list scrollbar track (baked at field-init)
+        _deviceScroll.BackColor = Theme.Bg;
     }
 
     /// <summary>Re-colour the BackColor-baked panels + grid after a background-theme change (owner-painted controls repaint via Invalidate).</summary>
