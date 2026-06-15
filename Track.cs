@@ -58,4 +58,10 @@ internal sealed class Track
 
     public string DisplayTitle => string.IsNullOrEmpty(Title) ? "(untitled)" : Title!;
     public TimeSpan Duration => TimeSpan.FromMilliseconds(LengthMs);
+
+    /// <summary>Human "m:ss" for songs, but "h:mm:ss" once the length reaches an hour — otherwise the
+    /// TimeSpan "m" specifier silently drops the hours and long videos read far shorter than they are.</summary>
+    public string DurationStr => Duration.TotalHours >= 1
+        ? Duration.ToString(@"h\:mm\:ss")
+        : Duration.ToString(@"m\:ss");
 }

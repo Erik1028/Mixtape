@@ -996,7 +996,7 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             var thumb = Theme.MakeArt(artSize, Theme.StableHash(t.Album ?? t.DisplayTitle)); // placeholder until real art loads
             int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "",
-                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.Duration.ToString(@"m\:ss"));
+                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.DurationStr);
             _tracks.Rows[r].Tag = t;
         }
         _populatingGrid = false;
@@ -2072,7 +2072,7 @@ internal sealed class MainForm : Form, IMessageFilter
             totalMs += t.LengthMs;
             var thumb = Theme.MakeArt(artSize, Theme.StableHash(t.Album ?? t.DisplayTitle));
             int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "",
-                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.Duration.ToString(@"m\:ss"));
+                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.DurationStr);
             _tracks.Rows[r].Tag = t;
         }
         _populatingGrid = false;
