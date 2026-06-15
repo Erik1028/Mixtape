@@ -1677,64 +1677,134 @@ internal sealed class MainForm : Form, IMessageFilter
             "Mixtape will read this iPod's hardware ID directly from the device — a safe, read-only query (the same one iTunes uses) — and save it to the iPod so music can be written. Nothing on the iPod is changed except adding the standard device-info file.\n\nContinue?",
             "Enable writing", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
 
-        byte[]? doc = null; string? err = null;
+        // The iPod's current database: used to verify a recovered GUID against the signature already
+        // on the device, and to know whether there even is a signature to cross-check against.
+        byte[]? existingDb = TryReadAllBytesOrNull(dev.ITunesDbPath);
+        bool hasStoredSignature = HasStoredHash58Signature(existingDb);
+
+        byte[]? scsiDoc = null; string? serial = null; string? readErr = null;
         var prev = Cursor; Cursor = Cursors.WaitCursor;
         try
         {
+            // Route A — SCSI INQUIRY: authoritative (returns a full SysInfoExtended document) but needs a
+            // read+write volume handle, so it can fail with "access denied" unless Mixtape is elevated.
             foreach (byte tid in new byte[] { 0, 1 })
             {
-                try { doc = IpodGuidReader.ReadSysInfoExtendedScsi(drive, tid); break; }
-                catch (Exception ex) { err = ex.Message; }
+                try { scsiDoc = IpodGuidReader.ReadSysInfoExtendedScsi(drive, tid); break; }
+                catch (Exception ex) { readErr = ex.Message; }
             }
+            // Route B — USB storage serial (== the FireWire GUID for click-wheel iPods), read with an
+            // unprivileged read-only handle, so it succeeds in the common case where Route A is denied.
+            try { serial = IpodGuidReader.ReadStorageSerial(drive); }
+            catch (Exception ex) { readErr ??= ex.Message; }
         }
         finally { Cursor = prev; }
 
-        string? guid = doc is { Length: > 0 } ? IpodGuidReader.ExtractFireWireGuid(doc) : null;
-        if (guid is null)
+        string? scsiGuid = scsiDoc is { Length: > 0 } ? IpodGuidReader.ExtractFireWireGuid(scsiDoc) : null;
+        string? serialGuid = SysInfoParser.NormalizeGuid(serial);
+        string? serialSwapGuid = serial is null ? null : SysInfoParser.NormalizeGuid(IpodGuidReader.SwapPairs(serial));
+
+        if (scsiGuid is null && serialGuid is null && serialSwapGuid is null)
         {
             MessageBox.Show(this,
-                "Couldn't read a hardware ID from this iPod.\n\n" + (err ?? "The device didn't return a FireWire GUID.") +
-                "\n\nYou can still use the iPod read-only (browse, play, copy music off). Use \"Save report…\" to capture details.",
+                "Couldn't read a hardware ID from this iPod.\n\n" + (readErr ?? "The device didn't return a FireWire GUID.") +
+                "\n\nTip: some PCs only allow the direct device query when Mixtape is run as Administrator — try right-clicking Mixtape, choosing \"Run as administrator\", and trying again.\n\nYou can still use the iPod read-only (browse, play, copy music off). Use \"Save report…\" to capture details.",
                 "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        // Validate with the SAME parser re-detection uses, so we never persist a doc the firmware-read
-        // happened to regex-match but DeviceDetector can't actually re-read into a GUID.
-        if (SysInfoExtended.TryParse(doc!)?.FirewireGuid is null)
+        // Whether the SCSI document is something DeviceDetector can re-read (same parser, so we never
+        // persist a doc the firmware-read happened to regex-match but re-detection can't use).
+        bool scsiDocPersistable = scsiDoc is { Length: > 0 } && SysInfoExtended.TryParse(scsiDoc!)?.FirewireGuid is not null;
+
+        // Prefer a GUID that PROVABLY reproduces the iPod's existing signature — the safe choice.
+        string? verified = existingDb is null ? null
+            : ChecksumWriter.FirstGuidMatchingSignature(existingDb, new[] { scsiGuid, serialGuid, serialSwapGuid });
+
+        string? chosen;          // the GUID we'll persist
+        bool persistScsiDoc;     // true → write the full SysInfoExtended doc; false → write a SysInfo line
+        bool trustedUnverified;  // true → accepted without a signature cross-check (warn the user)
+
+        if (verified is not null)
         {
+            chosen = verified;
+            persistScsiDoc = scsiDocPersistable && string.Equals(verified, scsiGuid, StringComparison.OrdinalIgnoreCase);
+            trustedUnverified = false;
+        }
+        else if (hasStoredSignature)
+        {
+            // The device HAS a signature and none of our candidates reproduced it → the GUID we read is
+            // wrong (or our signing is). Never enable writing here — it would corrupt the database.
+            string ids = string.Join(", ", new[] { scsiGuid, serialGuid, serialSwapGuid }.Where(g => g is not null).Distinct());
             MessageBox.Show(this,
-                $"Read the device ID ({guid}), but the device-info document the iPod returned isn't in a form Mixtape can reliably re-read, so it was NOT saved to the iPod.\n\nPlease use \"Save report…\" and send it.",
+                $"Read a hardware ID from this iPod ({ids}), but it doesn't match the signature already on the iPod's database, so writing stays disabled to avoid corrupting it.\n\nPlease use \"Save report…\" and send it so this can be looked into.",
                 "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
+        else
+        {
+            // No signature on the device to cross-check against. Trust the directly-read GUID: prefer the
+            // authoritative SCSI document, else the USB serial (which IS the GUID for click-wheel iPods).
+            if (scsiDocPersistable) { chosen = scsiGuid; persistScsiDoc = true; }
+            else if (serialGuid is not null) { chosen = serialGuid; persistScsiDoc = false; }
+            else if (serialSwapGuid is not null) { chosen = serialSwapGuid; persistScsiDoc = false; }
+            else { chosen = scsiGuid; persistScsiDoc = false; } // SCSI GUID but its doc isn't re-readable → persist bare GUID
+            trustedUnverified = true;
+        }
 
+        // Persist the chosen identity so re-detection enables writing.
         try
         {
-            string devDir = Path.Combine(root, "iPod_Control", "Device");
-            Directory.CreateDirectory(devDir);
-            File.WriteAllBytes(Path.Combine(devDir, "SysInfoExtended"), doc!);
+            if (persistScsiDoc)
+            {
+                string devDir = Path.Combine(root, "iPod_Control", "Device");
+                Directory.CreateDirectory(devDir);
+                File.WriteAllBytes(Path.Combine(devDir, "SysInfoExtended"), scsiDoc!);
+            }
+            else
+            {
+                DeviceInfoStore.WriteFirewireGuid(root, chosen!);
+            }
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Read the device ID ({guid}) but couldn't save it to the iPod:\n\n{ex.Message}", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, $"Read the device ID ({chosen}) but couldn't save it to the iPod:\n\n{ex.Message}", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
-        // Re-detect from scratch so the new SysInfoExtended is parsed and the hash58 check re-runs.
+        // Re-detect from scratch so the saved identity is parsed and the hash58 check re-runs.
         var rebuilt = DeviceDetector.Build(root);
         if (rebuilt is not null) LoadDevice(rebuilt);
 
         var p = _device?.Profile;
         if (p?.CanWrite == true && p.Hash58Verified == true)
-            MessageBox.Show(this, $"Success — read device ID {guid} and verified the signature against this iPod's database. Writing is now enabled.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, $"Success — read device ID {chosen} and verified it against this iPod's database. Writing is now enabled.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        else if (p?.CanWrite == true && trustedUnverified)
+        {
+            string swapHint = serialSwapGuid is not null && !string.Equals(chosen, serialSwapGuid, StringComparison.OrdinalIgnoreCase)
+                ? $" (the byte-swapped variant {serialSwapGuid} is the most likely alternative)" : "";
+            MessageBox.Show(this,
+                $"Read device ID {chosen} from the device and enabled writing.\n\nNote: this iPod's database had no existing signature to cross-check the ID against, so it could not be verified. Writing should work; if the iPod rejects the first change{swapHint}, use \"Restore database\" and \"Save report…\".",
+                "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
         else if (p?.CanWrite == true)
-            MessageBox.Show(this, $"Read device ID {guid}. Writing is now enabled.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, $"Read device ID {chosen}. Writing is now enabled.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
         else if (p?.Scheme == ChecksumScheme.Hash58 && p.Hash58Verified == false)
-            MessageBox.Show(this, $"Read the device ID ({guid}), but Mixtape's hash58 signature didn't match this iPod's existing one, so writing stays disabled to avoid corrupting its database.\n\nThis iPod is the first real-world test of hash58 signing — please use \"Save report…\" and send it so the signing can be fixed.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, $"Read the device ID ({chosen}), but Mixtape's hash58 signature didn't match this iPod's existing one, so writing stays disabled to avoid corrupting its database.\n\nPlease use \"Save report…\" and send it so the signing can be fixed.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         else
-            MessageBox.Show(this, $"Read the device ID ({guid}). Writing is still disabled — see the reason on this page.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, $"Read the device ID ({chosen}). Writing is still disabled — see the reason on this page.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
+
+    /// <summary>Read a file's bytes, or null if it doesn't exist / can't be read.</summary>
+    private static byte[]? TryReadAllBytesOrNull(string path)
+    {
+        try { return File.Exists(path) ? File.ReadAllBytes(path) : null; }
+        catch { return null; }
+    }
+
+    /// <summary>True if the iTunesDB carries a non-empty hash58 signature at 0x58 (i.e. it was signed).</summary>
+    private static bool HasStoredHash58Signature(byte[]? db)
+        => db is { Length: >= 0x6C } && db.AsSpan(0x58, 20).ToArray().Any(b => b != 0);
 
     private void RestoreDatabaseBackup()
     {

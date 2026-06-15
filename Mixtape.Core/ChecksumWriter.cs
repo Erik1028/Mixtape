@@ -48,6 +48,29 @@ internal static class ChecksumWriter
         catch { return null; }
     }
 
+    /// <summary>
+    /// From an ordered list of candidate GUIDs (e.g. a SCSI-read GUID, a USB serial, and its
+    /// byte-swapped variant), return the first one whose hash58 signing reproduces the device's
+    /// EXISTING stored signature — i.e. <see cref="VerifyHash58"/> returns true. This is the safe way
+    /// to choose a recovered GUID: a wrong or byte-swapped candidate can never be accepted because it
+    /// would not reproduce the firmware's signature. Returns null if none verifies (including when the
+    /// DB has no stored signature to compare against — the caller must decide what to do then).
+    /// Candidates are normalised and de-duplicated; null/blank entries are skipped.
+    /// </summary>
+    public static string? FirstGuidMatchingSignature(byte[] originalDb, IEnumerable<string?> candidates)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string? raw in candidates)
+        {
+            byte[]? bytes = ParseGuid(raw);
+            if (bytes is null) continue;
+            string norm = Convert.ToHexString(bytes); // 16 uppercase hex, no "0x"
+            if (!seen.Add(norm)) continue;
+            if (VerifyHash58(originalDb, norm) == true) return norm;
+        }
+        return null;
+    }
+
     private static void ApplyHash58(byte[] buf, string? guidHex)
     {
         byte[]? fwid = ParseGuid(guidHex);

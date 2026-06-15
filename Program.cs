@@ -75,6 +75,9 @@ internal static class Program
         // Read the FireWire GUID straight off the device (SCSI INQUIRY 0xC0 + USB serial). Read-only. → ipod-readguid.txt
         if (args.Length >= 2 && args[0] == "--readguid") { RunReadGuid(args[1]); return; }
 
+        // Self-test for the GUID-recovery picker: candidate selection by signature + SysInfo persistence. → ipod-guidpicktest.txt
+        if (args.Length >= 1 && args[0] == "--guidpicktest") { RunGuidPickTest(args.Length >= 2 ? args[1] : null); return; }
+
         // Offline ArtworkDB build/parse/round-trip + DBID-linkage self-test → ipod-artworktest.txt
         if (args.Length >= 1 && args[0] == "--artworktest") { RunArtworkTest(); return; }
 
@@ -1689,6 +1692,83 @@ internal static class Program
         }
         catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-verifysign.txt"), log.ToString());
+    }
+
+    /// <summary>
+    /// Headless self-test for the recovery picker added for "no FireWire GUID found":
+    ///   1. DeviceInfoStore.WriteFirewireGuid round-trips through SysInfo (fresh + merge-preserving).
+    ///   2. ChecksumWriter.FirstGuidMatchingSignature picks the correct GUID out of a list of wrong /
+    ///      byte-swapped candidates, when an optional real hash58 device root is given.
+    /// → ipod-guidpicktest.txt
+    /// </summary>
+    private static void RunGuidPickTest(string? root)
+    {
+        var log = new StringBuilder();
+        int failures = 0;
+        void Check(bool ok, string what) { log.AppendLine((ok ? "PASS " : "FAIL ") + what); if (!ok) failures++; }
+
+        try
+        {
+            // 1) WriteFirewireGuid persistence round-trip (no device needed).
+            string tmp = Path.Combine(Path.GetTempPath(), "mixtape-guidpick-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                const string guid = "000A270012345678";
+
+                // a) Fresh: no SysInfo on disk → file created with the GUID, DeviceDetector reads it back.
+                DeviceInfoStore.WriteFirewireGuid(tmp, guid);
+                Directory.CreateDirectory(Path.Combine(tmp, "iPod_Control", "iTunes")); // so Build() accepts it
+                string sysInfoPath = Path.Combine(tmp, "iPod_Control", "Device", "SysInfo");
+                var parsed = SysInfoParser.Parse(sysInfoPath);
+                Check(parsed.TryGetValue("FirewireGuid", out var g1) && SysInfoParser.NormalizeGuid(g1) == guid, "fresh SysInfo holds the GUID");
+                Check(DeviceDetector.Build(tmp)?.Profile.FirewireGuid == guid, "DeviceDetector re-reads the written GUID");
+
+                // b) Merge: a pre-existing SysInfo with other keys must keep them and replace any GUID line.
+                File.WriteAllText(sysInfoPath, "ModelNumStr: xB029\r\nFirewireGuid: 0xDEADBEEFDEADBEEF\r\npszSerialNumber: ABC123\r\n");
+                DeviceInfoStore.WriteFirewireGuid(tmp, guid);
+                var merged = SysInfoParser.Parse(sysInfoPath);
+                Check(SysInfoParser.NormalizeGuid(merged.GetValueOrDefault("FirewireGuid")) == guid, "merge replaces the GUID line");
+                Check(merged.GetValueOrDefault("ModelNumStr") == "xB029", "merge preserves ModelNumStr");
+                Check(merged.GetValueOrDefault("pszSerialNumber") == "ABC123", "merge preserves serial");
+                Check(merged.Count == 3, "merge does not duplicate keys");
+            }
+            finally { try { Directory.Delete(tmp, recursive: true); } catch { } }
+
+            // 2) Signature-based candidate selection, only if a real hash58 device root was supplied.
+            if (root is null)
+                log.AppendLine("(no device root given — skipping the FirstGuidMatchingSignature device check)");
+            else
+            {
+                var device = DeviceDetector.Build(root);
+                var p = device?.Profile;
+                if (device is null) log.AppendLine($"(no iPod_Control under '{root}' — skipping device check)");
+                else if (p!.Scheme != ChecksumScheme.Hash58 || string.IsNullOrEmpty(p.FirewireGuid))
+                    log.AppendLine($"(device is '{p.SchemeLabel}' / GUID '{p.FirewireGuid ?? "none"}' — not a hash58+GUID device, skipping)");
+                else
+                {
+                    byte[] db = File.ReadAllBytes(device.ITunesDbPath);
+                    if (db.Length < 0x6C || db.AsSpan(0x58, 20).ToArray().All(b => b == 0))
+                        log.AppendLine("(device DB has no stored signature to verify against — skipping)");
+                    else
+                    {
+                        string correct = p.FirewireGuid!;
+                        string swapped = IpodGuidReader.SwapPairs(correct);
+                        const string wrong = "0000000000000001";
+                        // Correct GUID is last in the list → must still be the one chosen.
+                        var picked = ChecksumWriter.FirstGuidMatchingSignature(db, new[] { wrong, swapped, correct });
+                        Check(string.Equals(picked, correct, StringComparison.OrdinalIgnoreCase), $"picks the correct GUID {correct} over wrong/swapped candidates");
+                        // No correct candidate present → must return null (never guess).
+                        var none = ChecksumWriter.FirstGuidMatchingSignature(db, new[] { wrong, swapped });
+                        Check(none is null, "returns null when no candidate matches the signature");
+                    }
+                }
+            }
+
+            log.AppendLine();
+            log.AppendLine(failures == 0 ? "RESULT: OK" : $"RESULT: FAILED - {failures} check(s) failed");
+        }
+        catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-guidpicktest.txt"), log.ToString());
     }
 
     private static void RunPhotoRoundtrip(string root)
