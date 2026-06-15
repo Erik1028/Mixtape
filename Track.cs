@@ -28,6 +28,9 @@ internal sealed class Track
     /// <summary>mhod type 2 — the ':'-separated iPod-relative path, e.g. ":iPod_Control:Music:F12:libgpod000123.mp3".</summary>
     public string? Location;
 
+    /// <summary>For a track in the PC "Local Music" library (not on an iPod): the absolute file path. Null otherwise.</summary>
+    public string? LocalPath;
+
     // --- numeric mhit fields ---
     public uint FileSize;       // bytes (@0x24)
     public uint LengthMs;       // duration (@0x28)

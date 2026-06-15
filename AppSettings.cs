@@ -23,7 +23,17 @@ internal sealed class AppSettings
     public bool ShowAlbum { get; set; } = true;    // Album column
     public bool ShowRating { get; set; } = true;   // Rating (stars) column
     public bool ShowPlays { get; set; } = true;    // Play-count column
+    public bool ShowDateAdded { get; set; } = true;// Date-added column
     public bool ShowTime { get; set; } = true;     // Time column
+
+    // ---- Local Music (PC files browsable inside Mixtape) ----
+    /// <summary>Folders on the PC scanned for the "Local Music" library view.</summary>
+    public List<string> LocalMusicFolders { get; set; } = new();
+
+    // ---- Equalizer (applied to PC playback via NAudio) ----
+    public bool EqEnabled { get; set; }
+    /// <summary>Per-band gains in dB (10 bands: 31 Hz … 16 kHz). Empty/short = flat.</summary>
+    public float[] EqGains { get; set; } = new float[10];
 
     // ---- Video / transcoding ----
     /// <summary>Transcode target: "Safe" (320x240, plays on 5G + Classic) or "High" (640x480, Classic/late).</summary>

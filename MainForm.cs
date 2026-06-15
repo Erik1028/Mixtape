@@ -8,7 +8,7 @@ namespace iPodCommander;
 /// table. Writes are gated on <see cref="DeviceProfile.CanWrite"/> and go through
 /// <see cref="SafeDbWriter"/> (backup + verify + rollback).
 /// </summary>
-internal sealed class MainForm : Form
+internal sealed class MainForm : Form, IMessageFilter
 {
     private readonly Sidebar _sidebar = new() { Dock = DockStyle.Fill };
     private readonly HeaderPanel _header = new() { Dock = DockStyle.Fill };
@@ -31,17 +31,26 @@ internal sealed class MainForm : Form
     private int _artGen;          // bumped each ShowCurrent; cancels stale background art loads
     private int _sidebarArtGen;   // same, for sidebar playlist covers
     private int _photoArtGen;     // same, for the photo grid's background thumbnail decode
-    private int _sortCol = -1;    // -1 = playlist order; 1=Song 2=Artist 3=Album 4=Rating 5=Plays 6=Time
+    private int _sortCol = -1;    // -1 = playlist order; 1=Song 2=Artist 3=Album 4=Rating 5=Plays 6=Added 7=Time
     private bool _sortAsc = true;
-    private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "RATING", "PLAYS", "TIME" };
+    private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "RATING", "PLAYS", "ADDED", "TIME" };
+    private string _emptyMsg = ""; // shown centred when the song list has no rows
+    private string _baseStatus = ""; // the view's normal status line (restored when a multi-selection clears)
+    private bool _populatingGrid;    // suppress selection-status churn while rows are being added
     private SidebarRowKind _viewKind = SidebarRowKind.AllSongs; // which top-level view is active
     private PhotoLibrary? _photos;
     private readonly PhotoGridView _photoView = new() { Dock = DockStyle.Fill, Visible = false };
-    private readonly Panel _deviceView = new() { Dock = DockStyle.Fill, Visible = false, AutoScroll = true, BackColor = Color.FromArgb(29, 30, 34) };
+    private readonly Panel _deviceView = new() { Dock = DockStyle.Fill, Visible = false, BackColor = Color.FromArgb(29, 30, 34) };           // clipping viewport
+    private readonly Panel _deviceScrollPanel = new() { BackColor = Color.FromArgb(29, 30, 34), Location = new Point(0, 0) }; // scrolled content (moved by its Top; no native bar)
+    private readonly ThinScrollBar _deviceScroll = new();                                                                                       // the app's slim dark scrollbar
     private WallpaperPanel? _root;             // gradient shell + caption strip (custom title bar)
     private TableLayoutPanel? _content;        // kept so a theme-variant change can recolour it
     private Panel? _center;                     // the swappable centre region (cross-dissolved on view switches)
     private bool _viewTransitionBusy;          // guards against overlapping centre cross-dissolves
+    // Auto-detect on plug/unplug: WM_DEVICECHANGE kicks this; it fires once after the burst settles + the
+    // volume has finished mounting, then re-scans for iPods.
+    private readonly System.Windows.Forms.Timer _deviceChangeTimer = new() { Interval = 900 };
+    private string? _ejectedRoot; // after a manual eject, ignore this drive in auto-detect until a fresh plug-in
     private readonly SearchBox _search = new() { Dock = DockStyle.Fill };
     private string _searchQuery = "";
     private bool _navigating; // suppresses the search box's redundant ShowCurrent while we clear it on navigation
@@ -77,6 +86,8 @@ internal sealed class MainForm : Form
         _sidebar.RefreshClicked += RefreshDevices;
         _sidebar.OpenFolderClicked += OpenFolder;
         _sidebar.SettingsClicked += OpenSettings;
+        _sidebar.EjectClicked += _ => EjectDevice();
+        _sidebar.PlayFileClicked += OnPlayLocalFile;
         _sidebar.RowRightClicked += OnSidebarRightClick;
         _sidebar.PlaylistAreaRightClicked += OnPlaylistAreaRightClick;
         _header.AddButton.Click += (_, _) => OnAddClicked();
@@ -90,6 +101,31 @@ internal sealed class MainForm : Form
         DragDrop += OnDragDrop;
 
         if (_autoDetect) Shown += (_, _) => RefreshDevices();
+
+        Application.AddMessageFilter(this); // route the mouse wheel to the device page's custom scroll
+        _deviceChangeTimer.Tick += (_, _) => { _deviceChangeTimer.Stop(); AutoDetectDevices(); };
+    }
+
+    /// <summary>Route the mouse wheel to the device page's custom scroll when the pointer is over it (its
+    /// cards would otherwise swallow the wheel, since the page isn't a native scroll container).</summary>
+    bool IMessageFilter.PreFilterMessage(ref Message m)
+    {
+        const int WM_MOUSEWHEEL = 0x020A;
+        if (m.Msg != WM_MOUSEWHEEL || _viewKind != SidebarRowKind.Device || !_deviceView.Visible || !_deviceView.IsHandleCreated)
+            return false;
+        var p = _deviceView.PointToClient(Cursor.Position);
+        if (p.X < 0 || p.Y < 0 || p.X >= _deviceView.ClientSize.Width || p.Y >= _deviceView.ClientSize.Height) return false;
+        int delta = (short)((long)m.WParam >> 16);
+        ScrollDeviceBy(-Math.Sign(delta) * 80);
+        return true; // handled
+    }
+
+    private void ScrollDeviceBy(int px)
+    {
+        int max = Math.Max(0, _deviceScrollPanel.Height - _deviceView.ClientSize.Height);
+        int next = Math.Min(max, Math.Max(0, -_deviceScrollPanel.Top + px));
+        _deviceScrollPanel.Top = -next;
+        _deviceScroll.Invalidate();
     }
 
     private const int Gap = 14;        // wallpaper gap around + between the floating cards
@@ -118,7 +154,13 @@ internal sealed class MainForm : Form
         var gridHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(22, 4, 8, 8) };
         var searchHost = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = Theme.Bg, Padding = new Padding(0, 8, 6, 8) };
         searchHost.Controls.Add(_search);   // Fill within the search strip
-        _search.Changed += q => { _searchQuery = q.Trim(); if (!_navigating && _viewKind != SidebarRowKind.Photos && _viewKind != SidebarRowKind.Device) ShowCurrent(); };
+        _search.Changed += q =>
+        {
+            _searchQuery = q.Trim();
+            if (_navigating) return;
+            if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();   // filter the cached list — don't re-scan disk per keystroke
+            else if (_viewKind != SidebarRowKind.Photos && _viewKind != SidebarRowKind.Device) ShowCurrent();
+        };
         gridHost.Controls.Add(_tracks);     // Fill (added first → keeps remaining space)
         gridHost.Controls.Add(_scrollbar);  // Right
         gridHost.Controls.Add(searchHost);  // Top (added last → docks the top strip first)
@@ -126,6 +168,12 @@ internal sealed class MainForm : Form
         // The track grid, photo grid and device page share the centre cell; only one shows at a time.
         var center = _center = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
         center.Controls.Add(_deviceView);   // Fill, hidden until the Device view is active
+        // Device page scrolls via a custom thin scrollbar: the content panel is moved by its Top inside the
+        // clipping viewport (no AutoScroll → no native bar), and our slim bar is overlaid on the right.
+        _deviceView.Controls.Add(_deviceScrollPanel);
+        _deviceView.Controls.Add(_deviceScroll);
+        _deviceScroll.AttachScrollPanel(_deviceView, _deviceScrollPanel);
+        _deviceView.Resize += (_, _) => LayoutDeviceView();
         center.Controls.Add(_photoView);    // Fill, hidden until the Photos view is active
         center.Controls.Add(_browseView);   // Fill, hidden until the Albums/Artists view is active
         center.Controls.Add(gridHost);      // Fill
@@ -142,6 +190,8 @@ internal sealed class MainForm : Form
         _nowPlaying.PrevRequested += () => PlayRelative(-1);
         _nowPlaying.NextRequested += () => PlayRelative(+1);
         _nowPlaying.CloseRequested += () => { _playingTrack = null; SetNowPlayingVisible(false); };
+        _nowPlaying.EqualizerRequested += OpenEqualizer;
+        _nowPlaying.ApplyEq(_settings.EqEnabled, _settings.EqGains ?? EqualizerSampleProvider.FlatGains()); // restore saved EQ
 
         content.Controls.Add(_header, 0, 0);
         content.Controls.Add(center, 0, 1);
@@ -234,6 +284,14 @@ internal sealed class MainForm : Form
         plays.HeaderCell.Style.Padding = new Padding(4, 0, 10, 0);
         _tracks.Columns.Add(plays);
 
+        var added = new DataGridViewTextBoxColumn { HeaderText = "ADDED", Width = 112, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ShowDateAdded };
+        added.DefaultCellStyle.ForeColor = Theme.Subtle; added.DefaultCellStyle.SelectionForeColor = dimSel;
+        added.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        added.DefaultCellStyle.Padding = new Padding(4, 0, 10, 0);
+        added.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
+        added.HeaderCell.Style.Padding = new Padding(4, 0, 10, 0);
+        _tracks.Columns.Add(added);
+
         var time = new DataGridViewTextBoxColumn { HeaderText = "TIME", Width = 72, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable };
         time.DefaultCellStyle.ForeColor = Theme.Subtle;
         time.DefaultCellStyle.SelectionForeColor = dimSel;
@@ -245,6 +303,7 @@ internal sealed class MainForm : Form
 
         _scrollbar.Attach(_tracks);
         _tracks.RowPostPaint += OnRowPostPaint;
+        _tracks.SelectionChanged += (_, _) => OnTrackSelectionChanged();
         _tracks.CellMouseEnter += (_, e) => SetHotRow(e.RowIndex);
         _tracks.MouseLeave += (_, _) => SetHotRow(-1);
         _tracks.MouseDown += OnTrackMouseDown;
@@ -265,6 +324,14 @@ internal sealed class MainForm : Form
             // hairline under the fixed column-header row
             using var pen = new Pen(Theme.Border);
             e.Graphics.DrawLine(pen, 0, _tracks.ColumnHeadersHeight, _tracks.Width, _tracks.ColumnHeadersHeight);
+
+            // friendly empty-state when the list has no rows
+            if (_tracks.RowCount == 0 && _emptyMsg.Length > 0)
+            {
+                var area = new Rectangle(0, _tracks.ColumnHeadersHeight, _tracks.Width, _tracks.Height - _tracks.ColumnHeadersHeight);
+                TextRenderer.DrawText(e.Graphics, _emptyMsg, _tracks.Font, area, Theme.Faint,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            }
 
             // drag-to-reorder: a teal insertion line at the drop position
             if (_rowDragging && _dropRow >= 0)
@@ -386,16 +453,19 @@ internal sealed class MainForm : Form
     /// <summary>Double-click / "Play" on a track row: audio → now-playing bar; video → preview window.</summary>
     private void ActivateTrackRow(int rowIndex)
     {
-        if (_tracks.Rows[rowIndex].Tag is not Track t || _device is null) return;
-        string? path = t.ResolveFilePath(_device.MountRoot);
+        if (_tracks.Rows[rowIndex].Tag is not Track t) return;
+        string? path = ResolvePlayPath(t);
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
         {
-            MessageBox.Show(this, "The file for this item isn't on the iPod, so it can't be previewed.", "Preview", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "The file for this item can't be found, so it can't be played.", "Play", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         if (MediaType.IsVideo(t.MediaType)) OpenVideoPreview(t, path);
         else PlayAudio(t, path, rowIndex);
     }
+
+    /// <summary>The on-disk path to play: a Local-Music track carries its own absolute path; iPod tracks resolve via the mount.</summary>
+    private string? ResolvePlayPath(Track t) => t.LocalPath ?? (_device is null ? null : t.ResolveFilePath(_device.MountRoot));
 
     private void PlayAudio(Track t, string path, int rowIndex)
     {
@@ -427,7 +497,7 @@ internal sealed class MainForm : Form
         {
             if (_tracks.Rows[i].Tag is Track t && !MediaType.IsVideo(t.MediaType))
             {
-                string? p = t.ResolveFilePath(_device!.MountRoot);
+                string? p = ResolvePlayPath(t);
                 if (!string.IsNullOrEmpty(p) && File.Exists(p)) { PlayAudio(t, p, i); return; }
             }
         }
@@ -533,22 +603,97 @@ internal sealed class MainForm : Form
 
     private void RefreshDevices()
     {
+        _ejectedRoot = null; // an explicit Refresh means the user wants to re-detect everything
         _devices.Clear();
         try { _devices.AddRange(DeviceDetector.DetectAll()); }
         catch (Exception ex) { SetStatus("Detection error: " + ex.Message); }
 
         if (_devices.Count > 0) LoadDevice(_devices[0]);
+        else ShowNoDevice();
+    }
+
+    /// <summary>Reset to the "no iPod connected" state (also stops playback off a now-removed device).</summary>
+    private void ShowNoDevice()
+    {
+        _nowPlaying.StopAndHide(); _playingTrack = null;
+        _device = null; _lib = null; _db = null; _current = null; _photos = null;
+        _viewKind = SidebarRowKind.AllSongs;
+        SetCenter();
+        _tracks.Rows.Clear();
+        _emptyMsg = ""; // the header already says "No iPod connected" — don't also draw a stale grid message
+        _header.SetInfo("", "No iPod connected", "Plug in your iPod — Mixtape detects it automatically. Or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows.", 0);
+        SetActionButtons(); // recompute visibility + the "No iPod is connected" blocked reason
+        BuildSidebar();
+        SetStatus("No device.");
+    }
+
+    /// <summary>Safely eject the connected iPod (flush + dismount), then return to the "no iPod" screen.</summary>
+    private async void EjectDevice()
+    {
+        if (_device is null) return;
+        string root = _device.MountRoot;
+        if (root.Length < 2 || root[1] != ':')
+        {
+            MessageBox.Show(this, "This iPod isn't on a drive letter, so it can't be ejected from here. Use Windows' “Safely Remove Hardware”.", "Eject", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        char drive = root[0];
+        _nowPlaying.StopAndHide(); _playingTrack = null; // release any open audio file first
+        UseWaitCursor = true;
+        (bool ok, string msg) result;
+        try { result = await Task.Run(() => { bool s = DeviceEjector.TryEject(drive, out var m); return (s, m); }); }
+        finally { UseWaitCursor = false; }
+
+        if (result.ok)
+        {
+            _ejectedRoot = root;        // don't let auto-detect re-adopt it until it's physically replugged
+            _deviceChangeTimer.Stop();
+            ShowNoDevice();
+            SetStatus("Ejected — safe to unplug your iPod.");
+        }
         else
         {
-            _device = null; _lib = null; _db = null; _current = null; _photos = null;
-            _viewKind = SidebarRowKind.AllSongs;
-            SetCenter();
-            _tracks.Rows.Clear();
-            _header.SetInfo("", "No iPod connected", "Plug in your iPod and press Refresh — or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows.", 0);
-            SetActionButtons(); // recompute visibility + the "No iPod is connected" blocked reason (keeps the buttons shown + clickable)
-            BuildSidebar();
-            SetStatus("No device.");
+            MessageBox.Show(this, "Couldn't eject the iPod:\n\n" + result.msg, "Eject", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
+    }
+
+    /// <summary>Auto-detect after a plug/unplug. Leaves the current view alone when the active iPod is still
+    /// connected; only re-loads when it was removed (or one appears while none is loaded).</summary>
+    private void AutoDetectDevices()
+    {
+        if (IsDisposed) return;
+        List<IPodDevice> found;
+        try { found = DeviceDetector.DetectAll(); }
+        catch { return; }
+
+        // Don't re-adopt an iPod the user just ejected (a drive scan can re-mount it); wait for a real replug.
+        if (_ejectedRoot is not null)
+            found = found.Where(d => !string.Equals(d.MountRoot, _ejectedRoot, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        bool currentPresent = _device is not null
+            && found.Any(d => string.Equals(d.MountRoot, _device!.MountRoot, StringComparison.OrdinalIgnoreCase));
+
+        if (currentPresent)
+        {
+            // The active iPod is still connected — don't disturb the user's view. Only refresh the device
+            // list in the rail if the set of connected iPods actually changed.
+            var before = string.Join("|", _devices.Select(d => d.MountRoot).OrderBy(s => s, StringComparer.OrdinalIgnoreCase));
+            var after = string.Join("|", found.Select(d => d.MountRoot).OrderBy(s => s, StringComparer.OrdinalIgnoreCase));
+            if (!string.Equals(before, after, StringComparison.OrdinalIgnoreCase))
+            {
+                for (int i = 0; i < found.Count; i++) // keep the active device's object so its row stays highlighted
+                    if (string.Equals(found[i].MountRoot, _device!.MountRoot, StringComparison.OrdinalIgnoreCase)) found[i] = _device!;
+                _devices.Clear(); _devices.AddRange(found);
+                BuildSidebar();
+                SetStatus($"{found.Count} iPod{(found.Count == 1 ? "" : "s")} connected.");
+            }
+            return;
+        }
+
+        // The active iPod was unplugged, or one appeared while none was loaded → adopt the new set.
+        _devices.Clear(); _devices.AddRange(found);
+        if (found.Count > 0) LoadDevice(found[0]);
+        else ShowNoDevice();
     }
 
     private void OpenFolder()
@@ -577,6 +722,7 @@ internal sealed class MainForm : Form
             "device" => SidebarRowKind.Device,
             "albums" => SidebarRowKind.Albums,
             "artists" => SidebarRowKind.Artists,
+            "local" => SidebarRowKind.LocalMusic,
             _ => SidebarRowKind.AllSongs,
         };
         _current = null;
@@ -659,6 +805,11 @@ internal sealed class MainForm : Form
             else if (_device?.Profile.CanWrite == true)
                 _sidebar.AddHint("Right-click here to add one");
         }
+
+        // Always available, with or without an iPod: music that lives on this PC.
+        _sidebar.AddSection("ON THIS PC");
+        _sidebar.AddItem(SidebarRowKind.LocalMusic, "Local Music", "local", _viewKind == SidebarRowKind.LocalMusic);
+
         _sidebar.End();
         // Playlists with a chosen cover get it as their sidebar icon instantly; the rest fall back to
         // the background first-track cover.
@@ -719,6 +870,8 @@ internal sealed class MainForm : Form
                 case SidebarRowKind.Artists:
                 case SidebarRowKind.Videos:
                 case SidebarRowKind.Photos:
+                case SidebarRowKind.LocalMusic:
+                    if (kind == SidebarRowKind.LocalMusic) _localStale = true; // re-clicking the row rescans for new files
                     _viewKind = kind; _current = null; _browseFilter = null; // clicking the section resets any drill-in
                     BuildSidebar(); ShowCurrent();
                     break;
@@ -784,6 +937,7 @@ internal sealed class MainForm : Form
 
     private void ShowCurrent()
     {
+        if (_viewKind == SidebarRowKind.LocalMusic) { ShowLocalMusic(); return; }
         if (_viewKind == SidebarRowKind.Photos) { ShowPhotos(); return; }
         if (_viewKind == SidebarRowKind.Device) { ShowDevice(); return; }
         if (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists && _browseFilter is null) { ShowBrowse(); return; }
@@ -824,6 +978,12 @@ internal sealed class MainForm : Form
         if (_searchQuery.Length > 0)
             list = list.Where(t => Match(t, _searchQuery)).ToList();
 
+        _emptyMsg = list.Count > 0 ? ""
+            : _searchQuery.Length > 0 ? $"No results for “{_searchQuery}”"
+            : isPlaylist ? "This playlist is empty."
+            : isVideos ? "No videos on this iPod."
+            : "No songs on this iPod.";
+
         long totalMs = 0;
         foreach (var t in list) totalMs += t.LengthMs;
         SortTracks(list);
@@ -831,13 +991,15 @@ internal sealed class MainForm : Form
         int artSize = _settings.Compact ? 30 : 36;
 
         _tracks.SuspendLayout();
+        _populatingGrid = true; // ignore the selection churn while we add rows
         foreach (var t in list)
         {
             var thumb = Theme.MakeArt(artSize, Theme.StableHash(t.Album ?? t.DisplayTitle)); // placeholder until real art loads
             int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "",
-                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", t.Duration.ToString(@"m\:ss"));
+                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.Duration.ToString(@"m\:ss"));
             _tracks.Rows[r].Tag = t;
         }
+        _populatingGrid = false;
         _tracks.ResumeLayout();
 
         string noun = isVideos ? "video" : "song";
@@ -849,6 +1011,7 @@ internal sealed class MainForm : Form
         string st = $"{list.Count} {noun}{(list.Count == 1 ? "" : "s")}";
         if (_db.Warnings.Count > 0) st += $"   ·   ⚠ {_db.Warnings.Count} warning(s)";
         if (_device is not null && !_device.Profile.CanWrite) st += "   ·   Read-only — " + _device.Profile.WriteBlockReason;
+        _baseStatus = st;
         SetStatus(st);
         SetActionButtons();
         LoadArtworkAsync(list, artSize);
@@ -996,6 +1159,13 @@ internal sealed class MainForm : Form
     /// isn't allowed the button stays clickable-but-greyed (BlockedReason), so clicking it explains why.</summary>
     private void SetActionButtons()
     {
+        if (_viewKind == SidebarRowKind.LocalMusic)
+        {
+            _header.AddButton.Visible = _header.DeleteButton.Visible = true;
+            _header.AddButton.Text = "Add folder"; _header.AddButton.BlockedReason = null;
+            _header.DeleteButton.Text = "Manage…"; _header.DeleteButton.BlockedReason = _settings.LocalMusicFolders.Count == 0 ? "Add a folder first." : null;
+            return;
+        }
         bool canAudio = _device?.Profile.CanWrite == true;
         bool canPhotos = _photos?.SafeToWrite == true && _device?.Profile.SupportsPhotos == true;
         bool deviceView = _viewKind == SidebarRowKind.Device;
@@ -1234,20 +1404,20 @@ internal sealed class MainForm : Form
     private void BuildDeviceView(DeviceProfile p, long total, long free, long music, long video, long photo, long other, int songCount, int videoCount, int photoCount)
     {
         var dev = _device!; // captured so button handlers don't deref a field that may be nulled later
-        _deviceView.SuspendLayout();
-        _deviceView.BackColor = Theme.Bg; // field init baked the default Graphite; honor the saved theme variant
+        _deviceScrollPanel.SuspendLayout();
+        _deviceScrollPanel.BackColor = Theme.Bg; // field init baked the default Graphite; honor the saved theme variant
         // Dispose the previous page's controls (Region/GDI handles) before detaching them.
-        var oldControls = _deviceView.Controls.Cast<Control>().ToArray();
-        _deviceView.Controls.Clear();
+        var oldControls = _deviceScrollPanel.Controls.Cast<Control>().ToArray();
+        _deviceScrollPanel.Controls.Clear();
         foreach (var c in oldControls) c.Dispose();
         const int cardW = 540, x = 24;
         int y = 18;
         void SectionLabel(string t)
         {
-            _deviceView.Controls.Add(new Label { Text = t, Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
+            _deviceScrollPanel.Controls.Add(new Label { Text = t, Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
             y += 24;
         }
-        void Add(Control c) { c.Left = x; c.Top = y; _deviceView.Controls.Add(c); y += c.Height + 18; }
+        void Add(Control c) { c.Left = x; c.Top = y; _deviceScrollPanel.Controls.Add(c); y += c.Height + 18; }
 
         if (total > 0)
         {
@@ -1307,6 +1477,9 @@ internal sealed class MainForm : Form
 
         SectionLabel("OPTIONS");
         var options = new CardPanel(cardW);
+        var ejectBtn = new ThemedButton { Text = "⏏  Eject", Pill = true, Primary = true, Width = 120, Height = 30 };
+        ejectBtn.Click += (_, _) => EjectDevice();
+        options.AddRow("Safely remove", "Flush changes and eject so you can unplug the iPod safely.", ejectBtn, 56);
         var settingsBtn = new ThemedButton { Text = "Open Settings", Pill = true, Width = 130, Height = 30 };
         settingsBtn.Click += (_, _) => OpenSettings();
         options.AddRow("All settings", "Appearance, library, video, photos and safety.", settingsBtn, 56);
@@ -1321,7 +1494,28 @@ internal sealed class MainForm : Form
         options.AddRow("Device report", "Save a diagnostic file (model, signature, why it's read-only) to send for support.", reportBtn, 56);
         options.Finish(); Add(options);
 
-        _deviceView.ResumeLayout();
+        _deviceScrollPanel.Top = 0;        // start at the top
+        _deviceScrollPanel.Height = y + 8; // total content height (+ a little bottom breathing room)
+        _deviceScrollPanel.ResumeLayout();
+        LayoutDeviceView();
+    }
+
+    /// <summary>Lay out the device viewport: content panel fills the width; the slim custom scrollbar sits on
+    /// the right; the scroll offset is clamped if the content now fits.</summary>
+    private void LayoutDeviceView()
+    {
+        int vw = _deviceView.ClientSize.Width, vh = _deviceView.ClientSize.Height;
+        if (vw <= 0 || vh <= 0) return;
+        const int sb = 12;
+        int max = Math.Max(0, _deviceScrollPanel.Height - vh);
+        bool needBar = max > 0;
+        _deviceScrollPanel.Left = 0;
+        _deviceScrollPanel.Width = vw - (needBar ? sb : 0); // leave the bar's strip uncovered so it isn't hidden
+        if (-_deviceScrollPanel.Top > max) _deviceScrollPanel.Top = -max; // don't strand the content past its end
+        _deviceScroll.Visible = needBar;
+        _deviceScroll.Bounds = new Rectangle(vw - sb, 0, sb, vh);
+        if (needBar) _deviceScroll.BringToFront();
+        _deviceScroll.Invalidate();
     }
 
     /// <summary>
@@ -1552,6 +1746,49 @@ internal sealed class MainForm : Form
         return stars > 0 ? new string('★', stars) + new string('☆', 5 - stars) : "";
     }
 
+    /// <summary>Compact ISO date for the Added column; blank when there's no (valid) date.</summary>
+    private static string DateAddedStr(DateTime? d) => d is { } dt && dt.Year > 1970 ? dt.ToString("yyyy-MM-dd") : "";
+
+    /// <summary>Show count + total time + size in the status bar while several songs are selected.</summary>
+    private void OnTrackSelectionChanged()
+    {
+        if (_populatingGrid) return;
+        if (_tracks.Parent is Control gh && !gh.Visible) return; // only when the track grid is the visible centre
+        int n = _tracks.SelectedRows.Count;
+        if (n <= 1) { if (_baseStatus.Length > 0) SetStatus(_baseStatus); return; }
+        long ms = 0, bytes = 0;
+        foreach (DataGridViewRow row in _tracks.SelectedRows)
+            if (row.Tag is Track t) { ms += t.LengthMs; bytes += t.FileSize; }
+        SetStatus($"{n} selected   ·   {FormatDur(ms)}   ·   {CapacityBar.Human(bytes)}");
+    }
+
+    private static string FormatDur(long ms)
+    {
+        var t = TimeSpan.FromMilliseconds(ms);
+        return t.TotalHours >= 1 ? $"{(int)t.TotalHours} hr {t.Minutes} min"
+            : t.TotalMinutes >= 1 ? $"{t.Minutes} min {t.Seconds} s"
+            : $"{t.Seconds} s";
+    }
+
+    /// <summary>Soft pre-flight space check before copying files on. Over-estimates for files that will be
+    /// transcoded smaller, so it only asks (OK/Cancel) rather than blocking.</summary>
+    private bool SpaceOkToAdd(string[] files)
+    {
+        if (_device is null) return true;
+        long need, free;
+        try
+        {
+            need = files.Where(File.Exists).Sum(f => { try { return new FileInfo(f).Length; } catch { return 0L; } });
+            free = new DriveInfo(_device.MountRoot).AvailableFreeSpace;
+        }
+        catch { return true; } // can't tell → don't get in the way
+        if (need <= free) return true;
+        return MessageBox.Show(this,
+            $"These files are about {CapacityBar.Human(need)}, but the iPod has only {CapacityBar.Human(free)} free.\n\n" +
+            "They might not all fit. (Anything converted to AAC ends up smaller, so it may still work.)\n\nTry anyway?",
+            "Not enough space?", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+    }
+
     private void SortTracks(List<Track> list)
     {
         if (_sortCol < 1) return; // playlist order
@@ -1562,7 +1799,8 @@ internal sealed class MainForm : Form
             3 => (a, b) => string.Compare(a.Album ?? "", b.Album ?? "", StringComparison.OrdinalIgnoreCase),
             4 => (a, b) => a.Rating.CompareTo(b.Rating),
             5 => (a, b) => a.PlayCount.CompareTo(b.PlayCount),
-            6 => (a, b) => a.LengthMs.CompareTo(b.LengthMs),
+            6 => (a, b) => Nullable.Compare(a.DateAdded, b.DateAdded),
+            7 => (a, b) => a.LengthMs.CompareTo(b.LengthMs),
             _ => (_, _) => 0,
         };
         list.Sort(cmp);
@@ -1647,6 +1885,7 @@ internal sealed class MainForm : Form
                 "ffmpeg not found", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
             if (r != DialogResult.OK) return;
         }
+        if (!SpaceOkToAdd(files)) return;
         if (!ConfirmWriteOnce()) return;
 
         int ok = 0;
@@ -1751,6 +1990,7 @@ internal sealed class MainForm : Form
         {
             case SidebarRowKind.Videos: OnAddVideo(); break;
             case SidebarRowKind.Photos: ShowPhotoAddMenu(); break;
+            case SidebarRowKind.LocalMusic: AddLocalFolder(); break;
             default: OnAddMusic(); break;
         }
     }
@@ -1792,8 +2032,143 @@ internal sealed class MainForm : Form
 
     private void OnDeleteClicked()
     {
-        if (_viewKind == SidebarRowKind.Photos) OnDeletePhotos();
+        if (_viewKind == SidebarRowKind.LocalMusic) ManageLocalFolders();
+        else if (_viewKind == SidebarRowKind.Photos) OnDeletePhotos();
         else OnDelete();
+    }
+
+    // ---- Local Music (PC files browsed inside Mixtape) ----
+
+    private readonly List<Track> _localTracks = new();
+    private int _localGen;
+    private bool _localStale = true; // true → next ShowLocalMusic re-scans the folders (set on entry / folder change)
+
+    private void ShowLocalMusic()
+    {
+        SetCenter();
+        _hotRow = -1;
+        _header.ArtClickable = false;
+        _header.SetArt(null);
+        _currentHasCustomCover = false;
+        FillLocalGrid();                                          // show cached results instantly (sorted/filtered)
+        if (_localStale) { _localStale = false; ScanLocalMusicAsync(); } // re-scan only when something may have changed
+    }
+
+    private void FillLocalGrid()
+    {
+        int artSize = _settings.Compact ? 30 : 36;
+        var list = _localTracks.AsEnumerable();
+        if (_searchQuery.Length > 0) list = list.Where(t => Match(t, _searchQuery));
+        var shown = list.ToList();
+        SortTracks(shown);
+        UpdateSortIndicators();
+
+        _tracks.SuspendLayout();
+        _populatingGrid = true;
+        _tracks.Rows.Clear();
+        long totalMs = 0;
+        foreach (var t in shown)
+        {
+            totalMs += t.LengthMs;
+            var thumb = Theme.MakeArt(artSize, Theme.StableHash(t.Album ?? t.DisplayTitle));
+            int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "",
+                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.Duration.ToString(@"m\:ss"));
+            _tracks.Rows[r].Tag = t;
+        }
+        _populatingGrid = false;
+        _tracks.ResumeLayout();
+
+        int folders = _settings.LocalMusicFolders.Count;
+        _emptyMsg = folders == 0 ? "Click “Add folder” to add music from your PC."
+            : _searchQuery.Length > 0 ? $"No results for “{_searchQuery}”"
+            : shown.Count == 0 ? "No playable audio found in your folders."
+            : "";
+        _header.SetInfo("ON THIS PC", "Local Music",
+            folders == 0 ? "Music from folders on your PC" : Summary(shown.Count, totalMs, "song"), Theme.StableHash("Local Music"));
+        string st = folders == 0 ? "No folders added yet — click “Add folder”."
+            : $"{shown.Count} song{(shown.Count == 1 ? "" : "s")}   ·   {folders} folder{(folders == 1 ? "" : "s")}";
+        _baseStatus = st; SetStatus(st);
+        SetActionButtons();
+    }
+
+    private void ScanLocalMusicAsync()
+    {
+        int gen = ++_localGen;
+        var folders = _settings.LocalMusicFolders.ToList();
+        if (folders.Count == 0) { _localTracks.Clear(); return; }
+        if (_localTracks.Count == 0) SetStatus("Scanning your music…");
+        Task.Run(() =>
+        {
+            var found = new List<Track>();
+            foreach (var dir in folders)
+            {
+                if (_localGen != gen) return;
+                string[] files;
+                try
+                {
+                    files = Directory.EnumerateFiles(dir, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
+                        .Where(f => AudioExt.Contains(Path.GetExtension(f).ToLowerInvariant())).ToArray();
+                }
+                catch { continue; }
+                foreach (var f in files)
+                {
+                    if (_localGen != gen) return;
+                    Track t;
+                    try
+                    {
+                        var nt = MetadataExtractor.Read(f, isVideo: false);
+                        t = new Track { Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(f), Artist = nt.Artist, Album = nt.Album, LengthMs = nt.LengthMs };
+                    }
+                    catch { t = new Track { Title = Path.GetFileNameWithoutExtension(f) }; }
+                    t.MediaType = MediaType.Audio;
+                    t.LocalPath = f;
+                    try { t.DateAdded = File.GetLastWriteTime(f); } catch { }
+                    found.Add(t);
+                }
+            }
+            if (_localGen != gen) return;
+            TryBeginInvoke(() =>
+            {
+                if (_localGen != gen) return;
+                _localTracks.Clear(); _localTracks.AddRange(found);
+                if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();
+            });
+        });
+    }
+
+    private void AddLocalFolder()
+    {
+        using var dlg = new FolderBrowserDialog { Description = "Choose a folder of music on your PC" };
+        if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath)) return;
+        if (!_settings.LocalMusicFolders.Any(p => string.Equals(p, dlg.SelectedPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            _settings.LocalMusicFolders.Add(dlg.SelectedPath);
+            _settings.Save();
+        }
+        _viewKind = SidebarRowKind.LocalMusic;
+        _localStale = true;
+        BuildSidebar();
+        ShowLocalMusic();
+    }
+
+    private void ManageLocalFolders()
+    {
+        if (_settings.LocalMusicFolders.Count == 0) { AddLocalFolder(); return; }
+        var m = ThemedMenu.New();
+        var add = new ToolStripMenuItem("Add folder…"); add.Click += (_, _) => AddLocalFolder();
+        m.Items.Add(add);
+        m.Items.Add(new ToolStripSeparator());
+        foreach (var folder in _settings.LocalMusicFolders.ToList())
+        {
+            var item = new ToolStripMenuItem("Remove:  " + (folder.Length <= 48 ? folder : "…" + folder[^47..]));
+            item.Click += (_, _) => { _settings.LocalMusicFolders.RemoveAll(p => p == folder); _settings.Save(); _localStale = true; ShowLocalMusic(); };
+            m.Items.Add(item);
+        }
+        m.Items.Add(new ToolStripSeparator());
+        var clear = new ToolStripMenuItem("Clear all folders"); clear.Click += (_, _) => { _settings.LocalMusicFolders.Clear(); _settings.Save(); _localStale = true; ShowLocalMusic(); };
+        m.Items.Add(clear);
+        var b = _header.DeleteButton;
+        m.Show(b.PointToScreen(new Point(0, b.Height + 2)));
     }
 
     // ---- drag & drop (drop files onto the window → route by type) ----
@@ -2291,6 +2666,49 @@ internal sealed class MainForm : Form
         f.ShowDialog(this);
     }
 
+    private void OpenEqualizer()
+    {
+        var gains = _settings.EqGains is { Length: > 0 } g ? g : EqualizerSampleProvider.FlatGains();
+        using var dlg = new EqualizerDialog(_settings.EqEnabled, gains, (enabled, newGains) =>
+        {
+            _settings.EqEnabled = enabled;
+            _settings.EqGains = newGains;
+            _settings.Save();
+            _nowPlaying.ApplyEq(enabled, newGains);
+        });
+        dlg.ShowDialog(this);
+    }
+
+    /// <summary>Pick a local audio file on the PC and play it in the now-playing bar (independent of the iPod).</summary>
+    private void OnPlayLocalFile()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Play an audio file from your PC",
+            Filter = "Audio files|*.mp3;*.m4a;*.aac;*.wav;*.aif;*.aiff;*.m4b;*.flac;*.wma|All files|*.*",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.FileName)) return;
+        try
+        {
+            var nt = MetadataExtractor.Read(dlg.FileName, isVideo: false);
+            var t = new Track
+            {
+                Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(dlg.FileName),
+                Artist = nt.Artist,
+                Album = nt.Album,
+                LengthMs = nt.LengthMs,
+                MediaType = MediaType.Audio,
+            };
+            _playingTrack = null;            // a PC file isn't in the iPod list, so prev/next have nothing to step through
+            SetNowPlayingVisible(true);
+            _nowPlaying.Play(t, dlg.FileName, null);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Couldn't play that file:\n\n" + ex.Message, "Play file", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
     /// <summary>Re-apply every visual setting live (called from the Settings window as things change).</summary>
     private void ApplyAllSettings()
     {
@@ -2314,12 +2732,13 @@ internal sealed class MainForm : Form
     /// <summary>Show/hide the Artist/Album/Time columns per settings.</summary>
     private void ApplyColumns()
     {
-        if (_tracks.Columns.Count < 7) return;
+        if (_tracks.Columns.Count < 8) return;
         _tracks.Columns[2].Visible = _settings.ShowArtist;
         _tracks.Columns[3].Visible = _settings.ShowAlbum;
         _tracks.Columns[4].Visible = _settings.ShowRating;
         _tracks.Columns[5].Visible = _settings.ShowPlays;
-        _tracks.Columns[6].Visible = _settings.ShowTime;
+        _tracks.Columns[6].Visible = _settings.ShowDateAdded;
+        _tracks.Columns[7].Visible = _settings.ShowTime;
     }
 
     /// <summary>Re-colour the BackColor-baked panels + grid after a background-theme change (owner-painted controls repaint via Invalidate).</summary>
@@ -2336,6 +2755,8 @@ internal sealed class MainForm : Form
         _status.BackColor = Theme.SidebarBg;
         _status.ForeColor = Theme.Subtle;
         _deviceView.BackColor = Theme.Bg;
+        _deviceScrollPanel.BackColor = Theme.Bg;
+        _deviceScroll.BackColor = Theme.Bg;
         Theme.StyleGrid(_tracks);
         _tracks.RowTemplate.Height = _settings.RowHeight;
         var sel = Theme.Blend(Theme.Bg, Theme.Accent, 0.22);
@@ -2345,7 +2766,7 @@ internal sealed class MainForm : Form
 
     private void SeedDefaultSort()
     {
-        _sortCol = _settings.DefaultSort switch { "Song" => 1, "Artist" => 2, "Album" => 3, "Rating" => 4, "Plays" => 5, "Time" => 6, _ => -1 };
+        _sortCol = _settings.DefaultSort switch { "Song" => 1, "Artist" => 2, "Album" => 3, "Rating" => 4, "Plays" => 5, "Added" => 6, "Time" => 7, _ => -1 };
         _sortAsc = !_settings.DefaultSortDescending;
         _userSorted = false;
     }
@@ -2381,6 +2802,7 @@ internal sealed class MainForm : Form
     // Window styles kept so the borderless window still gets Aero Snap, min/max animations and a shadow.
     private const int WS_MINIMIZEBOX = 0x20000, WS_MAXIMIZEBOX = 0x10000, WS_THICKFRAME = 0x40000, WS_SYSMENU = 0x80000, WS_CAPTION = 0x00C00000;
     private const int WM_NCCALCSIZE = 0x0083, WM_NCHITTEST = 0x0084, WM_GETMINMAXINFO = 0x0024;
+    private const int WM_DEVICECHANGE = 0x0219, DBT_DEVICEARRIVAL = 0x8000, DBT_DEVICEREMOVECOMPLETE = 0x8004, DBT_DEVNODES_CHANGED = 0x0007;
     private const int HTCLIENT = 1, HTCAPTION = 2, HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
     private const int MONITOR_DEFAULTTONEAREST = 2;
 
@@ -2396,6 +2818,16 @@ internal sealed class MainForm : Form
 
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == WM_DEVICECHANGE)
+        {
+            int ev = (int)m.WParam;
+            if (ev == DBT_DEVICEARRIVAL) _ejectedRoot = null; // a fresh plug-in → resume detecting that drive
+            if (ev == DBT_DEVICEARRIVAL || ev == DBT_DEVICEREMOVECOMPLETE || ev == DBT_DEVNODES_CHANGED)
+            {
+                _deviceChangeTimer.Stop();  // debounce the burst of messages a single plug/unplug fires
+                _deviceChangeTimer.Start();
+            }
+        }
         switch (m.Msg)
         {
             case WM_NCCALCSIZE when m.WParam != IntPtr.Zero:

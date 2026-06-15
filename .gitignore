@@ -4,6 +4,8 @@ obj/
 dist/
 portable/
 render-sandbox/
+publish/
+publish-*/
 
 # ---- Dev sandboxes / scratch ----
 _design/
@@ -25,6 +27,9 @@ ipod-*.txt
 render*.png
 crop_*.png
 icon-preview.png
+
+# ---- Scratch ----
+*.tmp
 
 # ---- IDE / OS ----
 .vs/

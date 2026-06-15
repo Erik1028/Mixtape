@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace iPodCommander;
 
-internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist }
+internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic }
 
 /// <summary>
 /// Apple-Music-style left rail: a "Mixtape" wordmark, then sections (DEVICE / LIBRARY /
@@ -18,6 +18,8 @@ internal sealed class Sidebar : Panel
     public event Action? RefreshClicked;
     public event Action? OpenFolderClicked;
     public event Action? SettingsClicked;
+    public event Action<object?>? EjectClicked; // the ⏏ icon on a device row
+    public event Action? PlayFileClicked;       // the ▶ icon in the header (play a PC file)
 
     private sealed class Row
     {
@@ -32,7 +34,9 @@ internal sealed class Sidebar : Panel
 
     private readonly List<Row> _rows = new();
     private readonly List<(Rectangle Rect, Row Row)> _hit = new();
+    private readonly List<(Rectangle Rect, Row Row)> _ejectHit = new(); // ⏏ sub-regions on device rows
     private Row? _hover;
+    private Row? _ejectHover;
     private int _scroll;
     private int _contentH; // total laid-out row height, captured each paint; used to clamp scrolling
     private Bitmap? _logo;
@@ -40,6 +44,8 @@ internal sealed class Sidebar : Panel
     private readonly ThemedButton _refresh = new() { Text = "Refresh", Pill = true, Height = 30 };
     private readonly ThemedButton _openFolder = new() { Text = "Open folder", Pill = true, Height = 30 };
     private readonly ThemedButton _settings = new() { Text = "⚙", Width = 30, Height = 28, Ghost = true, Font = Theme.UiFont(13f) };
+    private readonly ThemedButton _playFile = new() { Text = "▶", Width = 30, Height = 28, Ghost = true, Font = Theme.UiFont(10f) };
+    private readonly ToolTip _tip = new();
 
     private const int HeaderH = 60, SectionH = 30, ItemH = 34, FooterH = 56, Pad = 12;
 
@@ -52,16 +58,27 @@ internal sealed class Sidebar : Panel
         Controls.Add(_refresh);
         Controls.Add(_openFolder);
         Controls.Add(_settings);
+        Controls.Add(_playFile);
         _refresh.Click += (_, _) => RefreshClicked?.Invoke();
         _openFolder.Click += (_, _) => OpenFolderClicked?.Invoke();
         _settings.Click += (_, _) => SettingsClicked?.Invoke();
+        _playFile.Click += (_, _) => PlayFileClicked?.Invoke();
+        _tip.SetToolTip(_playFile, "Play an audio file from your PC");
+        _tip.SetToolTip(_settings, "Settings");
 
         try { if (Environment.ProcessPath is string p) _logo = System.Drawing.Icon.ExtractAssociatedIcon(p)?.ToBitmap(); } catch { }
 
-        MouseMove += (_, e) => { var r = HitTest(e.Location); if (!ReferenceEquals(r, _hover)) { _hover = r; Invalidate(); } };
-        MouseLeave += (_, _) => { _hover = null; Invalidate(); };
+        MouseMove += (_, e) =>
+        {
+            var ej = EjectHitTest(e.Location);
+            Cursor = ej is not null ? Cursors.Hand : Cursors.Default;
+            var r = HitTest(e.Location);
+            if (!ReferenceEquals(r, _hover) || !ReferenceEquals(ej, _ejectHover)) { _hover = r; _ejectHover = ej; Invalidate(); }
+        };
+        MouseLeave += (_, _) => { _hover = null; _ejectHover = null; Invalidate(); };
         MouseClick += (_, e) =>
         {
+            if (e.Button == MouseButtons.Left && EjectHitTest(e.Location) is { } ejectRow) { EjectClicked?.Invoke(ejectRow.Tag); return; }
             var r = HitTest(e.Location);
             if (e.Button == MouseButtons.Right)
             {
@@ -159,6 +176,26 @@ internal sealed class Sidebar : Panel
                 g.FillPolygon(br, sh);
                 break;
             }
+            case SidebarRowKind.Device: // iPod — rounded body, screen, click wheel
+            {
+                using (var bp = Theme.RoundedRect(new RectangleF(x + s * 0.27f, y + s * 0.10f, s * 0.46f, s * 0.80f), s * 0.12f))
+                    g.DrawPath(pen, bp);
+                using (var sp = Theme.RoundedRect(new RectangleF(x + s * 0.34f, y + s * 0.17f, s * 0.32f, s * 0.22f), s * 0.04f))
+                    g.FillPath(br, sp);                                  // screen
+                float wd = s * 0.30f, wx = x + (s - wd) / 2f, wy = y + s * 0.50f;
+                g.DrawEllipse(pen, wx, wy, wd, wd);                      // click wheel
+                g.FillEllipse(br, wx + wd * 0.36f, wy + wd * 0.36f, wd * 0.28f, wd * 0.28f); // centre button
+                break;
+            }
+            case SidebarRowKind.LocalMusic: // laptop (music on this PC)
+            {
+                using (var sp = Theme.RoundedRect(new RectangleF(x + s * 0.22f, y + s * 0.20f, s * 0.56f, s * 0.40f), s * 0.06f))
+                    g.DrawPath(pen, sp);                                  // screen
+                g.FillRectangle(br, x + s * 0.12f, y + s * 0.64f, s * 0.76f, s * 0.10f); // base
+                g.FillEllipse(br, x + s * 0.41f, y + s * 0.42f, s * 0.11f, s * 0.09f);    // little note head
+                g.FillRectangle(br, x + s * 0.50f, y + s * 0.30f, Math.Max(1.2f, s * 0.045f), s * 0.16f); // stem
+                break;
+            }
             default: // AllSongs → eighth note
             {
                 float headW = s * 0.30f, headH = s * 0.23f;
@@ -185,6 +222,7 @@ internal sealed class Sidebar : Panel
         _refresh.Location = new Point(Pad, by);
         _openFolder.Location = new Point(Pad + bw + gap, by);
         _settings.Location = new Point(Width - Pad - _settings.Width, 15);
+        _playFile.Location = new Point(_settings.Left - 4 - _playFile.Width, 15);
         ClampScroll(_scroll); // a shorter window mustn't leave the list stranded past its new bottom
         Invalidate();
     }
@@ -192,6 +230,12 @@ internal sealed class Sidebar : Panel
     private Row? HitTest(Point p)
     {
         foreach (var (rect, row) in _hit) if (rect.Contains(p)) return row;
+        return null;
+    }
+
+    private Row? EjectHitTest(Point p)
+    {
+        foreach (var (rect, row) in _ejectHit) if (rect.Contains(p)) return row;
         return null;
     }
 
@@ -210,6 +254,7 @@ internal sealed class Sidebar : Panel
 
         // --- rows (scrollable region) ---
         _hit.Clear();
+        _ejectHit.Clear();
         var clip = new Rectangle(0, HeaderH, Width, Height - HeaderH - FooterH);
         g.SetClip(clip);
         int y = HeaderH - _scroll;
@@ -285,7 +330,22 @@ internal sealed class Sidebar : Panel
                     DrawRowGlyph(g, tile, row.Kind, Color.FromArgb(244, 255, 255, 255));
                 }
 
-                var textRect = new Rectangle(tile.Right + 10, y, pill.Right - tile.Right - 16, ItemH);
+                // A device row gets an ⏏ eject button on the right (iTunes-style); reserve space for it.
+                int rightInset = 16;
+                if (row.Kind == SidebarRowKind.Device)
+                {
+                    const int ew = 30;
+                    var ejectRect = new Rectangle(pill.Right - ew, y, ew, ItemH);
+                    _ejectHit.Add((ejectRect, row));
+                    Color ec = ReferenceEquals(row, _ejectHover) ? Theme.AccentBright : (row.Active ? Color.FromArgb(220, 255, 255, 255) : Theme.Faint);
+                    float ex = ejectRect.X + ejectRect.Width / 2f, ey = y + ItemH / 2f;
+                    using var eb = new SolidBrush(ec);
+                    g.FillPolygon(eb, new[] { new PointF(ex - 5, ey - 1), new PointF(ex + 5, ey - 1), new PointF(ex, ey - 7) }); // ▲
+                    g.FillRectangle(eb, ex - 5, ey + 2.5f, 10, 2.2f);                                                            // ▁
+                    rightInset = ew + 6;
+                }
+
+                var textRect = new Rectangle(tile.Right + 10, y, pill.Right - tile.Right - rightInset, ItemH);
                 Color tc = row.Active ? Color.White : Theme.TextCol;
                 TextRenderer.DrawText(g, row.Text, Theme.UiFont(9.5f, row.Active ? FontStyle.Bold : FontStyle.Regular),
                     textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);

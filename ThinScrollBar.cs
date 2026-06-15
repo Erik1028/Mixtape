@@ -10,6 +10,8 @@ namespace iPodCommander;
 internal sealed class ThinScrollBar : Control
 {
     private DataGridView? _grid;
+    private Panel? _viewport;       // panel mode: the clipping viewport
+    private Panel? _content;        // panel mode: the (taller) content panel, scrolled via its Top
     private bool _dragging;
     private bool _hover;
     private int _dragStartY;
@@ -31,19 +33,32 @@ internal sealed class ThinScrollBar : Control
         grid.RowsRemoved += (_, _) => Invalidate();
         grid.Scroll += (_, _) => Invalidate();
         grid.SizeChanged += (_, _) => Invalidate();
-        grid.MouseWheel += (_, e) => ScrollRows(-Math.Sign(e.Delta) * 3);
+        grid.MouseWheel += (_, e) => SetFirst(First - Math.Sign(e.Delta) * 3);
     }
 
-    private int Total => _grid?.RowCount ?? 0;
-    private int Visible => _grid is null ? 0 : Math.Max(1, _grid.DisplayedRowCount(false));
-    private int First => _grid is { RowCount: > 0 } g ? Math.Max(0, g.FirstDisplayedScrollingRowIndex) : 0;
-
-    private void ScrollRows(int delta)
+    /// <summary>Drive a manually-scrolled content panel (pixel-based): <paramref name="content"/> is taller
+    /// than <paramref name="viewport"/> and scrolled by setting its Top. No native scrollbar exists.</summary>
+    public void AttachScrollPanel(Panel viewport, Panel content)
     {
-        if (_grid is null || Total == 0) return;
+        _viewport = viewport; _content = content;
+        viewport.ClientSizeChanged += (_, _) => Invalidate();
+        content.SizeChanged += (_, _) => Invalidate();
+    }
+
+    private bool PanelMode => _viewport is not null && _content is not null;
+
+    private int Total => PanelMode ? _content!.Height : (_grid?.RowCount ?? 0);
+    private int Visible => PanelMode ? Math.Max(1, _viewport!.ClientSize.Height)
+                                     : (_grid is null ? 0 : Math.Max(1, _grid.DisplayedRowCount(false)));
+    private int First => PanelMode ? Math.Max(0, -_content!.Top)
+                                   : (_grid is { RowCount: > 0 } g ? Math.Max(0, g.FirstDisplayedScrollingRowIndex) : 0);
+
+    private void SetFirst(int v)
+    {
         int max = Math.Max(0, Total - Visible);
-        int next = Math.Min(max, Math.Max(0, First + delta));
-        try { _grid.FirstDisplayedScrollingRowIndex = next; } catch { }
+        v = Math.Min(max, Math.Max(0, v));
+        if (PanelMode) _content!.Top = -v;
+        else if (_grid is not null) { try { _grid.FirstDisplayedScrollingRowIndex = v; } catch { } }
         Invalidate();
     }
 
@@ -59,7 +74,7 @@ internal sealed class ThinScrollBar : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
-        if (_grid is null || Total <= Visible) return; // nothing to scroll → no thumb
+        if (Total <= Visible) return; // nothing to scroll → no thumb
         var (y, h) = Thumb();
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         var r = new RectangleF((Width - 6) / 2f, y, 6, h);
@@ -72,22 +87,20 @@ internal sealed class ThinScrollBar : Control
     {
         var (y, h) = Thumb();
         if (e.Y >= y && e.Y <= y + h) { _dragging = true; _dragStartY = e.Y; _dragStartFirst = First; }
-        else ScrollRows(e.Y < y ? -Visible : Visible);
+        else SetFirst(First + (e.Y < y ? -Visible : Visible)); // page up/down
         base.OnMouseDown(e);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         _hover = true;
-        if (_dragging && _grid is not null && Total > Visible)
+        if (_dragging && Total > Visible)
         {
             var (_, h) = Thumb();
             int track = Math.Max(1, Height - 8);
             int max = Math.Max(0, Total - Visible);
             double perPx = max / (double)Math.Max(1, track - h);
-            int next = (int)Math.Round(_dragStartFirst + (e.Y - _dragStartY) * perPx);
-            try { _grid.FirstDisplayedScrollingRowIndex = Math.Min(max, Math.Max(0, next)); } catch { }
-            Invalidate();
+            SetFirst((int)Math.Round(_dragStartFirst + (e.Y - _dragStartY) * perPx));
         }
         base.OnMouseMove(e);
     }

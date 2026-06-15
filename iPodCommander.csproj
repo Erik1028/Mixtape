@@ -10,7 +10,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>Mixtape</AssemblyName>
     <RootNamespace>iPodCommander</RootNamespace>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <Product>Mixtape</Product>
     <AssemblyTitle>Mixtape</AssemblyTitle>
     <ApplicationIcon>app.ico</ApplicationIcon>
@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
   <!-- Enabling UseWPF changes the implicit-usings profile and drops System.IO; the codebase relies on it

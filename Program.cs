@@ -78,6 +78,10 @@ internal static class Program
         // Offline ArtworkDB build/parse/round-trip + DBID-linkage self-test → ipod-artworktest.txt
         if (args.Length >= 1 && args[0] == "--artworktest") { RunArtworkTest(); return; }
 
+        // Diagnostic: how many tracks have ratings/play counts in the DB, and what the Play Counts file
+        // (on-device deltas) holds. Read-only. Usage: --ratings <root|db> → ipod-ratings.txt
+        if (args.Length >= 2 && args[0] == "--ratings") { RunRatingScan(args[1]); return; }
+
         // Spike: prove WPF MediaElement (hosted in an ElementHost under the WinForms loop) opens and
         // plays an audio/video file and reports its duration/position. Usage: --mediatest <file> → ipod-mediatest.txt
         if (args.Length >= 2 && args[0] == "--mediatest") { RunMediaTest(args[1]); return; }
@@ -591,6 +595,54 @@ internal static class Program
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-dump.txt"), log.ToString());
     }
 
+    private static void RunRatingScan(string path)
+    {
+        var log = new StringBuilder();
+        try
+        {
+            IPodDevice? dev = Directory.Exists(path) ? DeviceDetector.Build(path) : null;
+            // Use the full library load when we have a device, so the on-device Play Counts overlay is applied.
+            var db = dev is not null ? IpodLibrary.Load(dev).View : ITunesDbReader.Read(File.ReadAllBytes(path));
+            int rated = db.Tracks.Count(t => t.Rating > 0);
+            int played = db.Tracks.Count(t => t.PlayCount > 0);
+            log.AppendLine($"iTunesDB tracks: {db.Tracks.Count}  (after Play Counts overlay)");
+            log.AppendLine($"  rating>0    : {rated}");
+            log.AppendLine($"  playcount>0 : {played}");
+            foreach (var t in db.Tracks.Where(t => t.Rating > 0 || t.PlayCount > 0).Take(15))
+                log.AppendLine($"    '{t.DisplayTitle}'  rating={t.Rating} ({t.Rating / 20}*)  plays={t.PlayCount}");
+
+            if (dev is not null)
+            {
+                string pc = Path.Combine(Path.GetDirectoryName(dev.ITunesDbPath)!, "Play Counts");
+                log.AppendLine();
+                if (File.Exists(pc))
+                {
+                    byte[] p = File.ReadAllBytes(pc);
+                    string sig = System.Text.Encoding.ASCII.GetString(p, 0, 4);
+                    uint hdr = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(4));
+                    uint elen = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(8));
+                    uint cnt = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(12));
+                    log.AppendLine($"Play Counts: sig={sig} headerLen={hdr} entryLen={elen} count={cnt} size={p.Length}");
+                    int pcPlays = 0, pcRated = 0;
+                    for (int e = 0; e < cnt; e++)
+                    {
+                        int o = (int)hdr + e * (int)elen;
+                        if (o + 16 > p.Length) break;
+                        uint play = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(o));
+                        uint rate = elen >= 16 ? System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(o + 12)) : 0;
+                        if (play > 0) pcPlays++;
+                        if (rate > 0) pcRated++;
+                    }
+                    log.AppendLine($"  entries with plays>0: {pcPlays}  rating>0: {pcRated}");
+                }
+                else log.AppendLine("Play Counts: (none)");
+            }
+            log.AppendLine("RESULT: OK");
+        }
+        catch (Exception ex) { log.AppendLine("ERROR: " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-ratings.txt"), log.ToString());
+    }
+
     private static void RunRender(string dbPath, string outPng, string view)
     {
         Application.EnableVisualStyles();
@@ -615,6 +667,20 @@ internal static class Program
             File.Copy(dbPath, Path.Combine(control, "iTunes", "iTunesDB"));
             File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
             device = DeviceDetector.Build(sandbox);
+        }
+
+        // The equalizer dialog renders on its own.
+        if (view == "equalizer")
+        {
+            using var eq = new EqualizerDialog(true, new float[] { 6, 5, 4, 2, 0, 0, 2, 4, 5, 6 }, (_, _) => { })
+            { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            eq.Show();
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using var ebmp = new Bitmap(eq.Width, eq.Height);
+            eq.DrawToBitmap(ebmp, new Rectangle(0, 0, eq.Width, eq.Height));
+            ebmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            eq.Close();
+            return;
         }
 
         // The cover picker renders on its own.
@@ -784,7 +850,7 @@ internal static class Program
         form.Show();
         Application.DoEvents();
         if (device is not null) form.PreviewDevice(device);
-        if (view is "videos" or "photos" or "device" or "albums" or "artists") form.PreviewSelectView(view);
+        if (view is "videos" or "photos" or "device" or "albums" or "artists" or "local") form.PreviewSelectView(view);
         // Pump the message loop so background cover-art loads land before we capture.
         for (int i = 0; i < 45; i++) { Application.DoEvents(); Thread.Sleep(100); }
 

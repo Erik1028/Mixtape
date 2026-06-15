@@ -22,7 +22,9 @@ internal sealed class IpodLibrary
     public static IpodLibrary Load(IPodDevice device)
     {
         byte[] bytes = File.ReadAllBytes(device.ITunesDbPath);
-        return new IpodLibrary(device, RawDb.Parse(bytes), ITunesDbReader.Read(bytes));
+        var lib = new IpodLibrary(device, RawDb.Parse(bytes), ITunesDbReader.Read(bytes));
+        PlayCounts.Apply(lib); // overlay on-device play counts/ratings (the data iTunes would merge on sync)
+        return lib;
     }
 
     /// <summary>
@@ -101,6 +103,7 @@ internal sealed class IpodLibrary
         byte[] fresh = File.ReadAllBytes(Device.ITunesDbPath);
         View = ITunesDbReader.Read(fresh);
         Raw = RawDb.Parse(fresh);
+        PlayCounts.Apply(this); // keep on-device play counts/ratings visible after a save+reload
     }
 
     private static ulong RandomDbid()

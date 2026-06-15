@@ -158,8 +158,8 @@ internal sealed class SettingsForm : Form
 
     private void BuildLibrary()
     {
-        string[] sorts = { "Playlist", "Song", "Artist", "Album", "Time" };
-        var sort = new SegmentedControl { Options = sorts, SelectedIndex = Math.Max(0, Array.IndexOf(sorts, _s.DefaultSort)), Width = 330 };
+        string[] sorts = { "Playlist", "Song", "Artist", "Album", "Added", "Time" };
+        var sort = new SegmentedControl { Options = sorts, SelectedIndex = Math.Max(0, Array.IndexOf(sorts, _s.DefaultSort)), Width = 396 };
         sort.SelectedChanged += () => { _s.DefaultSort = sorts[sort.SelectedIndex]; _s.Save(); _applyChanged(); };
         Row("Default sort", "Column a list is sorted by when it opens.", sort);
         Row("Sort descending", "Reverse the default sort order.", Toggle(_s.DefaultSortDescending, v => { _s.DefaultSortDescending = v; _s.Save(); _applyChanged(); }));
@@ -169,6 +169,7 @@ internal sealed class SettingsForm : Form
         Row("Album column", "Show the Album column in the song list.", Toggle(_s.ShowAlbum, v => { _s.ShowAlbum = v; _s.Save(); _applyChanged(); }));
         Row("Star rating column", "Show your star ratings in the song list.", Toggle(_s.ShowRating, v => { _s.ShowRating = v; _s.Save(); _applyChanged(); }));
         Row("Play count column", "Show how many times each song has been played.", Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
+        Row("Date added column", "Show when each song was added to the iPod.", Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
         Row("Time column", "Show the Time column in the song list.", Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
     }
 
@@ -229,7 +230,7 @@ internal sealed class SettingsForm : Form
 
     private void BuildAbout()
     {
-        Row("Mixtape", "Version 0.4", null);
+        Row("Mixtape", "Version 0.5", null);
         Row("A friendly manager for classic iPods", "Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes.", null);
     }
 

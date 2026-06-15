@@ -18,8 +18,10 @@ Built because iTunes is effectively gone and Apple's newer apps handle old click
 - **Edit tags & star ratings**
 - **Photos & videos** — import (recursively from folders), and preview right in the app
 - **Cover art** — pick from generated covers, or show album art on the iPod's own screen
-- **In-app preview** — play songs, watch videos, view photos straight off the iPod
-- **Automatic device detection** with a per-model iPod illustration and capacity breakdown
+- **Built-in player & equalizer** — play songs from the iPod *or* your PC, with a 10-band graphic EQ and a Spotify-style seek bar
+- **Local Music** — point Mixtape at folders on your PC and browse/play them without an iPod plugged in
+- **Automatic device detection** (plug/unplug auto-refresh) with a per-model iPod illustration and capacity breakdown
+- **Safely Eject** from inside the app, plus selection totals and a low-space warning when adding music
 - Dark, Apple-Music-style UI with smooth animations and a custom window chrome
 
 ## Supported iPods
@@ -56,8 +58,13 @@ Run the built exe (`bin\Release\net8.0-windows\Mixtape.exe`), or publish a singl
 ```sh
 dotnet publish -c Release -r win-x64 --self-contained true ^
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true ^
-  -p:EnableCompressionInSingleFile=true -p:DebugType=none -o publish
+  -p:DebugType=none -o publish
 ```
+
+> **Note:** `IncludeNativeLibrariesForSelfExtract=true` is required — it bundles the WPF/native
+> support libraries (`wpfgfx_cor3.dll`, etc.) *inside* the exe. Without it, the exe is published
+> alongside loose `.dll` files and will fail when those aren't next to it. The build is left
+> **uncompressed** on purpose (larger file, but it starts faster and is rock-solid).
 
 Optional: install [FFmpeg](https://ffmpeg.org/) (or point to it in Settings) to enable audio/video transcoding.
 
