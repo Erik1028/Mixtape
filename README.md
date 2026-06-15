@@ -4,6 +4,8 @@ A friendly, standalone Windows app for managing **classic click-wheel iPods** �
 
 Built because iTunes is effectively gone and Apple's newer apps handle old click-wheel iPods poorly.
 
+> 🤖 **Made with AI.** This app was written primarily by an AI assistant (Anthropic's Claude, via Claude Code) working from a human's requests and testing. It's shared in good faith to help fellow iPod owners — please use it with the same care you'd give any community software.
+
 > ⚠️ **Mixtape writes to your iPod's database.** It backs up before every change and verifies the result, but this is community software, not Apple's. Read the **Safety** section before writing to a device you care about.
 
 ## Features
