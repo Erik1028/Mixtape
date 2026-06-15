@@ -35,6 +35,15 @@ internal sealed class SearchBox : Panel
     public string Query => _tb.Text;
     public void ClearQuery() => _tb.Clear();
 
+    /// <summary>Re-read theme colours into the inner TextBox (its BackColor is baked at construction).</summary>
+    public void Restyle()
+    {
+        BackColor = Theme.Bg;
+        _tb.BackColor = Theme.Blend(Theme.Bg, Color.Black, 0.30);
+        _tb.ForeColor = Theme.TextCol;
+        Invalidate();
+    }
+
     private Rectangle ClearRect => new(Width - 26, (Height - 18) / 2, 18, 18);
 
     protected override void OnResize(EventArgs e)

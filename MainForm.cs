@@ -105,6 +105,11 @@ internal sealed class MainForm : Form, IMessageFilter
         Application.AddMessageFilter(this); // route the mouse wheel to the device page's custom scroll
         _deviceChangeTimer.Tick += (_, _) => { _deviceChangeTimer.Stop(); AutoDetectDevices(); };
         _dropHideTimer.Tick += (_, _) => { _dropHideTimer.Stop(); SetDropActive(false); };
+
+        // Field-initialized controls (header, search box, sidebar) baked the DEFAULT theme's colours before the
+        // saved variant was applied in this ctor — push the current colours in so a saved non-default theme is
+        // correct from the first frame, not just after a Settings change.
+        RecolorBakedControls();
     }
 
     /// <summary>Route the mouse wheel to the device page's custom scroll when the pointer is over it (its
@@ -2911,6 +2916,18 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.Columns[7].Visible = _settings.ShowTime;
     }
 
+    /// <summary>Push current theme colours into controls whose BackColor (or inner controls) were baked at
+    /// field-initialization, which runs before the saved variant is applied. Their child pill-buttons / search
+    /// field backfill rounded corners with the parent BackColor, so a stale value shows as gray corners.</summary>
+    private void RecolorBakedControls()
+    {
+        _header.BackColor = Theme.Bg;
+        _sidebar.BackColor = Theme.SidebarBg;
+        _status.BackColor = Theme.SidebarBg;
+        _search.Restyle();
+        if (_search.Parent is Control searchHost) searchHost.BackColor = Theme.Bg;
+    }
+
     /// <summary>Re-colour the BackColor-baked panels + grid after a background-theme change (owner-painted controls repaint via Invalidate).</summary>
     private void RestyleEverything()
     {
@@ -2919,10 +2936,7 @@ internal sealed class MainForm : Form, IMessageFilter
         ApplyWindowChrome();                          // re-melt the title bar into the new variant's wallpaper
         if (_root is not null) _root.Invalidate();   // repaint the gradient wallpaper for the new variant
         if (_content is not null) _content.BackColor = Theme.Bg;
-        // These two are baked at construction; their child pill-buttons backfill their rounded corners with the
-        // parent BackColor, so without this the corners keep the old variant's colour after a theme switch.
-        _header.BackColor = Theme.Bg;
-        _sidebar.BackColor = Theme.SidebarBg;
+        RecolorBakedControls();
         if (_photoView.Parent is Control center) center.BackColor = Theme.Bg;
         if (_tracks.Parent is Control gh) gh.BackColor = Theme.Bg;
         if (_status.Parent is Control sp) sp.BackColor = Theme.SidebarBg;
