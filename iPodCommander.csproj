@@ -22,6 +22,13 @@
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
+  <!-- The cross-platform engine now lives in Mixtape.Core (a net8.0 lib in a subfolder). This
+       Windows app references it; keep the core's sources out of this project's compile glob. -->
+  <ItemGroup>
+    <ProjectReference Include="Mixtape.Core\Mixtape.Core.csproj" />
+    <Compile Remove="Mixtape.Core\**\*.cs" />
+  </ItemGroup>
+
   <!-- Enabling UseWPF changes the implicit-usings profile and drops System.IO; the codebase relies on it
        implicitly (DriveInfo/File/Path/FileStream everywhere), so add it back globally. -->
   <ItemGroup>

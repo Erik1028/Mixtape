@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The cross-platform iPod engine: reading/writing iTunesDB, hash58 signing, device
+       detection, copy/transcode, tag reading. NO UI, NO Windows-only APIs — targets plain
+       net8.0 so it runs on Windows, Linux and macOS. The WinForms app and the (in-progress)
+       Avalonia app both reference this. Namespace stays `iPodCommander` so callers are unchanged. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>iPodCommander</RootNamespace>
+    <AssemblyName>Mixtape.Core</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+  </ItemGroup>
+
+</Project>
