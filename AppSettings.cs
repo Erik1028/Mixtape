@@ -21,6 +21,8 @@ internal sealed class AppSettings
     public bool ShowPhotos { get; set; } = true;   // show the Photos library row (on capable devices)
     public bool ShowArtist { get; set; } = true;   // Artist column
     public bool ShowAlbum { get; set; } = true;    // Album column
+    public bool ShowRating { get; set; } = true;   // Rating (stars) column
+    public bool ShowPlays { get; set; } = true;    // Play-count column
     public bool ShowTime { get; set; } = true;     // Time column
 
     // ---- Video / transcoding ----

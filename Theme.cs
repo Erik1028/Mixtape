@@ -305,6 +305,28 @@ internal sealed class ThemedButton : Button
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
     private bool _painted;
     private Tween? _hoverTw, _pressTw;
+    private string? _blockedReason;
+
+    /// <summary>
+    /// When set, the button paints as disabled but STILL accepts a click — which raises
+    /// <see cref="BlockedClicked"/> (with this reason) instead of the normal Click. Lets a greyed-out
+    /// action explain why it's unavailable instead of silently doing nothing. Null = behave normally.
+    /// </summary>
+    public string? BlockedReason
+    {
+        get => _blockedReason;
+        set
+        {
+            var v = string.IsNullOrEmpty(value) ? null : value;
+            if (v == _blockedReason) return;
+            _blockedReason = v;
+            if (v != null) { _hoverTw?.Cancel(); _pressTw?.Cancel(); _hoverT = 0f; _pressT = 0f; } // stop any motion so it reads as inert
+            Invalidate();
+        }
+    }
+    /// <summary>Raised when a soft-disabled (BlockedReason) button is clicked. Argument is the reason.</summary>
+    public event Action<string>? BlockedClicked;
+    private bool IsBlocked => _blockedReason != null;
 
     public ThemedButton()
     {
@@ -316,11 +338,18 @@ internal sealed class ThemedButton : Button
         Cursor = Cursors.Hand;
         Font = Theme.UiFont(9.5f, FontStyle.Bold);
         Height = 34;
-        MouseEnter += (_, _) => AnimHover(1f);
+        MouseEnter += (_, _) => { if (Enabled && !IsBlocked) AnimHover(1f); };
         MouseLeave += (_, _) => { AnimHover(0f); AnimPress(0f); };
-        MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Enabled) AnimPress(1f); };
+        MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Enabled && !IsBlocked) AnimPress(1f); };
         MouseUp += (_, me) => { if (me.Button == MouseButtons.Left) AnimPress(0f); };
         EnabledChanged += (_, _) => Invalidate();
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        // A soft-disabled button swallows the normal Click and explains itself instead.
+        if (IsBlocked) { BlockedClicked?.Invoke(_blockedReason!); return; }
+        base.OnClick(e);
     }
 
     private void AnimHover(float to)
@@ -354,16 +383,18 @@ internal sealed class ThemedButton : Button
         using var path = Theme.RoundedRect(r, radius);
         var textRect = Rectangle.Round(r);
 
+        bool disabled = !Enabled || IsBlocked;
+
         if (Ghost)
         {
             if (h > 0.001f) { using var hb = new SolidBrush(Color.FromArgb((int)(h * 255), Theme.RowHover)); g.FillPath(hb, path); }
             TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, textRect,
-                Theme.Blend(Color.FromArgb(205, 210, 214), Theme.TextCol, h), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                disabled ? Theme.Faint : Theme.Blend(Color.FromArgb(205, 210, 214), Theme.TextCol, h), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
 
         Color fill, text, border;
-        if (!Enabled) { fill = Theme.RowBg; text = Theme.Faint; border = Theme.Border; }
+        if (disabled) { fill = Theme.RowBg; text = Theme.Faint; border = Theme.Border; }
         else if (Primary) { fill = Theme.Blend(Theme.Accent, Color.White, 0.14 * h); text = Theme.OnAccent; border = fill; }
         else { fill = Theme.Blend(Theme.RowBg, Theme.RowHover, h); text = Theme.TextCol; border = Theme.Border; }
 

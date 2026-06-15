@@ -31,9 +31,9 @@ internal sealed class MainForm : Form
     private int _artGen;          // bumped each ShowCurrent; cancels stale background art loads
     private int _sidebarArtGen;   // same, for sidebar playlist covers
     private int _photoArtGen;     // same, for the photo grid's background thumbnail decode
-    private int _sortCol = -1;    // -1 = playlist order; 1=Song 2=Artist 3=Album 4=Time
+    private int _sortCol = -1;    // -1 = playlist order; 1=Song 2=Artist 3=Album 4=Rating 5=Plays 6=Time
     private bool _sortAsc = true;
-    private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "TIME" };
+    private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "RATING", "PLAYS", "TIME" };
     private SidebarRowKind _viewKind = SidebarRowKind.AllSongs; // which top-level view is active
     private PhotoLibrary? _photos;
     private readonly PhotoGridView _photoView = new() { Dock = DockStyle.Fill, Visible = false };
@@ -81,6 +81,8 @@ internal sealed class MainForm : Form
         _sidebar.PlaylistAreaRightClicked += OnPlaylistAreaRightClick;
         _header.AddButton.Click += (_, _) => OnAddClicked();
         _header.DeleteButton.Click += (_, _) => OnDeleteClicked();
+        _header.AddButton.BlockedClicked += _ => ShowActionBlockedHelp();
+        _header.DeleteButton.BlockedClicked += _ => ShowActionBlockedHelp();
         _header.ArtClicked += OnHeaderArtClicked;
 
         AllowDrop = true; // drop audio/video/photo files anywhere on the window to add them
@@ -217,6 +219,20 @@ internal sealed class MainForm : Form
         var album = new DataGridViewTextBoxColumn { HeaderText = "ALBUM", FillWeight = 30, SortMode = DataGridViewColumnSortMode.NotSortable };
         album.DefaultCellStyle.ForeColor = Theme.Subtle; album.DefaultCellStyle.SelectionForeColor = dimSel;
         _tracks.Columns.Add(album);
+
+        var rating = new DataGridViewTextBoxColumn { HeaderText = "RATING", Width = 92, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ShowRating };
+        rating.DefaultCellStyle.ForeColor = Theme.Accent;                 // stars pop in the accent colour
+        rating.DefaultCellStyle.SelectionForeColor = Color.White;
+        rating.DefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
+        _tracks.Columns.Add(rating);
+
+        var plays = new DataGridViewTextBoxColumn { HeaderText = "PLAYS", Width = 76, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ShowPlays };
+        plays.DefaultCellStyle.ForeColor = Theme.Subtle; plays.DefaultCellStyle.SelectionForeColor = dimSel;
+        plays.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        plays.DefaultCellStyle.Padding = new Padding(4, 0, 10, 0);
+        plays.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
+        plays.HeaderCell.Style.Padding = new Padding(4, 0, 10, 0);
+        _tracks.Columns.Add(plays);
 
         var time = new DataGridViewTextBoxColumn { HeaderText = "TIME", Width = 72, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable };
         time.DefaultCellStyle.ForeColor = Theme.Subtle;
@@ -529,7 +545,7 @@ internal sealed class MainForm : Form
             SetCenter();
             _tracks.Rows.Clear();
             _header.SetInfo("", "No iPod connected", "Plug in your iPod and press Refresh — or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows.", 0);
-            _header.AddButton.Enabled = _header.DeleteButton.Enabled = false;
+            SetActionButtons(); // recompute visibility + the "No iPod is connected" blocked reason (keeps the buttons shown + clickable)
             BuildSidebar();
             SetStatus("No device.");
         }
@@ -818,7 +834,8 @@ internal sealed class MainForm : Form
         foreach (var t in list)
         {
             var thumb = Theme.MakeArt(artSize, Theme.StableHash(t.Album ?? t.DisplayTitle)); // placeholder until real art loads
-            int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "", t.Duration.ToString(@"m\:ss"));
+            int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "",
+                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", t.Duration.ToString(@"m\:ss"));
             _tracks.Rows[r].Tag = t;
         }
         _tracks.ResumeLayout();
@@ -975,7 +992,8 @@ internal sealed class MainForm : Form
         });
     }
 
-    /// <summary>Set the header action buttons' labels + enabled state for the active view.</summary>
+    /// <summary>Set the header action buttons' labels + availability for the active view. When an action
+    /// isn't allowed the button stays clickable-but-greyed (BlockedReason), so clicking it explains why.</summary>
     private void SetActionButtons()
     {
         bool canAudio = _device?.Profile.CanWrite == true;
@@ -984,24 +1002,102 @@ internal sealed class MainForm : Form
         _header.AddButton.Visible = !deviceView;   // the device page has its own buttons
         _header.DeleteButton.Visible = !deviceView;
         if (deviceView) return;
-        switch (_viewKind)
+
+        bool photos = _viewKind == SidebarRowKind.Photos;
+        bool allowed = photos ? canPhotos : canAudio;
+        string reason = photos ? PhotoBlockReason() : AudioBlockReason();
+        _header.AddButton.Text = _viewKind switch
         {
-            case SidebarRowKind.Videos:
-                _header.AddButton.Text = "Add video";
-                _header.AddButton.Enabled = canAudio;
-                _header.DeleteButton.Enabled = canAudio;
-                break;
-            case SidebarRowKind.Photos:
-                _header.AddButton.Text = "Add photos";
-                _header.AddButton.Enabled = canPhotos;
-                _header.DeleteButton.Enabled = canPhotos;
-                break;
-            default:
-                _header.AddButton.Text = "Add music";
-                _header.AddButton.Enabled = canAudio;
-                _header.DeleteButton.Enabled = canAudio;
-                break;
+            SidebarRowKind.Videos => "Add video",
+            SidebarRowKind.Photos => "Add photos",
+            _ => "Add music",
+        };
+        _header.AddButton.BlockedReason = allowed ? null : reason;
+        _header.DeleteButton.BlockedReason = allowed ? null : reason;
+    }
+
+    private string AudioBlockReason()
+    {
+        if (_device is null) return "No iPod is connected.";
+        var r = _device.Profile.WriteBlockReason;
+        return r.Length > 0 ? r : "This iPod is read-only.";
+    }
+
+    private string PhotoBlockReason()
+    {
+        if (_device is null) return "No iPod is connected.";
+        if (_device.Profile.SupportsPhotos != true) return "This iPod doesn't have a colour screen, so it can't store photos.";
+        return _photos?.BlockReason ?? "Photos can't be written to this iPod.";
+    }
+
+    /// <summary>Explain why the greyed Add/Delete button is unavailable, and how to fix it — offering to
+    /// jump to the device page (where Read device ID / Restore live) when that's the fix.</summary>
+    private void ShowActionBlockedHelp()
+    {
+        const string title = "Why is this greyed out?";
+        string reason, fix;
+        bool offerDevicePage = false;
+
+        if (_device is null)
+        {
+            reason = "No iPod is connected.";
+            fix = "Plug in your iPod (in disk mode) and press Refresh, or use Open folder to point at its drive. A Mac-formatted (HFS+) iPod can't be read on Windows.";
         }
+        else if (_viewKind == SidebarRowKind.Photos)
+        {
+            var p = _device.Profile;
+            if (p.SupportsPhotos != true)
+            {
+                reason = "This iPod doesn't have a colour screen, so it can't store photos.";
+                fix = "Photos work on the iPod photo, 5G (video), Classic, and nano 3G and later.";
+            }
+            else
+            {
+                reason = _photos?.BlockReason ?? "Photos can't be written to this iPod right now.";
+                fix = "Check the iPod isn't read-only on its device page, then try again.";
+                offerDevicePage = !p.CanWrite;
+            }
+        }
+        else // music / video
+        {
+            var p = _device.Profile;
+            reason = p.WriteBlockReason.Length > 0 ? p.WriteBlockReason : "This iPod is read-only.";
+            switch (p.Scheme)
+            {
+                case ChecksumScheme.Hash58 when string.IsNullOrEmpty(p.FirewireGuid):
+                    fix = "Open this iPod's device page and click “Read device ID” — a safe, read-only query that reads the iPod's hardware ID (the same thing iTunes does) so music can be written.";
+                    offerDevicePage = true;
+                    break;
+                case ChecksumScheme.Hash58: // GUID is known, but Mixtape's signature didn't match this iPod's
+                    fix = "Mixtape's signature for this iPod didn't match the one already on it, so writing stays disabled to avoid corrupting its library. Open the device page and use “Save report…” so this can be looked into.";
+                    offerDevicePage = true;
+                    break;
+                case ChecksumScheme.Hash72:
+                    fix = "This iPod's signature (hash72, used by the nano 5G / Touch) can't be reproduced yet, so writing isn't possible. You can still browse, play, and copy music off the iPod.";
+                    break;
+                case ChecksumScheme.HashAB:
+                    fix = "This iPod uses the experimental hashAB signature (nano 6G/7G), which isn't enabled yet. Browsing and copying off still work.";
+                    break;
+                default:
+                    fix = "See the device page for details on this iPod's signature.";
+                    offerDevicePage = true;
+                    break;
+            }
+        }
+
+        string body = reason + "\n\n" + fix;
+        if (offerDevicePage && _device is not null
+            && MessageBox.Show(this, body + "\n\nOpen the device page now?", title, MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+            GoToDevicePage();
+        else if (!offerDevicePage || _device is null)
+            MessageBox.Show(this, body, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>Navigate to the connected iPod's device page (Read device ID / Restore / Save report live there).</summary>
+    private void GoToDevicePage()
+    {
+        if (_device is null) return;
+        TransitionCenter(() => { _viewKind = SidebarRowKind.Device; _current = null; BuildSidebar(); ShowCurrent(); });
     }
 
     private void UpdatePhotoStatus()
@@ -1449,6 +1545,13 @@ internal sealed class MainForm : Form
         SetStatus("Database restored.");
     }
 
+    /// <summary>Star rating as glyphs (rating is stars×20). Unrated → blank, like iTunes.</summary>
+    private static string RatingStars(byte rating)
+    {
+        int stars = Math.Min(5, rating / 20);
+        return stars > 0 ? new string('★', stars) + new string('☆', 5 - stars) : "";
+    }
+
     private void SortTracks(List<Track> list)
     {
         if (_sortCol < 1) return; // playlist order
@@ -1457,7 +1560,9 @@ internal sealed class MainForm : Form
             1 => (a, b) => string.Compare(a.DisplayTitle, b.DisplayTitle, StringComparison.OrdinalIgnoreCase),
             2 => (a, b) => string.Compare(a.Artist ?? "", b.Artist ?? "", StringComparison.OrdinalIgnoreCase),
             3 => (a, b) => string.Compare(a.Album ?? "", b.Album ?? "", StringComparison.OrdinalIgnoreCase),
-            4 => (a, b) => a.LengthMs.CompareTo(b.LengthMs),
+            4 => (a, b) => a.Rating.CompareTo(b.Rating),
+            5 => (a, b) => a.PlayCount.CompareTo(b.PlayCount),
+            6 => (a, b) => a.LengthMs.CompareTo(b.LengthMs),
             _ => (_, _) => 0,
         };
         list.Sort(cmp);
@@ -2209,10 +2314,12 @@ internal sealed class MainForm : Form
     /// <summary>Show/hide the Artist/Album/Time columns per settings.</summary>
     private void ApplyColumns()
     {
-        if (_tracks.Columns.Count < 5) return;
+        if (_tracks.Columns.Count < 7) return;
         _tracks.Columns[2].Visible = _settings.ShowArtist;
         _tracks.Columns[3].Visible = _settings.ShowAlbum;
-        _tracks.Columns[4].Visible = _settings.ShowTime;
+        _tracks.Columns[4].Visible = _settings.ShowRating;
+        _tracks.Columns[5].Visible = _settings.ShowPlays;
+        _tracks.Columns[6].Visible = _settings.ShowTime;
     }
 
     /// <summary>Re-colour the BackColor-baked panels + grid after a background-theme change (owner-painted controls repaint via Invalidate).</summary>
@@ -2238,7 +2345,7 @@ internal sealed class MainForm : Form
 
     private void SeedDefaultSort()
     {
-        _sortCol = _settings.DefaultSort switch { "Song" => 1, "Artist" => 2, "Album" => 3, "Time" => 4, _ => -1 };
+        _sortCol = _settings.DefaultSort switch { "Song" => 1, "Artist" => 2, "Album" => 3, "Rating" => 4, "Plays" => 5, "Time" => 6, _ => -1 };
         _sortAsc = !_settings.DefaultSortDescending;
         _userSorted = false;
     }

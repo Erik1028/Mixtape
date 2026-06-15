@@ -11,6 +11,7 @@ Built because iTunes is effectively gone and Apple's newer apps handle old click
 ## Features
 
 - **Browse & manage** your library — songs, albums, artists, playlists
+- **Star ratings & play counts** shown in the song list (sortable, and toggleable in Settings)
 - **Copy music on** (auto-transcodes formats the iPod can't play, when FFmpeg is available)
 - **Copy music off** to your PC
 - **Create / edit / reorder playlists** ("make a mixtape")
@@ -19,7 +20,7 @@ Built because iTunes is effectively gone and Apple's newer apps handle old click
 - **Cover art** — pick from generated covers, or show album art on the iPod's own screen
 - **In-app preview** — play songs, watch videos, view photos straight off the iPod
 - **Automatic device detection** with a per-model iPod illustration and capacity breakdown
-- Dark, Apple-Music-style UI with a custom window chrome
+- Dark, Apple-Music-style UI with smooth animations and a custom window chrome
 
 ## Supported iPods
 

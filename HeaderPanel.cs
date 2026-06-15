@@ -10,8 +10,8 @@ namespace iPodCommander;
 /// </summary>
 internal sealed class HeaderPanel : Panel
 {
-    public readonly ThemedButton AddButton = new() { Text = "Add music", Width = 132, Primary = true, Pill = true, Glyph = "+", Enabled = false };
-    public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, Enabled = false };
+    public readonly ThemedButton AddButton = new() { Text = "Add music", Width = 132, Primary = true, Pill = true, Glyph = "+", BlockedReason = "No iPod is connected." };
+    public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, BlockedReason = "No iPod is connected." };
 
     /// <summary>Raised when the artwork tile is clicked (only when <see cref="ArtClickable"/>) — used to pick a cover.</summary>
     public event Action? ArtClicked;

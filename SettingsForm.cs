@@ -167,6 +167,8 @@ internal sealed class SettingsForm : Form
         Row("Show Photos", "List the Photos library (colour-screen iPods).", Toggle(_s.ShowPhotos, v => { _s.ShowPhotos = v; _s.Save(); _applyChanged(); }));
         Row("Artist column", "Show the Artist column in the song list.", Toggle(_s.ShowArtist, v => { _s.ShowArtist = v; _s.Save(); _applyChanged(); }));
         Row("Album column", "Show the Album column in the song list.", Toggle(_s.ShowAlbum, v => { _s.ShowAlbum = v; _s.Save(); _applyChanged(); }));
+        Row("Star rating column", "Show your star ratings in the song list.", Toggle(_s.ShowRating, v => { _s.ShowRating = v; _s.Save(); _applyChanged(); }));
+        Row("Play count column", "Show how many times each song has been played.", Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
         Row("Time column", "Show the Time column in the song list.", Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
     }
 
@@ -227,7 +229,7 @@ internal sealed class SettingsForm : Form
 
     private void BuildAbout()
     {
-        Row("Mixtape", "Version 0.3", null);
+        Row("Mixtape", "Version 0.4", null);
         Row("A friendly manager for classic iPods", "Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes.", null);
     }
 
