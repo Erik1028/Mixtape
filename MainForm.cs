@@ -2917,6 +2917,10 @@ internal sealed class MainForm : Form, IMessageFilter
         ApplyWindowChrome();                          // re-melt the title bar into the new variant's wallpaper
         if (_root is not null) _root.Invalidate();   // repaint the gradient wallpaper for the new variant
         if (_content is not null) _content.BackColor = Theme.Bg;
+        // These two are baked at construction; their child pill-buttons backfill their rounded corners with the
+        // parent BackColor, so without this the corners keep the old variant's colour after a theme switch.
+        _header.BackColor = Theme.Bg;
+        _sidebar.BackColor = Theme.SidebarBg;
         if (_photoView.Parent is Control center) center.BackColor = Theme.Bg;
         if (_tracks.Parent is Control gh) gh.BackColor = Theme.Bg;
         if (_status.Parent is Control sp) sp.BackColor = Theme.SidebarBg;
