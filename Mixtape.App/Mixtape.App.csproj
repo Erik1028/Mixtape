@@ -27,7 +27,9 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.4" />
     <PackageReference Include="LibVLCSharp" Version="3.9.7.1" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+    <!-- Bundled libvlc for Windows only (and default dev builds). On Linux, audio uses system libvlc
+         (apt install vlc) — bundling the Windows natives would just bloat the Linux package. -->
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="'$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('win'))" />
   </ItemGroup>
 
 </Project>
