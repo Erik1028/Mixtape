@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Mixtape
+GenericName=iPod Manager
+Comment=Manage your classic iPod without iTunes
+Exec=Mixtape.App
+Icon=Mixtape
+Categories=AudioVideo;Audio;Utility;
+Keywords=iPod;music;sync;mp3;
+Terminal=false

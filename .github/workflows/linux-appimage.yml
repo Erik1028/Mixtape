@@ -1,0 +1,72 @@
+name: Linux AppImage
+
+# Builds the Avalonia Linux front-end as a single-file AppImage with libvlc bundled in,
+# so it runs on a bare Linux box / Steam Deck (immutable root) with no system VLC needed.
+# Manual runs upload the AppImage as an artifact; tag pushes also attach it to the release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'linux-*'
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04   # glibc 2.35 — broad compatibility, fine for the Steam Deck
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Avalonia app (linux-x64, self-contained)
+        run: >
+          dotnet publish Mixtape.App/Mixtape.App.csproj
+          -c Release -r linux-x64 --self-contained true
+          -p:PublishSingleFile=false
+          -o AppDir/usr/bin
+
+      - name: Bundle libvlc + plugins
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvlc-dev libvlc5 libvlccore9 vlc-plugin-base
+          mkdir -p AppDir/usr/lib AppDir/usr/lib/vlc/plugins
+          cp -a /usr/lib/x86_64-linux-gnu/libvlc.so*     AppDir/usr/lib/ || true
+          cp -a /usr/lib/x86_64-linux-gnu/libvlccore.so* AppDir/usr/lib/ || true
+          cp -a /usr/lib/x86_64-linux-gnu/vlc/plugins/.  AppDir/usr/lib/vlc/plugins/ || true
+          echo "Bundled libs:" && ls -1 AppDir/usr/lib/libvlc* || true
+
+      - name: Assemble AppDir
+        run: |
+          cp packaging/linux/AppRun AppDir/AppRun
+          chmod +x AppDir/AppRun
+          cp packaging/linux/Mixtape.desktop AppDir/Mixtape.desktop
+          cp packaging/linux/Mixtape.png AppDir/Mixtape.png
+          mkdir -p AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp packaging/linux/Mixtape.desktop AppDir/usr/share/applications/Mixtape.desktop
+          cp packaging/linux/Mixtape.png AppDir/usr/share/icons/hicolor/256x256/apps/Mixtape.png
+
+      - name: Build AppImage
+        run: |
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir Mixtape-x86_64.AppImage
+          ls -lh Mixtape-x86_64.AppImage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mixtape-AppImage
+          path: Mixtape-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Attach to release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Mixtape-x86_64.AppImage

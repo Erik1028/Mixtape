@@ -1,0 +1,10 @@
+#!/bin/sh
+# AppImage entry point for Mixtape. Resolves its own location, points the runtime at the
+# bundled libvlc + plugins (so audio works on a Steam Deck / immutable-root distro with no
+# system VLC), then launches the .NET app.
+HERE="$(dirname "$(readlink -f "${0}")")"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+export VLC_PLUGIN_PATH="${HERE}/usr/lib/vlc/plugins"
+# .NET: keep config/cache inside the user's home, not next to the read-only AppImage.
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+exec "${HERE}/usr/bin/Mixtape.App" "$@"

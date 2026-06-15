@@ -447,7 +447,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             EnsureAudio();
-            _audio!.Play(path);
+            if (!_audio!.Available)
+            {
+                Status = "Audio playback needs VLC. On Linux install it (e.g. “sudo pacman -S vlc” / “sudo apt install vlc”); the AppImage bundles it. Browsing and copying still work.";
+                return;
+            }
+            _audio.Play(path);
             _audio.Volume = _volume;
             _audio.SetEq(_eqOn, _eqGains);
             NowTitle = t.DisplayTitle;

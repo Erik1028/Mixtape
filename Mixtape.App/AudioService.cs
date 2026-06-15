@@ -9,34 +9,54 @@ namespace Mixtape.App;
 /// </summary>
 public sealed class AudioService : IDisposable
 {
-    private readonly LibVLC _vlc;
-    private readonly MediaPlayer _player;
+    private readonly LibVLC? _vlc;
+    private readonly MediaPlayer? _player;
     private bool _hasMedia;
+
+    /// <summary>False when libvlc couldn't be initialised (e.g. VLC isn't installed on this Linux box).
+    /// All playback methods become no-ops; check this and show <see cref="UnavailableReason"/> instead of crashing.</summary>
+    public bool Available => _player is not null;
+
+    /// <summary>Why audio is unavailable (the init error), or null when <see cref="Available"/>.</summary>
+    public string? UnavailableReason { get; }
 
     /// <summary>Raised (on a VLC thread) when time/length/state changes — marshal to the UI yourself.</summary>
     public event Action? Changed;
 
     public AudioService()
     {
-        Core.Initialize();
-        _vlc = new LibVLC("--no-video", "--quiet");
-        _player = new MediaPlayer(_vlc);
-        _player.TimeChanged += (_, _) => Changed?.Invoke();
-        _player.LengthChanged += (_, _) => Changed?.Invoke();
-        _player.Playing += (_, _) => Changed?.Invoke();
-        _player.Paused += (_, _) => Changed?.Invoke();
-        _player.Stopped += (_, _) => Changed?.Invoke();
-        _player.EndReached += (_, _) => Changed?.Invoke();
+        try
+        {
+            Core.Initialize();
+            _vlc = new LibVLC("--no-video", "--quiet");
+            _player = new MediaPlayer(_vlc);
+            _player.TimeChanged += (_, _) => Changed?.Invoke();
+            _player.LengthChanged += (_, _) => Changed?.Invoke();
+            _player.Playing += (_, _) => Changed?.Invoke();
+            _player.Paused += (_, _) => Changed?.Invoke();
+            _player.Stopped += (_, _) => Changed?.Invoke();
+            _player.EndReached += (_, _) => Changed?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            // No libvlc (common on a bare Linux install): keep the app fully usable for
+            // browsing/copying; only playback is disabled.
+            UnavailableReason = ex.Message;
+            try { _vlc?.Dispose(); } catch { }
+            _vlc = null;
+            _player = null;
+        }
     }
 
-    public bool IsPlaying => _player.IsPlaying;
-    public long PositionMs => _player.Time < 0 ? 0 : _player.Time;
-    public long DurationMs => _player.Length < 0 ? 0 : _player.Length;
-    public int Volume { get => _player.Volume < 0 ? 100 : _player.Volume; set => _player.Volume = Math.Clamp(value, 0, 100); }
+    public bool IsPlaying => _player?.IsPlaying ?? false;
+    public long PositionMs => _player is null || _player.Time < 0 ? 0 : _player.Time;
+    public long DurationMs => _player is null || _player.Length < 0 ? 0 : _player.Length;
+    public int Volume { get => _player is null || _player.Volume < 0 ? 100 : _player.Volume; set { if (_player is not null) _player.Volume = Math.Clamp(value, 0, 100); } }
 
     public void Play(string path)
     {
-        using var media = new Media(_vlc, path, FromType.FromPath);
+        if (_player is null) return;
+        using var media = new Media(_vlc!, path, FromType.FromPath);
         _player.Play(media);
         _hasMedia = true;
     }
@@ -44,12 +64,12 @@ public sealed class AudioService : IDisposable
     /// <summary>Toggle play/pause on the current media.</summary>
     public void TogglePause()
     {
-        if (!_hasMedia) return;
+        if (_player is null || !_hasMedia) return;
         _player.SetPause(_player.IsPlaying);   // pause if playing, resume if paused
     }
 
-    public void Stop() => _player.Stop();
-    public void SeekFraction(double f) { if (_hasMedia) _player.Position = (float)Math.Clamp(f, 0, 1); }
+    public void Stop() => _player?.Stop();
+    public void SeekFraction(double f) { if (_player is not null && _hasMedia) _player.Position = (float)Math.Clamp(f, 0, 1); }
 
     // ---- equalizer (VLC's built-in 10-band graphic EQ) ----
     public const int BandCount = 10;
@@ -59,6 +79,7 @@ public sealed class AudioService : IDisposable
     /// <summary>Apply (or clear) the 10-band EQ. <paramref name="gainsDb"/> ±20 dB per band.</summary>
     public void SetEq(bool enabled, float[]? gainsDb)
     {
+        if (_player is null) return;
         var eq = new Equalizer();   // all bands 0 = flat
         if (enabled && gainsDb is not null)
             for (uint b = 0; b < BandCount && b < gainsDb.Length; b++)
@@ -68,8 +89,8 @@ public sealed class AudioService : IDisposable
 
     public void Dispose()
     {
-        try { _player.Stop(); } catch { }
-        _player.Dispose();
-        _vlc.Dispose();
+        try { _player?.Stop(); } catch { }
+        _player?.Dispose();
+        _vlc?.Dispose();
     }
 }
