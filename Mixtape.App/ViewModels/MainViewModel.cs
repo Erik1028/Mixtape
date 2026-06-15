@@ -14,6 +14,7 @@ public sealed class SidebarItem
     public string Title { get; init; } = "";
     public string Glyph { get; init; } = "";
     public SidebarKind Kind { get; init; }
+    public bool IsHeader { get; init; }   // section label (DEVICE / LIBRARY / …) — not selectable
     internal Playlist? Playlist { get; init; }
 }
 
@@ -84,6 +85,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (!ReferenceEquals(_selectedSidebar, value)) { _selectedSidebar = value; OnPropertyChanged(); OnSelect(value); } }
     }
 
+    // Header action buttons adapt to the view: iPod views show Add music / Delete; Local Music shows Add folder.
+    private bool _isIpodView;
+    public bool IsIpodView { get => _isIpodView; set => Set(ref _isIpodView, value); }
+    private bool _isLocalView = true;
+    public bool IsLocalView { get => _isLocalView; set => Set(ref _isLocalView, value); }
+    public bool CanWrite => _device?.Profile.CanWrite ?? false;
+
     // ---- device detection (mirrors the WinForms RefreshDevices/LoadDevice flow) ----
     public void Refresh()
     {
@@ -104,25 +112,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
                           ?? SidebarItems.FirstOrDefault(s => s.Kind == SidebarKind.LocalMusic);
     }
 
+    private static SidebarItem Header(string t) => new() { IsHeader = true, Title = t };
+
     private void BuildSidebar()
     {
         SidebarItems.Clear();
         if (_device is not null)
+        {
+            SidebarItems.Add(Header("DEVICE"));
             SidebarItems.Add(new SidebarItem { Kind = SidebarKind.Device, Glyph = "◉", Title = _device.Profile.ModelName ?? _device.Profile.ModelNumber ?? "iPod" });
+        }
         if (_lib is not null)
         {
+            SidebarItems.Add(Header("LIBRARY"));
             SidebarItems.Add(new SidebarItem { Kind = SidebarKind.AllSongs, Glyph = "♪", Title = "All songs" });
             if (_lib.View.Tracks.Any(t => MediaType.IsVideo(t.MediaType)))
                 SidebarItems.Add(new SidebarItem { Kind = SidebarKind.Videos, Glyph = "▶", Title = "Videos" });
 
             var seen = new HashSet<ulong>();
+            var playlists = new List<SidebarItem>();
             foreach (var pl in _lib.View.Playlists)
             {
                 if (pl.IsMaster || pl.IsPodcast) continue;
                 if (pl.PersistentId != 0 && !seen.Add(pl.PersistentId)) continue;
-                SidebarItems.Add(new SidebarItem { Kind = SidebarKind.Playlist, Glyph = "☰", Title = string.IsNullOrEmpty(pl.Name) ? "Untitled playlist" : pl.Name, Playlist = pl });
+                playlists.Add(new SidebarItem { Kind = SidebarKind.Playlist, Glyph = "☰", Title = string.IsNullOrEmpty(pl.Name) ? "Untitled playlist" : pl.Name, Playlist = pl });
+            }
+            if (playlists.Count > 0)
+            {
+                SidebarItems.Add(Header("PLAYLISTS"));
+                foreach (var p in playlists) SidebarItems.Add(p);
             }
         }
+        SidebarItems.Add(Header("ON THIS PC"));
         SidebarItems.Add(new SidebarItem { Kind = SidebarKind.LocalMusic, Glyph = "▣", Title = "Local Music" });
     }
 
@@ -131,6 +152,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (s is null) return;
         if (_searchText.Length > 0) { _searchText = ""; OnPropertyChanged(nameof(SearchText)); } // clear search on navigation
+        IsLocalView = s.Kind == SidebarKind.LocalMusic;
+        IsIpodView = _lib is not null && s.Kind is SidebarKind.AllSongs or SidebarKind.Videos or SidebarKind.Playlist or SidebarKind.Device;
+        OnPropertyChanged(nameof(CanWrite));
         switch (s.Kind)
         {
             case SidebarKind.LocalMusic: ShowLocalMusic(); break;
@@ -143,6 +167,74 @@ public sealed class MainViewModel : INotifyPropertyChanged
             case SidebarKind.AllSongs when _lib is not null:
                 ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)), "LIBRARY", "All songs", "song"); break;
         }
+    }
+
+    // ---- copy to / delete from the iPod (writes go through Mixtape.Core's SafeDbWriter: backup + verify + rollback) ----
+    private static readonly string[] NativeAudioExt = { ".mp3", ".m4a", ".aac", ".wav", ".aif", ".aiff", ".m4b" };
+
+    public void AddMusicToIpod(string[] files)
+    {
+        if (_lib is null || _device is null || !_device.Profile.CanWrite || files.Length == 0) return;
+        try
+        {
+            var existing = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var t in _lib.View.Tracks)
+                if (MediaType.IsAudio(t.MediaType)) existing.Add(AudioKey(t.Title, t.Artist, t.Album));
+
+            int added = 0, dup = 0, needConv = 0, failed = 0;
+            foreach (var f in files)
+            {
+                try
+                {
+                    if (!NativeAudioExt.Contains(Path.GetExtension(f).ToLowerInvariant())) { needConv++; continue; }
+                    var nt = MetadataExtractor.Read(f);
+                    string key = AudioKey(nt.Title, nt.Artist, nt.Album);
+                    if (existing.Contains(key)) { dup++; continue; }   // skip duplicates already on the iPod
+                    _lib.AddFile(f);
+                    existing.Add(key);
+                    added++;
+                }
+                catch { failed++; }
+            }
+            if (added > 0) _lib.Save();
+            ReloadLibrary();
+            var msg = $"Added {added} song{(added == 1 ? "" : "s")}";
+            if (dup > 0) msg += $", skipped {dup} duplicate{(dup == 1 ? "" : "s")}";
+            if (needConv > 0) msg += $", {needConv} need converting (not supported here yet)";
+            if (failed > 0) msg += $", {failed} failed";
+            Status = msg + ".";
+        }
+        catch (Exception ex) { Status = "Add failed: " + ex.Message; }
+    }
+
+    public void DeleteSelected(IReadOnlyList<TrackRow> rows)
+    {
+        if (_lib is null || _device is null || !_device.Profile.CanWrite || rows.Count == 0) return;
+        try
+        {
+            int n = 0;
+            foreach (var r in rows) if (r.Source is { } t) { _lib.DeleteTrack(t.UniqueId, deleteFile: true); n++; }
+            if (n > 0) _lib.Save();
+            ReloadLibrary();
+            Status = $"Deleted {n} song{(n == 1 ? "" : "s")}.";
+        }
+        catch (Exception ex) { Status = "Delete failed: " + ex.Message; }
+    }
+
+    private void ReloadLibrary()
+    {
+        if (_device is null) return;
+        try { _lib = IpodLibrary.Load(_device); } catch { }
+        BuildSidebar();
+        SelectedSidebar = SidebarItems.FirstOrDefault(s => s.Kind == SidebarKind.AllSongs) ?? SidebarItems.FirstOrDefault();
+    }
+
+    private static string AudioKey(string? title, string? artist, string? album)
+        => Norm(title) + "" + Norm(artist) + "" + Norm(album);
+    private static string Norm(string? s)
+    {
+        s = (s ?? "").Trim().ToLowerInvariant();
+        return string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
     private void ShowPlaylist(Playlist pl)

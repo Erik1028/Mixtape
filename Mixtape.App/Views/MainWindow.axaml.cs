@@ -42,9 +42,44 @@ public partial class MainWindow : Window
 
     private void OnRefresh(object? sender, RoutedEventArgs e) => _vm.Refresh();
 
+    private async void OnAddMusic(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select music to copy onto the iPod",
+            AllowMultiple = true,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Audio") { Patterns = new[] { "*.mp3", "*.m4a", "*.aac", "*.wav", "*.aif", "*.aiff", "*.m4b" } },
+            },
+        });
+        if (files.Count == 0) return;
+        var paths = files.Select(f => f.TryGetLocalPath())
+                         .Where(p => !string.IsNullOrEmpty(p)).Cast<string>().ToArray();
+        if (paths.Length > 0) _vm.AddMusicToIpod(paths);
+    }
+
+    private void OnDelete(object? sender, RoutedEventArgs e)
+    {
+        var rows = SongGrid.SelectedItems.OfType<TrackRow>().ToList();
+        if (rows.Count > 0) _vm.DeleteSelected(rows);
+    }
+
     private void OnSongDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
         => _vm.PlayRow(SongGrid.SelectedItem as TrackRow);
 
     private void OnPlayPause(object? sender, RoutedEventArgs e) => _vm.PlayPause();
+
+    // ---- custom window chrome ----
+    private void OnMinimize(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void OnMaximize(object? sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    private void OnClose(object? sender, RoutedEventArgs e) => Close();
+    private void OnCaptionPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
+    }
+    private void OnCaptionDoubleTapped(object? sender, TappedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 }
 

@@ -1,4 +1,5 @@
 using Avalonia;
+using iPodCommander;
 
 namespace Mixtape.App;
 
@@ -8,9 +9,52 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        // Headless audio engine self-test (no GUI): `Mixtape.App --audiotest <file>`.
+        // Headless self-tests (no GUI).
         if (args.Length >= 2 && args[0] == "--audiotest") { AudioSelfTest(args[1]); return; }
+        if (args.Length >= 2 && args[0] == "--makesandbox") { MakeSandbox(args[1]); return; }
+        if (args.Length >= 3 && args[0] == "--addtest") { AddSelfTest(args[1], args[2]); return; }
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
+
+    // Build a throwaway sandbox iPod (synthetic DB) so the copy-to-iPod path can be tested without a real device.
+    private static void MakeSandbox(string dir)
+    {
+        var control = Path.Combine(dir, "iPod_Control");
+        Directory.CreateDirectory(Path.Combine(control, "iTunes"));
+        Directory.CreateDirectory(Path.Combine(control, "Device"));
+        for (int i = 0; i < 50; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
+        File.WriteAllBytes(Path.Combine(control, "iTunes", "iTunesDB"), SyntheticDb.Build());
+        File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
+        File.WriteAllText("sandbox.txt", "created sandbox iPod at " + dir);
+    }
+
+    // Verify copy-to-iPod end-to-end against a sandbox: load, add a file, save, reload, confirm track count grew.
+    private static void AddSelfTest(string root, string file)
+    {
+        var log = new System.Text.StringBuilder();
+        try
+        {
+            var dev = DeviceDetector.Build(root);
+            if (dev is null) { log.AppendLine("no iPod at " + root); }
+            else
+            {
+                log.AppendLine($"writable: {dev.Profile.CanWrite}");
+                var lib = IpodLibrary.Load(dev);
+                int before = lib.View.Tracks.Count;
+                string title = lib.AddFile(file);
+                lib.Save();
+                var reloaded = IpodLibrary.Load(dev);
+                int after = reloaded.View.Tracks.Count;
+                bool present = reloaded.View.Tracks.Any(t => t.DisplayTitle == title);
+                log.AppendLine($"added title : {title}");
+                log.AppendLine($"before count: {before}");
+                log.AppendLine($"after count : {after}");
+                log.AppendLine($"present after reload: {present}");
+                log.AppendLine($"RESULT: {(after == before + 1 && present ? "OK" : "FAIL")}");
+            }
+        }
+        catch (Exception ex) { log.AppendLine("EXCEPTION: " + ex); }
+        File.WriteAllText("addtest.txt", log.ToString());
     }
 
     private static void AudioSelfTest(string file)

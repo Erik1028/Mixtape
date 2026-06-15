@@ -3,107 +3,184 @@
         x:Class="Mixtape.App.Views.MainWindow"
         Title="Mixtape" Width="1040" Height="660"
         MinWidth="820" MinHeight="520"
-        Background="{StaticResource WallpaperBrush}"
+        Background="#0E0E10"
         Foreground="{StaticResource TextBrush}"
         FontFamily="Inter">
 
-  <Grid ColumnDefinitions="240,*">
+  <Window.Styles>
+    <!-- caption window buttons: flat, hover tint; close hovers red -->
+    <Style Selector="Button.caption">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Width" Value="46"/>
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Foreground" Value="#DADEE2"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="CornerRadius" Value="0"/>
+    </Style>
+    <Style Selector="Button.caption:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#24FFFFFF"/>
+    </Style>
+    <Style Selector="Button.close:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#E81123"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+  </Window.Styles>
 
-    <!-- Sidebar -->
-    <Border Grid.Column="0" Background="{StaticResource SidebarBrush}">
-      <DockPanel>
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="16,16,16,10" Spacing="10">
-          <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource AccentBrush}"/>
-          <TextBlock Text="Mixtape" FontSize="18" FontWeight="SemiBold"
-                     VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"/>
-        </StackPanel>
+  <!-- Wallpaper: 58° gradient + soft accent glow, then the floating cards on top -->
+  <Grid>
+    <Grid.Background>
+      <LinearGradientBrush StartPoint="0%,0%" EndPoint="53%,85%">
+        <GradientStop Offset="0.0"  Color="#0E0E10"/>
+        <GradientStop Offset="0.45" Color="#0D2621"/>
+        <GradientStop Offset="1.0"  Color="#0B0C0D"/>
+      </LinearGradientBrush>
+    </Grid.Background>
 
-        <ListBox ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebar, Mode=TwoWay}"
-                 Background="Transparent" BorderThickness="0" Padding="6" Margin="0,4,0,0">
-          <ListBox.ItemTemplate>
-            <DataTemplate>
-              <StackPanel Orientation="Horizontal" Spacing="11" Margin="4,2">
-                <TextBlock Text="{Binding Glyph}" FontSize="13" Width="16"
-                           Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
-                <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextBrush}"
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-              </StackPanel>
-            </DataTemplate>
-          </ListBox.ItemTemplate>
-        </ListBox>
-      </DockPanel>
-    </Border>
+    <!-- top-left teal glow -->
+    <Ellipse Width="780" Height="780" HorizontalAlignment="Left" VerticalAlignment="Top"
+             Margin="-220,-300,0,0" IsHitTestVisible="False">
+      <Ellipse.Fill>
+        <RadialGradientBrush>
+          <GradientStop Offset="0" Color="#3300C8AA"/>
+          <GradientStop Offset="1" Color="#0000C8AA"/>
+        </RadialGradientBrush>
+      </Ellipse.Fill>
+    </Ellipse>
 
-    <!-- Content -->
-    <Border Grid.Column="1" Background="{StaticResource AppBrush}">
-      <DockPanel>
+    <!-- two floating cards: 14px margins/gap, 16px radius, soft shadow -->
+    <Grid Margin="14,14,14,14" ColumnDefinitions="236,14,*">
 
-        <!-- header -->
-        <Grid DockPanel.Dock="Top" Margin="24,18,24,10" ColumnDefinitions="*,Auto">
-          <StackPanel Grid.Column="0" Spacing="1">
-            <TextBlock Text="{Binding HeaderKicker}" Foreground="{StaticResource AccentBrush}"
-                       FontSize="11" FontWeight="Bold"/>
-            <TextBlock Text="{Binding HeaderTitle}" Foreground="{StaticResource TextBrush}"
-                       FontSize="26" FontWeight="Bold"/>
-            <TextBlock Text="{Binding HeaderSubtitle}" Foreground="{StaticResource SubtleBrush}" FontSize="12"/>
+      <!-- ===== Sidebar card ===== -->
+      <Border Grid.Column="0" CornerRadius="16" Background="{StaticResource SidebarBrush}"
+              BoxShadow="0 4 18 0 #40000000" ClipToBounds="True">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="16,16,16,10" Spacing="10">
+            <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource AccentBrush}"/>
+            <TextBlock Text="Mixtape" FontSize="18" FontWeight="SemiBold"
+                       VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"/>
           </StackPanel>
-          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-            <Button Content="Add folder" Click="OnAddFolder"/>
-            <Button Content="Refresh" Click="OnRefresh"/>
-          </StackPanel>
-        </Grid>
 
-        <!-- search -->
-        <TextBox DockPanel.Dock="Top" Margin="24,0,24,8"
-                 Watermark="Search songs, artists, albums…"
-                 Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+          <ListBox ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebar, Mode=TwoWay}"
+                   Background="Transparent" BorderThickness="0" Padding="8,4">
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem">
+                <Setter Property="Padding" Value="8,3"/>
+                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="Margin" Value="0,1"/>
+                <Setter Property="IsEnabled" Value="{Binding !IsHeader}"/>
+              </Style>
+              <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+              </Style>
+            </ListBox.Styles>
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Panel>
+                  <!-- section header row -->
+                  <TextBlock Text="{Binding Title}" IsVisible="{Binding IsHeader}"
+                             Foreground="{StaticResource SubtleBrush}" FontSize="10.5" FontWeight="Bold"
+                             Margin="2,10,0,2"/>
+                  <!-- normal row -->
+                  <StackPanel Orientation="Horizontal" Spacing="11" IsVisible="{Binding !IsHeader}">
+                    <TextBlock Text="{Binding Glyph}" FontSize="13" Width="16"
+                               Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextBrush}"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
+                </Panel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
 
-        <!-- status bar -->
-        <Border DockPanel.Dock="Bottom" Height="28" Background="{StaticResource SidebarBrush}">
-          <TextBlock Text="{Binding Status}" Foreground="{StaticResource SubtleBrush}"
-                     VerticalAlignment="Center" Margin="22,0,0,0" FontSize="12"/>
-        </Border>
+      <!-- ===== Content card ===== -->
+      <Border Grid.Column="2" CornerRadius="16" Background="{StaticResource AppBrush}"
+              BoxShadow="0 4 18 0 #40000000" ClipToBounds="True">
+        <DockPanel>
 
-        <!-- now playing -->
-        <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasNowPlaying}" Height="64" Background="{StaticResource PanelBrush}">
-          <Grid Margin="16,0" ColumnDefinitions="220,Auto,*,Auto,Auto">
-            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-              <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-              <TextBlock Text="{Binding NowSub}" Foreground="{StaticResource SubtleBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+          <!-- header: artwork tile + kicker/title/summary + action buttons -->
+          <Grid DockPanel.Dock="Top" Margin="22,20,22,10" ColumnDefinitions="Auto,*,Auto">
+            <Border Grid.Column="0" Width="76" Height="76" CornerRadius="12" Margin="0,0,16,0">
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                  <GradientStop Offset="0" Color="#2E5C8A"/>
+                  <GradientStop Offset="1" Color="#1B3550"/>
+                </LinearGradientBrush>
+              </Border.Background>
+              <TextBlock Text="♪" FontSize="30" Foreground="#80FFFFFF"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+              <TextBlock Text="{Binding HeaderKicker}" Foreground="{StaticResource AccentBrush}" FontSize="11" FontWeight="Bold"/>
+              <TextBlock Text="{Binding HeaderTitle}" Foreground="{StaticResource TextBrush}" FontSize="26" FontWeight="Bold"/>
+              <TextBlock Text="{Binding HeaderSubtitle}" Foreground="{StaticResource SubtleBrush}" FontSize="12"/>
             </StackPanel>
-            <Button Grid.Column="1" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
-                    Width="42" Height="42" Margin="14,0" FontSize="16"
-                    VerticalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
-            <Grid Grid.Column="2" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
-              <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" TextAlignment="Right"/>
-              <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PositionFraction, Mode=TwoWay}" Margin="8,0"/>
-              <TextBlock Grid.Column="2" Text="{Binding DurText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-            </Grid>
-            <ToggleButton Grid.Column="3" Content="EQ" IsChecked="{Binding EqOn, Mode=TwoWay}" Margin="14,0,10,0" VerticalAlignment="Center"/>
-            <Slider Grid.Column="4" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="92" VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+              <Button Content="+ Add music" Click="OnAddMusic" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
+              <Button Content="Delete" Click="OnDelete" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
+              <Button Content="+ Add folder" Click="OnAddFolder" IsVisible="{Binding IsLocalView}"/>
+              <Button Content="Refresh" Click="OnRefresh"/>
+            </StackPanel>
           </Grid>
-        </Border>
 
-        <!-- song table -->
-        <DataGrid x:Name="SongGrid" ItemsSource="{Binding Tracks}" Margin="16,2,12,8"
-                  DoubleTapped="OnSongDoubleTapped"
-                  Background="Transparent" Foreground="{StaticResource TextBrush}"
-                  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource HairlineBrush}"
-                  HeadersVisibility="Column" IsReadOnly="True" AutoGenerateColumns="False"
-                  CanUserResizeColumns="False" CanUserReorderColumns="False"
-                  CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
-          <DataGrid.Columns>
-            <DataGridTextColumn Header="SONG"   Binding="{Binding Title}"  Width="2*"/>
-            <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*"/>
-            <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*"/>
-            <DataGridTextColumn Header="RATING" Binding="{Binding Stars}"  Width="92"/>
-            <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="72"/>
-            <DataGridTextColumn Header="ADDED"  Binding="{Binding Added}"  Width="104"/>
-            <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74"/>
-          </DataGrid.Columns>
-        </DataGrid>
+          <!-- search -->
+          <TextBox DockPanel.Dock="Top" Margin="22,0,22,8"
+                   Watermark="Search songs, artists, albums…"
+                   Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
-      </DockPanel>
-    </Border>
+          <!-- status bar -->
+          <Border DockPanel.Dock="Bottom" Height="26">
+            <TextBlock Text="{Binding Status}" Foreground="{StaticResource SubtleBrush}"
+                       VerticalAlignment="Center" Margin="22,0,0,0" FontSize="12"/>
+          </Border>
+
+          <!-- now playing -->
+          <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasNowPlaying}" Height="64"
+                  Background="{StaticResource PanelBrush}" CornerRadius="10" Margin="10,0,10,8">
+            <Grid Margin="14,0" ColumnDefinitions="220,Auto,*,Auto,Auto">
+              <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding NowSub}" Foreground="{StaticResource SubtleBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+              <Button Grid.Column="1" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
+                      Width="42" Height="42" Margin="14,0" FontSize="16"
+                      VerticalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+              <Grid Grid.Column="2" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
+                <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" TextAlignment="Right"/>
+                <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PositionFraction, Mode=TwoWay}" Margin="8,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding DurText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+              </Grid>
+              <ToggleButton Grid.Column="3" Content="EQ" IsChecked="{Binding EqOn, Mode=TwoWay}" Margin="14,0,10,0" VerticalAlignment="Center"/>
+              <Slider Grid.Column="4" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="92" VerticalAlignment="Center"/>
+            </Grid>
+          </Border>
+
+          <!-- song table -->
+          <DataGrid x:Name="SongGrid" ItemsSource="{Binding Tracks}" Margin="14,2,10,4"
+                    DoubleTapped="OnSongDoubleTapped"
+                    Background="Transparent" Foreground="{StaticResource TextBrush}"
+                    GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource HairlineBrush}"
+                    HeadersVisibility="Column" IsReadOnly="True" AutoGenerateColumns="False"
+                    CanUserResizeColumns="False" CanUserReorderColumns="False"
+                    CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="SONG"   Binding="{Binding Title}"  Width="2*"/>
+              <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*"/>
+              <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*"/>
+              <DataGridTextColumn Header="RATING" Binding="{Binding Stars}"  Width="92"/>
+              <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="72"/>
+              <DataGridTextColumn Header="ADDED"  Binding="{Binding Added}"  Width="104"/>
+              <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74"/>
+            </DataGrid.Columns>
+          </DataGrid>
+
+        </DockPanel>
+      </Border>
+    </Grid>
   </Grid>
 </Window>

@@ -6,6 +6,10 @@ portable/
 render-sandbox/
 publish/
 publish-*/
+*.tar.gz
+sandbox.txt
+addtest.txt
+audiotest.txt
 
 # ---- Dev sandboxes / scratch ----
 _design/
