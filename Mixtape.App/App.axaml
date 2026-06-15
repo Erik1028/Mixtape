@@ -1,0 +1,30 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Mixtape.App.App"
+             RequestedThemeVariant="Dark">
+
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
+  </Application.Styles>
+
+  <Application.Resources>
+    <!-- Match the WinForms app's "Graphite + Teal" palette. -->
+    <Color x:Key="SystemAccentColor">#00C8AA</Color>
+    <Color x:Key="SystemAccentColorDark1">#00B49A</Color>
+    <Color x:Key="SystemAccentColorDark2">#009E88</Color>
+    <Color x:Key="SystemAccentColorDark3">#008876</Color>
+    <Color x:Key="SystemAccentColorLight1">#33D3BB</Color>
+    <Color x:Key="SystemAccentColorLight2">#5BDDCB</Color>
+    <Color x:Key="SystemAccentColorLight3">#84E7DB</Color>
+
+    <SolidColorBrush x:Key="WallpaperBrush" Color="#0E0F10"/>
+    <SolidColorBrush x:Key="SidebarBrush" Color="#16171A"/>
+    <SolidColorBrush x:Key="AppBrush" Color="#1D1E22"/>
+    <SolidColorBrush x:Key="PanelBrush" Color="#282B30"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="#00C8AA"/>
+    <SolidColorBrush x:Key="TextBrush" Color="#F2F2F3"/>
+    <SolidColorBrush x:Key="SubtleBrush" Color="#A8ACB0"/>
+    <SolidColorBrush x:Key="HairlineBrush" Color="#2C2E33"/>
+  </Application.Resources>
+</Application>

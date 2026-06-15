@@ -27,6 +27,10 @@
   <ItemGroup>
     <ProjectReference Include="Mixtape.Core\Mixtape.Core.csproj" />
     <Compile Remove="Mixtape.Core\**\*.cs" />
+    <!-- The cross-platform Avalonia front-end is a separate project in a subfolder; keep it out
+         of this Windows app's compile glob (it has its own csproj). -->
+    <Compile Remove="Mixtape.App\**\*.cs" />
+    <None Remove="Mixtape.App\**" />
   </ItemGroup>
 
   <!-- Enabling UseWPF changes the implicit-usings profile and drops System.IO; the codebase relies on it
