@@ -8,25 +8,38 @@
         FontFamily="Inter">
 
   <Window.Styles>
-    <!-- caption window buttons: flat, hover tint; close hovers red -->
-    <Style Selector="Button.caption">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="Width" Value="46"/>
-      <Setter Property="Height" Value="36"/>
+    <!-- circular accent play button (now-playing bar) -->
+    <Style Selector="Button.play">
+      <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="Foreground" Value="#0C1012"/>
+      <Setter Property="CornerRadius" Value="21"/>
+      <Setter Property="Width" Value="42"/>
+      <Setter Property="Height" Value="42"/>
+      <Setter Property="FontSize" Value="15"/>
       <Setter Property="Padding" Value="0"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
-      <Setter Property="Foreground" Value="#DADEE2"/>
-      <Setter Property="FontSize" Value="12"/>
-      <Setter Property="CornerRadius" Value="0"/>
     </Style>
-    <Style Selector="Button.caption:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#24FFFFFF"/>
+    <Style Selector="Button.play:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#33D3BB"/>
     </Style>
-    <Style Selector="Button.close:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#E81123"/>
-      <Setter Property="Foreground" Value="White"/>
+
+    <!-- track table: roomy rows, subtle small-caps headers, clean ellipsis -->
+    <Style Selector="DataGridRow">
+      <Setter Property="MinHeight" Value="50"/>
+    </Style>
+    <Style Selector="DataGridColumnHeader">
+      <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="SeparatorBrush" Value="Transparent"/>
+    </Style>
+    <Style Selector="DataGridCell">
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
+    <Style Selector="DataGridCell TextBlock">
+      <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     </Style>
   </Window.Styles>
 
@@ -147,9 +160,8 @@
                 <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                 <TextBlock Text="{Binding NowSub}" Foreground="{StaticResource SubtleBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
               </StackPanel>
-              <Button Grid.Column="1" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
-                      Width="42" Height="42" Margin="14,0" FontSize="16"
-                      VerticalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+              <Button Grid.Column="1" Classes="play" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
+                      Margin="14,0" VerticalAlignment="Center"/>
               <Grid Grid.Column="2" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
                 <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" TextAlignment="Right"/>
                 <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PositionFraction, Mode=TwoWay}" Margin="8,0"/>
@@ -169,11 +181,18 @@
                     CanUserResizeColumns="False" CanUserReorderColumns="False"
                     CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
             <DataGrid.Columns>
-              <DataGridTextColumn Header="SONG"   Binding="{Binding Title}"  Width="2*"/>
+              <DataGridTemplateColumn Header="SONG" Width="2*">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Margin="12,0,4,0" TextTrimming="CharacterEllipsis"/>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
               <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*"/>
               <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*"/>
               <DataGridTextColumn Header="RATING" Binding="{Binding Stars}"  Width="92"/>
-              <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="72"/>
+              <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="88"/>
               <DataGridTextColumn Header="ADDED"  Binding="{Binding Added}"  Width="104"/>
               <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74"/>
             </DataGrid.Columns>
