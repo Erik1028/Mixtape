@@ -97,6 +97,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsLocalView { get => _isLocalView; set => Set(ref _isLocalView, value); }
     public bool CanWrite => _device?.Profile.CanWrite ?? false;
 
+    /// <summary>Folder the sidebar "Open folder" button reveals: the iPod mount root, else the first Local Music folder.</summary>
+    public string? OpenableFolder => IsLocalView ? _localFolders.FirstOrDefault() : _device?.MountRoot;
+
     // ---- device detection (mirrors the WinForms RefreshDevices/LoadDevice flow) ----
     public void Refresh()
     {

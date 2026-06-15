@@ -5,9 +5,40 @@
         MinWidth="820" MinHeight="520"
         Background="#0E0E10"
         Foreground="{StaticResource TextBrush}"
-        FontFamily="Inter">
+        FontFamily="Inter"
+        SystemDecorations="BorderOnly">
 
   <Window.Styles>
+    <!-- custom window caption buttons (we draw our own title bar) -->
+    <Style Selector="Button.winbtn">
+      <Setter Property="Width" Value="46"/><Setter Property="Height" Value="32"/>
+      <Setter Property="Padding" Value="0"/><Setter Property="CornerRadius" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.winbtn:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#22FFFFFF"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+    </Style>
+    <Style Selector="Button.winbtn.close:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#E81123"/><Setter Property="Foreground" Value="White"/>
+    </Style>
+
+    <!-- ghost icon buttons in the sidebar header (play / settings) -->
+    <Style Selector="Button.ghost">
+      <Setter Property="Width" Value="30"/><Setter Property="Height" Value="28"/>
+      <Setter Property="Padding" Value="0"/><Setter Property="CornerRadius" Value="7"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.ghost:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#22FFFFFF"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+    </Style>
+
     <!-- circular accent play button (now-playing bar) -->
     <Style Selector="Button.play">
       <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
@@ -80,23 +111,42 @@
       </Ellipse.Fill>
     </Ellipse>
 
+    <DockPanel>
+      <!-- custom title bar: we extend the client area over the OS caption and draw our own
+           window buttons (matches the Windows build's integrated top bar) -->
+      <Grid x:Name="TitleBar" DockPanel.Dock="Top" Height="34" Background="Transparent"
+            PointerPressed="OnTitleBarPressed">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button Classes="winbtn" Content="—" Click="OnMinimize"/>
+          <Button x:Name="MaxButton" Classes="winbtn" Content="□" Click="OnMaxRestore"/>
+          <Button Classes="winbtn close" Content="✕" Click="OnClose"/>
+        </StackPanel>
+      </Grid>
+
     <!-- two floating cards: 14px margins/gap, 16px radius, soft shadow -->
-    <Grid Margin="14,14,14,14" ColumnDefinitions="236,14,*">
+    <Grid Margin="14,0,14,14" ColumnDefinitions="236,14,*">
 
       <!-- ===== Sidebar card ===== -->
       <Border Grid.Column="0" CornerRadius="16" Background="{StaticResource SidebarBrush}"
               BoxShadow="0 4 18 0 #40000000" ClipToBounds="True">
         <DockPanel>
-          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="16,16,16,10" Spacing="10">
-            <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource AccentBrush}"/>
-            <TextBlock Text="Mixtape" FontSize="18" FontWeight="SemiBold"
+          <Grid DockPanel.Dock="Top" Margin="16,14,12,10" ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+            <Image Grid.Column="0" Source="avares://Mixtape.App/Assets/icon.png" Width="30" Height="30" Margin="0,0,10,0"/>
+            <TextBlock Grid.Column="1" Text="Mixtape" FontSize="18" FontWeight="SemiBold"
                        VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"/>
-          </StackPanel>
+            <Button Grid.Column="3" Classes="ghost" Content="▶" FontSize="10" Click="OnPlayFile"
+                    ToolTip.Tip="Play an audio file from your PC"/>
+            <Button Grid.Column="4" Classes="ghost" Content="⚙" FontSize="14" Click="OnSettings"
+                    ToolTip.Tip="Settings"/>
+          </Grid>
 
-          <Button DockPanel.Dock="Bottom" Content="⚙  Settings" Click="OnSettings"
-                  Background="Transparent" BorderThickness="0" HorizontalAlignment="Stretch"
-                  HorizontalContentAlignment="Left" Margin="10,0,10,10" Padding="8,6"
-                  Foreground="{StaticResource SubtleBrush}"/>
+          <!-- footer: Refresh + Open folder, pinned at the bottom (matches the Windows build) -->
+          <Grid DockPanel.Dock="Bottom" Margin="10,6,10,10" ColumnDefinitions="*,8,*">
+            <Button Grid.Column="0" Content="Refresh" Click="OnRefresh"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="Open folder" Click="OnOpenFolder"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+          </Grid>
 
           <ListBox ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebar, Mode=TwoWay}"
                    Background="Transparent" BorderThickness="0" Padding="8,4">
@@ -163,7 +213,6 @@
               <Button Content="+ Add music" Click="OnAddMusic" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
               <Button Content="Delete" Click="OnDelete" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
               <Button Content="+ Add folder" Click="OnAddFolder" IsVisible="{Binding IsLocalView}"/>
-              <Button Content="Refresh" Click="OnRefresh"/>
             </StackPanel>
           </Grid>
 
@@ -252,5 +301,6 @@
         </DockPanel>
       </Border>
     </Grid>
+    </DockPanel>
   </Grid>
 </Window>

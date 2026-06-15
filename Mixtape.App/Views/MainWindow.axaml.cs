@@ -54,6 +54,48 @@ public partial class MainWindow : Window
 
     private void OnRefresh(object? sender, RoutedEventArgs e) => _vm.Refresh();
 
+    // ---- custom title bar (we draw our own caption + window buttons) ----
+    private void OnTitleBarPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (e.ClickCount == 2) { ToggleMaximize(); return; }
+        BeginMoveDrag(e);
+    }
+
+    private void OnMinimize(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void OnMaxRestore(object? sender, RoutedEventArgs e) => ToggleMaximize();
+    private void OnClose(object? sender, RoutedEventArgs e) => Close();
+    private void ToggleMaximize() =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == WindowStateProperty && MaxButton is not null)
+            MaxButton.Content = WindowState == WindowState.Maximized ? "❐" : "□";
+    }
+
+    // The ▶ in the sidebar header: play the selected (or first) track of the current view.
+    private void OnPlayFile(object? sender, RoutedEventArgs e)
+    {
+        var row = (SongGrid.SelectedItem as TrackRow) ?? _vm.Tracks.FirstOrDefault();
+        if (row is not null) _vm.PlayRow(row);
+    }
+
+    // The sidebar "Open folder" button: reveal the iPod / Local Music folder in the OS file manager.
+    private void OnOpenFolder(object? sender, RoutedEventArgs e)
+    {
+        var path = _vm.OpenableFolder;
+        if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) { _vm.Status = "No folder to open."; return; }
+        try
+        {
+            if (OperatingSystem.IsWindows()) System.Diagnostics.Process.Start("explorer.exe", $"\"{path}\"");
+            else if (OperatingSystem.IsMacOS()) System.Diagnostics.Process.Start("open", path);
+            else System.Diagnostics.Process.Start("xdg-open", path);
+        }
+        catch (Exception ex) { _vm.Status = "Couldn't open folder: " + ex.Message; }
+    }
+
     private async void OnAddMusic(object? sender, RoutedEventArgs e)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
