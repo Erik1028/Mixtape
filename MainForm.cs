@@ -63,6 +63,8 @@ internal sealed class MainForm : Form, IMessageFilter
     private string _browseTitle = "", _browseKicker = "ALBUM";
     private int _browseArtGen; // cancels stale background cover loads for the album/artist grid
     private const int SidebarIconPx = 36; // render playlist icons at 2× then downscale crisply into the 18px tile
+    private DropOverlay? _dropOverlay; // "drop to add" card shown over the content while files are dragged in
+    private readonly System.Windows.Forms.Timer _dropHideTimer = new() { Interval = 130 }; // debounce hiding it between controls
 
     public MainForm(bool autoDetect = true)
     {
@@ -96,14 +98,13 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.DeleteButton.BlockedClicked += _ => ShowActionBlockedHelp();
         _header.ArtClicked += OnHeaderArtClicked;
 
-        AllowDrop = true; // drop audio/video/photo files anywhere on the window to add them
-        DragEnter += (_, e) => e.Effect = (_device is not null && e.Data?.GetDataPresent(DataFormats.FileDrop) == true) ? DragDropEffects.Copy : DragDropEffects.None;
-        DragDrop += OnDragDrop;
+        WireDragDrop(); // drop music/video/photo files (or folders) anywhere on the window to add them
 
         if (_autoDetect) Shown += (_, _) => RefreshDevices();
 
         Application.AddMessageFilter(this); // route the mouse wheel to the device page's custom scroll
         _deviceChangeTimer.Tick += (_, _) => { _deviceChangeTimer.Stop(); AutoDetectDevices(); };
+        _dropHideTimer.Tick += (_, _) => { _dropHideTimer.Stop(); SetDropActive(false); };
     }
 
     /// <summary>Route the mouse wheel to the device page's custom scroll when the pointer is over it (its
@@ -212,6 +213,16 @@ internal sealed class MainForm : Form, IMessageFilter
         root.Resize += (_, _) => LayoutShell();
         Controls.Add(root);
         LayoutShell();
+
+        // Drag-and-drop overlay floats above everything; it's its own drop target so it can cover the
+        // song grid without blocking the drop. Force its handle so AllowDrop registers before any drag.
+        _dropOverlay = new DropOverlay { Visible = false, AllowDrop = true };
+        _dropOverlay.DragOver += OnDragOverAny;
+        _dropOverlay.DragDrop += OnDragDrop;
+        _dropOverlay.DragLeave += (_, _) => ScheduleHideDrop();
+        Controls.Add(_dropOverlay);
+        _ = _dropOverlay.Handle;
+        _dropOverlay.BringToFront();
     }
 
     /// <summary>Positions the sidebar + content cards (with wallpaper gaps + rounded corners) and the
@@ -2197,9 +2208,66 @@ internal sealed class MainForm : Form, IMessageFilter
         catch { return Array.Empty<string>(); }
     }
 
+    // Enable file-drop on every surface the user might aim at, so dropping works over the song list and
+    // panels — not just the window's bare edges.
+    private void WireDragDrop()
+    {
+        foreach (var c in new Control?[] { this, _sidebar, _header, _center, _tracks, _browseView, _photoView, _deviceView, _deviceScrollPanel, _search, _nowPlaying })
+            EnableFileDrop(c);
+    }
+
+    private void EnableFileDrop(Control? c)
+    {
+        if (c is null) return;
+        c.AllowDrop = true;
+        c.DragEnter += OnDragOverAny;
+        c.DragOver += OnDragOverAny;
+        c.DragDrop += OnDragDrop;
+        c.DragLeave += (_, _) => ScheduleHideDrop();
+    }
+
+    /// <summary>Can the current view receive a file drop? Local Music always; an iPod view only when writable.</summary>
+    private bool CanAcceptDrop() => _viewKind == SidebarRowKind.LocalMusic || (_device is not null && _device.Profile.CanWrite);
+
+    private void OnDragOverAny(object? sender, DragEventArgs e)
+    {
+        bool ok = e.Data?.GetDataPresent(DataFormats.FileDrop) == true && CanAcceptDrop();
+        e.Effect = ok ? DragDropEffects.Copy : DragDropEffects.None;
+        if (ok) SetDropActive(true, _viewKind == SidebarRowKind.LocalMusic ? "Drop to add to Local Music" : "Drop to add to your iPod");
+        else SetDropActive(false);
+    }
+
+    private void SetDropActive(bool on, string? caption = null)
+    {
+        _dropHideTimer.Stop();
+        if (_dropOverlay is null) return;
+        if (!on) { if (_dropOverlay.Visible) _dropOverlay.Visible = false; return; }
+        if (caption is not null) _dropOverlay.Caption = caption;
+        if (!_dropOverlay.Visible)
+        {
+            _dropOverlay.Bounds = RectangleToClient(_center!.RectangleToScreen(_center.ClientRectangle));
+            _dropOverlay.Visible = true;
+            _dropOverlay.BringToFront();
+        }
+    }
+
+    // Moving the cursor between controls fires DragLeave then DragEnter; debounce so the overlay doesn't flicker.
+    private void ScheduleHideDrop() { _dropHideTimer.Stop(); _dropHideTimer.Start(); }
+
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
-        if (_device is null || e.Data?.GetData(DataFormats.FileDrop) is not string[] paths) return;
+        SetDropActive(false);
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0) return;
+
+        // On the Local Music view, a drop adds PC folders to the library (no iPod needed).
+        if (_viewKind == SidebarRowKind.LocalMusic) { AddDroppedToLocal(paths); return; }
+
+        if (_device is null || !_device.Profile.CanWrite)
+        {
+            SetStatus("Connect a writable iPod, or open Local Music, to add files by dropping them.");
+            return;
+        }
+
         // Expand any dropped FOLDERS into their media files recursively (incl. subfolders), then route by type.
         var media = AudioExt.Concat(VideoExt).Concat(ImageExt).ToArray();
         var files = paths.Where(File.Exists).ToList();
@@ -2216,6 +2284,37 @@ internal sealed class MainForm : Form, IMessageFilter
         if (audio.Length > 0) AddMusicFiles(audio);
         if (video.Length > 0) AddVideoFiles(video);
         if (images.Length > 0) AddPhotoFiles(images);
+    }
+
+    /// <summary>Local Music view: dropped folders (and the folders containing dropped songs) become library folders.</summary>
+    private void AddDroppedToLocal(string[] paths)
+    {
+        var toAdd = new List<string>();
+        bool sawMusic = false;
+        void Consider(string? folder)
+        {
+            if (string.IsNullOrEmpty(folder)) return;
+            if (_settings.LocalMusicFolders.Any(p => string.Equals(p, folder, StringComparison.OrdinalIgnoreCase))) return;
+            if (toAdd.Any(p => string.Equals(p, folder, StringComparison.OrdinalIgnoreCase))) return;
+            toAdd.Add(folder);
+        }
+        foreach (var p in paths)
+        {
+            if (Directory.Exists(p)) { sawMusic = true; Consider(p); }
+            else if (File.Exists(p) && IsExt(p, AudioExt)) { sawMusic = true; Consider(Path.GetDirectoryName(p)); }
+        }
+        if (toAdd.Count == 0)
+        {
+            SetStatus(sawMusic ? "That folder is already in your Local Music." : "Drop a music folder — or songs — to add them to Local Music.");
+            return;
+        }
+        _settings.LocalMusicFolders.AddRange(toAdd);
+        _settings.Save();
+        _viewKind = SidebarRowKind.LocalMusic;
+        _localStale = true;
+        BuildSidebar();
+        ShowLocalMusic();
+        SetStatus(toAdd.Count == 1 ? "Added a folder to Local Music." : $"Added {toAdd.Count} folders to Local Music.");
     }
 
     // ---- video ----
