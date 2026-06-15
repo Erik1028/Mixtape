@@ -285,10 +285,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LoadArtwork(Tracks.ToList());
     }
 
+    private Bitmap? _headerArt;
+    public Bitmap? HeaderArt { get => _headerArt; set => Set(ref _headerArt, value); }
+
     private int _artGen;
     private async void LoadArtwork(IReadOnlyList<TrackRow> rows)
     {
         int gen = ++_artGen;
+        HeaderArt = null;
+        bool headerSet = false;
         foreach (var r in rows)
         {
             if (gen != _artGen) return;                  // a newer view replaced this one
@@ -299,7 +304,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             string key = string.IsNullOrEmpty(t.Album) ? path : (Norm(t.Artist) + "|" + Norm(t.Album));
             var bmp = await ArtLoader.LoadAsync(path, key);
             if (gen != _artGen) return;
-            if (bmp is not null) r.Art = bmp;
+            if (bmp is not null)
+            {
+                r.Art = bmp;
+                if (!headerSet) { HeaderArt = bmp; headerSet = true; }   // header tile shows the first cover found
+            }
         }
     }
 

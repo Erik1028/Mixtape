@@ -69,5 +69,11 @@ public partial class MainWindow : Window
         => _vm.PlayRow(SongGrid.SelectedItem as TrackRow);
 
     private void OnPlayPause(object? sender, RoutedEventArgs e) => _vm.PlayPause();
+
+    private void OnArtTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is TrackRow r) _vm.PlayRow(r);
+        e.Handled = true;
+    }
 }
 

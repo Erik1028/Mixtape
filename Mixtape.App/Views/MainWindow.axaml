@@ -41,6 +41,22 @@
     <Style Selector="DataGridCell TextBlock">
       <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     </Style>
+
+    <!-- subtle row hover -->
+    <Style Selector="DataGridRow:pointerover">
+      <Setter Property="Background" Value="#262A2E"/>
+    </Style>
+
+    <!-- play overlay on the art thumbnail (fades in on hover) -->
+    <Style Selector="Border.playover">
+      <Setter Property="Opacity" Value="0"/>
+      <Setter Property="Transitions">
+        <Transitions><DoubleTransition Property="Opacity" Duration="0:0:0.12"/></Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Border.art:pointerover Border.playover">
+      <Setter Property="Opacity" Value="1"/>
+    </Style>
   </Window.Styles>
 
   <!-- Wallpaper: 58° gradient + soft accent glow, then the floating cards on top -->
@@ -118,15 +134,20 @@
 
           <!-- header: artwork tile + kicker/title/summary + action buttons -->
           <Grid DockPanel.Dock="Top" Margin="22,20,22,10" ColumnDefinitions="Auto,*,Auto">
-            <Border Grid.Column="0" Width="76" Height="76" CornerRadius="12" Margin="0,0,16,0">
-              <Border.Background>
-                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-                  <GradientStop Offset="0" Color="#2E5C8A"/>
-                  <GradientStop Offset="1" Color="#1B3550"/>
-                </LinearGradientBrush>
-              </Border.Background>
-              <TextBlock Text="♪" FontSize="30" Foreground="#80FFFFFF"
-                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <Border Grid.Column="0" Width="76" Height="76" CornerRadius="12" Margin="0,0,16,0" ClipToBounds="True">
+              <Panel>
+                <Border>
+                  <Border.Background>
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                      <GradientStop Offset="0" Color="#2E5C8A"/>
+                      <GradientStop Offset="1" Color="#1B3550"/>
+                    </LinearGradientBrush>
+                  </Border.Background>
+                  <TextBlock Text="♪" FontSize="30" Foreground="#80FFFFFF"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <Image Source="{Binding HeaderArt}" Stretch="UniformToFill"/>
+              </Panel>
             </Border>
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
               <TextBlock Text="{Binding HeaderKicker}" Foreground="{StaticResource AccentBrush}" FontSize="11" FontWeight="Bold"/>
@@ -184,7 +205,9 @@
               <DataGridTemplateColumn Header="" Width="56" CanUserSort="False">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
-                    <Border Width="40" Height="40" CornerRadius="6" Margin="8,5,4,5" ClipToBounds="True" VerticalAlignment="Center">
+                    <Border Classes="art" Width="40" Height="40" CornerRadius="6" Margin="8,5,4,5"
+                            ClipToBounds="True" VerticalAlignment="Center" Background="Transparent"
+                            Tapped="OnArtTapped" Cursor="Hand">
                       <Panel>
                         <Border>
                           <Border.Background>
@@ -196,6 +219,9 @@
                           <TextBlock Text="♪" FontSize="15" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <Image Source="{Binding Art}" Stretch="UniformToFill"/>
+                        <Border Classes="playover" Background="#99000000">
+                          <TextBlock Text="▶" FontSize="13" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
                       </Panel>
                     </Border>
                   </DataTemplate>
