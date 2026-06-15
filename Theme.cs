@@ -274,7 +274,7 @@ internal static class Theme
         g.ColumnHeadersHeight = 34;
         g.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
         g.ColumnHeadersDefaultCellStyle.BackColor = Bg;
-        g.ColumnHeadersDefaultCellStyle.ForeColor = Subtle;
+        g.ColumnHeadersDefaultCellStyle.ForeColor = Faint;   // recede headers into the tertiary tier (was Subtle)
         g.ColumnHeadersDefaultCellStyle.Font = UiFont(8.5f, FontStyle.Bold);
         g.ColumnHeadersDefaultCellStyle.SelectionBackColor = Bg;
         g.ColumnHeadersDefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
@@ -282,12 +282,12 @@ internal static class Theme
         // No alternating band — Apple uses hairline separators (drawn in RowPostPaint) instead.
         g.DefaultCellStyle.BackColor = Bg;
         g.DefaultCellStyle.ForeColor = TextCol;
-        g.DefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.22);
+        g.DefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.12);   // whisper-tint; the accent bar carries selection
         g.DefaultCellStyle.SelectionForeColor = Color.White;
         g.DefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
         g.AlternatingRowsDefaultCellStyle.BackColor = Bg;
         g.AlternatingRowsDefaultCellStyle.ForeColor = TextCol;
-        g.AlternatingRowsDefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.22);
+        g.AlternatingRowsDefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.12);
         g.AlternatingRowsDefaultCellStyle.SelectionForeColor = Color.White;
         g.RowTemplate.Height = 52;
         g.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
@@ -300,6 +300,7 @@ internal sealed class ThemedButton : Button
     public bool Primary { get; init; }
     public bool Pill { get; init; }
     public bool Ghost { get; init; }   // borderless icon button (no chip)
+    public bool Danger { get; init; }  // destructive (e.g. Delete): red label + tinted border, red wash on hover
     public string? Glyph { get; init; }
     private float _hoverT;  // 0→1 hover wash
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
@@ -396,6 +397,7 @@ internal sealed class ThemedButton : Button
         Color fill, text, border;
         if (disabled) { fill = Theme.RowBg; text = Theme.Faint; border = Theme.Border; }
         else if (Primary) { fill = Theme.Blend(Theme.Accent, Color.White, 0.14 * h); text = Theme.OnAccent; border = fill; }
+        else if (Danger) { fill = Theme.Blend(Theme.RowBg, Theme.ErrorCol, 0.14 * h); text = Theme.ErrorCol; border = Theme.Blend(Theme.Border, Theme.ErrorCol, 0.55); }
         else { fill = Theme.Blend(Theme.RowBg, Theme.RowHover, h); text = Theme.TextCol; border = Theme.Border; }
 
         using (var b = new SolidBrush(fill)) g.FillPath(b, path);

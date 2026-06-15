@@ -370,9 +370,11 @@ internal sealed class MainForm : Form, IMessageFilter
         // left edge when the artwork column is hidden, so dividers don't start indented in a ragged gap.
         var artCol = _tracks.Columns[0];
         int x0 = b.X + (artCol.Visible ? artCol.Width : 0);
-        using (var pen = new Pen(Theme.HairLine)) e.Graphics.DrawLine(pen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
+        // List dividers get a touch more presence than the calm device-card hairlines.
+        using (var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.07))) e.Graphics.DrawLine(pen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
+        // Selection is carried by one crisp, bright accent bar (the row fill itself only whispers a tint).
         if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
-            using (var bar = new SolidBrush(Theme.Accent)) e.Graphics.FillRectangle(bar, b.X, b.Y + 1, 3, b.Height - 2);
+            using (var bar = new SolidBrush(Theme.AccentBright)) e.Graphics.FillRectangle(bar, b.X, b.Y + 1, 4, b.Height - 2);
     }
 
     // ---- drag-to-reorder a playlist's tracks ----
@@ -1765,7 +1767,19 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     /// <summary>Compact ISO date for the Added column; blank when there's no (valid) date.</summary>
-    private static string DateAddedStr(DateTime? d) => d is { } dt && dt.Year > 1970 ? dt.ToString("yyyy-MM-dd") : "";
+    // Conversational dates (matches the app's "185 songs · 11 hr" voice) instead of raw yyyy-MM-dd.
+    // English month names via InvariantCulture so it stays consistent with the English UI (a localised
+    // "ddd" weekday collapses to a cryptic single letter in some cultures, e.g. Hungarian "P").
+    private static string DateAddedStr(DateTime? d)
+    {
+        if (d is not { } dt || dt.Year <= 1970) return "";
+        var today = DateTime.Today;
+        var day = dt.Date;
+        if (day == today) return "Today";
+        if (day == today.AddDays(-1)) return "Yesterday";
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        return dt.Year == today.Year ? dt.ToString("MMM d", ci) : dt.ToString("MMM d, yyyy", ci);  // Mar 27 / Mar 27, 2025
+    }
 
     /// <summary>Show count + total time + size in the status bar while several songs are selected.</summary>
     private void OnTrackSelectionChanged()
@@ -2949,7 +2963,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _deviceScroll.BackColor = Theme.Bg;
         Theme.StyleGrid(_tracks);
         _tracks.RowTemplate.Height = _settings.RowHeight;
-        var sel = Theme.Blend(Theme.Bg, Theme.Accent, 0.22);
+        var sel = Theme.Blend(Theme.Bg, Theme.Accent, 0.12);
         _tracks.DefaultCellStyle.SelectionBackColor = sel;
         _tracks.AlternatingRowsDefaultCellStyle.SelectionBackColor = sel;
     }

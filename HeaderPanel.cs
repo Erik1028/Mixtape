@@ -11,7 +11,7 @@ namespace iPodCommander;
 internal sealed class HeaderPanel : Panel
 {
     public readonly ThemedButton AddButton = new() { Text = "Add music", Width = 132, Primary = true, Pill = true, Glyph = "+", BlockedReason = "No iPod is connected." };
-    public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, BlockedReason = "No iPod is connected." };
+    public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, Danger = true, BlockedReason = "No iPod is connected." };
 
     /// <summary>Raised when the artwork tile is clicked (only when <see cref="ArtClickable"/>) — used to pick a cover.</summary>
     public event Action? ArtClicked;
@@ -152,9 +152,10 @@ internal sealed class HeaderPanel : Panel
         if (!string.IsNullOrEmpty(_kicker))
         {
             int kh = TextRenderer.MeasureText(g, _kicker, kickerFont).Height;
+            // Calmer accent for the static eyebrow (bright accent is reserved for selection); tucked to the title.
             TextRenderer.DrawText(g, _kicker, kickerFont,
-                new Rectangle(tx, Pad + 4, rightW, kh), Theme.AccentBright, TextFormatFlags.Left | TextFormatFlags.Top);
-            ty = Pad + 4 + kh + 3;
+                new Rectangle(tx, Pad + 4, rightW, kh), Theme.Blend(Theme.Bg, Theme.Accent, 0.85), TextFormatFlags.Left | TextFormatFlags.Top);
+            ty = Pad + 4 + kh + 2;
         }
 
         int th = TextRenderer.MeasureText(g, string.IsNullOrEmpty(_title) ? "Ag" : _title, titleFont).Height;
@@ -164,9 +165,24 @@ internal sealed class HeaderPanel : Panel
         ty += th + 2;
 
         int subH = TextRenderer.MeasureText(g, "Ag", subFont).Height;
-        TextRenderer.DrawText(g, _subtitle, subFont,
-            new Rectangle(tx, ty, rightW, subH), Theme.Subtle,
-            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
+        // "185 songs · 11 hr" → the leading count owns a bold/bright run; the "· 11 hr" tail stays quiet.
+        int dot = _subtitle.IndexOf('·');
+        if (dot > 0)
+        {
+            string head = _subtitle.Substring(0, dot).TrimEnd();
+            string tail = _subtitle.Substring(dot);
+            using var subBold = Theme.UiFont(10f, FontStyle.Bold);
+            const TextFormatFlags np = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding;
+            TextRenderer.DrawText(g, head, subBold, new Rectangle(tx, ty, rightW, subH), Theme.TextCol, np);
+            int hw = TextRenderer.MeasureText(g, head, subBold, new Size(rightW, subH), np).Width;
+            TextRenderer.DrawText(g, "  " + tail, subFont, new Rectangle(tx + hw, ty, rightW - hw, subH), Theme.Subtle, np | TextFormatFlags.EndEllipsis);
+        }
+        else
+        {
+            TextRenderer.DrawText(g, _subtitle, subFont,
+                new Rectangle(tx, ty, rightW, subH), Theme.Subtle,
+                TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
+        }
 
         using var pen = new Pen(Theme.Border);
         g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
