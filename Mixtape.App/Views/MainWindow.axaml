@@ -181,6 +181,26 @@
                     CanUserResizeColumns="False" CanUserReorderColumns="False"
                     CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
             <DataGrid.Columns>
+              <DataGridTemplateColumn Header="" Width="56" CanUserSort="False">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate>
+                    <Border Width="40" Height="40" CornerRadius="6" Margin="8,5,4,5" ClipToBounds="True" VerticalAlignment="Center">
+                      <Panel>
+                        <Border>
+                          <Border.Background>
+                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                              <GradientStop Offset="0" Color="#2E3A4A"/>
+                              <GradientStop Offset="1" Color="#1B2530"/>
+                            </LinearGradientBrush>
+                          </Border.Background>
+                          <TextBlock Text="♪" FontSize="15" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <Image Source="{Binding Art}" Stretch="UniformToFill"/>
+                      </Panel>
+                    </Border>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
               <DataGridTemplateColumn Header="SONG" Width="2*">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using iPodCommander;   // the cross-platform engine in Mixtape.Core
 
@@ -19,7 +20,7 @@ public sealed class SidebarItem
 }
 
 /// <summary>A display row in the song table (public, so reflection bindings see the columns).</summary>
-public sealed class TrackRow
+public sealed class TrackRow : INotifyPropertyChanged
 {
     public string Title { get; init; } = "";
     public string Artist { get; init; } = "";
@@ -29,6 +30,10 @@ public sealed class TrackRow
     public string Added { get; init; } = "";
     public string Time { get; init; } = "";
     internal Track? Source { get; init; }
+
+    private Bitmap? _art;
+    public Bitmap? Art { get => _art; set { _art = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Art))); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
 
     internal static TrackRow From(Track t) => new()
     {
@@ -276,6 +281,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ? (_localFolders.Count == 0 ? "Click “Add folder” to add music from your PC."
                : $"{shown.Count} songs · {_localFolders.Count} folder{(_localFolders.Count == 1 ? "" : "s")}")
             : HeaderSubtitle;
+
+        LoadArtwork(Tracks.ToList());
+    }
+
+    private int _artGen;
+    private async void LoadArtwork(IReadOnlyList<TrackRow> rows)
+    {
+        int gen = ++_artGen;
+        foreach (var r in rows)
+        {
+            if (gen != _artGen) return;                  // a newer view replaced this one
+            var t = r.Source;
+            if (t is null) continue;
+            string? path = t.LocalPath ?? (_device is not null ? t.ResolveFilePath(_device.MountRoot) : null);
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+            string key = string.IsNullOrEmpty(t.Album) ? path : (Norm(t.Artist) + "|" + Norm(t.Album));
+            var bmp = await ArtLoader.LoadAsync(path, key);
+            if (gen != _artGen) return;
+            if (bmp is not null) r.Art = bmp;
+        }
     }
 
     private static bool Match(Track t, string q)

@@ -56,4 +56,17 @@ internal static class MetadataExtractor
         }
         return nt;
     }
+
+    /// <summary>The embedded cover-art bytes for an audio file, or null if there's none / unreadable.</summary>
+    public static byte[]? ReadArt(string path)
+    {
+        try
+        {
+            using var f = TagLib.File.Create(path);
+            var pics = f.Tag.Pictures;
+            if (pics is { Length: > 0 } && pics[0].Data?.Data is { Length: > 0 } data) return data;
+        }
+        catch { }
+        return null;
+    }
 }
