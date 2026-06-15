@@ -59,8 +59,29 @@
                      VerticalAlignment="Center" Margin="22,0,0,0" FontSize="12"/>
         </Border>
 
+        <!-- now playing -->
+        <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasNowPlaying}" Height="64" Background="{StaticResource PanelBrush}">
+          <Grid Margin="16,0" ColumnDefinitions="220,Auto,*,Auto,Auto">
+            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+              <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+              <TextBlock Text="{Binding NowSub}" Foreground="{StaticResource SubtleBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
+                    Width="42" Height="42" Margin="14,0" FontSize="16"
+                    VerticalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+            <Grid Grid.Column="2" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
+              <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" TextAlignment="Right"/>
+              <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PositionFraction, Mode=TwoWay}" Margin="8,0"/>
+              <TextBlock Grid.Column="2" Text="{Binding DurText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+            </Grid>
+            <ToggleButton Grid.Column="3" Content="EQ" IsChecked="{Binding EqOn, Mode=TwoWay}" Margin="14,0,10,0" VerticalAlignment="Center"/>
+            <Slider Grid.Column="4" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="92" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+
         <!-- song table -->
-        <DataGrid ItemsSource="{Binding Tracks}" Margin="16,2,12,8"
+        <DataGrid x:Name="SongGrid" ItemsSource="{Binding Tracks}" Margin="16,2,12,8"
+                  DoubleTapped="OnSongDoubleTapped"
                   Background="Transparent" Foreground="{StaticResource TextBrush}"
                   GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource HairlineBrush}"
                   HeadersVisibility="Column" IsReadOnly="True" AutoGenerateColumns="False"

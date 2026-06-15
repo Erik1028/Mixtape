@@ -14,9 +14,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _vm;
-    }
 
-    private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+        // Test aid: `--autoplay` plays the first track shortly after launch (for headless screenshotting).
+        if (Environment.GetCommandLineArgs().Contains("--autoplay"))
+        {
+            var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            t.Tick += (_, _) => { t.Stop(); if (_vm.Tracks.Count > 0) { SongGrid.SelectedItem = _vm.Tracks[0]; _vm.PlayRow(_vm.Tracks[0]); } };
+            t.Start();
+        }
+    }
 
     private async void OnAddFolder(object? sender, RoutedEventArgs e)
     {
@@ -34,4 +40,9 @@ public partial class MainWindow : Window
     }
 
     private void OnRefresh(object? sender, RoutedEventArgs e) => _vm.Refresh();
+
+    private void OnSongDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+        => _vm.PlayRow(SongGrid.SelectedItem as TrackRow);
+
+    private void OnPlayPause(object? sender, RoutedEventArgs e) => _vm.PlayPause();
 }

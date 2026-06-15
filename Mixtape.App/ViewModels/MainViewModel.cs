@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using Avalonia.Threading;
 using iPodCommander;   // the cross-platform engine in Mixtape.Core
 
 namespace Mixtape.App.ViewModels;
@@ -244,11 +245,95 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : $"{t.Seconds} s";
     }
 
+    // ---- playback (LibVLC via AudioService) ----
+    private AudioService? _audio;
+    private DispatcherTimer? _tick;
+    private bool _updatingFromTimer;
+    private readonly float[] _eqGains = { 5, 4, 2, 0, -1, -1, 0, 2, 4, 5 }; // gentle "smile" preset
+
+    private bool _hasNow;   public bool HasNowPlaying { get => _hasNow; set => Set(ref _hasNow, value); }
+    private string _nowTitle = ""; public string NowTitle { get => _nowTitle; set => Set(ref _nowTitle, value); }
+    private string _nowSub = "";   public string NowSub { get => _nowSub; set => Set(ref _nowSub, value); }
+    private string _playGlyph = "▶"; public string PlayPauseGlyph { get => _playGlyph; set => Set(ref _playGlyph, value); }
+    private string _posText = "0:00"; public string PosText { get => _posText; set => Set(ref _posText, value); }
+    private string _durText = "0:00"; public string DurText { get => _durText; set => Set(ref _durText, value); }
+
+    private double _posFrac;
+    public double PositionFraction
+    {
+        get => _posFrac;
+        set { if (Set(ref _posFrac, value) && !_updatingFromTimer) _audio?.SeekFraction(value); }
+    }
+
+    private int _volume = 90;
+    public int Volume { get => _volume; set { if (Set(ref _volume, value) && _audio is not null) _audio.Volume = value; } }
+
+    private bool _eqOn;
+    public bool EqOn { get => _eqOn; set { if (Set(ref _eqOn, value)) _audio?.SetEq(value, _eqGains); } }
+
+    public void PlayRow(TrackRow? row)
+    {
+        var t = row?.Source;
+        if (t is null) return;
+        string? path = t.LocalPath;
+        if (string.IsNullOrEmpty(path) && _device is not null) path = t.ResolveFilePath(_device.MountRoot);
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) { Status = "Can't find the audio file for this track."; return; }
+
+        try
+        {
+            EnsureAudio();
+            _audio!.Play(path);
+            _audio.Volume = _volume;
+            _audio.SetEq(_eqOn, _eqGains);
+            NowTitle = t.DisplayTitle;
+            NowSub = string.Join("  —  ", new[] { t.Artist, t.Album }.Where(s => !string.IsNullOrEmpty(s)));
+            HasNowPlaying = true;
+            PlayPauseGlyph = "⏸";
+            _tick!.Start();
+            Status = "Playing: " + t.DisplayTitle;
+        }
+        catch (Exception ex) { Status = "Playback error: " + ex.Message; }
+    }
+
+    public void PlayPause()
+    {
+        if (_audio is null) return;
+        _audio.TogglePause();
+        PlayPauseGlyph = _audio.IsPlaying ? "⏸" : "▶";
+    }
+
+    private void EnsureAudio()
+    {
+        if (_audio is not null) return;
+        _audio = new AudioService();
+        _tick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _tick.Tick += (_, _) => UpdateTransport();
+    }
+
+    private void UpdateTransport()
+    {
+        if (_audio is null) return;
+        long pos = _audio.PositionMs, dur = _audio.DurationMs;
+        _updatingFromTimer = true;
+        PositionFraction = dur > 0 ? Math.Clamp((double)pos / dur, 0, 1) : 0;
+        _updatingFromTimer = false;
+        PosText = FmtClock(pos);
+        DurText = FmtClock(dur);
+        PlayPauseGlyph = _audio.IsPlaying ? "⏸" : "▶";
+    }
+
+    private static string FmtClock(long ms)
+    {
+        var t = TimeSpan.FromMilliseconds(ms < 0 ? 0 : ms);
+        return t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
+    }
+
     // ---- INotifyPropertyChanged ----
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
-        if (!EqualityComparer<T>.Default.Equals(field, value)) { field = value; OnPropertyChanged(name); }
+        if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+        field = value; OnPropertyChanged(name); return true;
     }
 }
