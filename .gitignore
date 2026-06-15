@@ -1,0 +1,34 @@
+# ---- Build output ----
+bin/
+obj/
+dist/
+portable/
+render-sandbox/
+
+# ---- Dev sandboxes / scratch ----
+_design/
+_idsandbox/
+_uifix/
+
+# ---- PERSONAL DEVICE DATA — never publish (your real iPod DB + device identifiers) ----
+testdata/
+*.real
+iTunesDB.before-firstwrite
+
+# ---- Diagnostic / report outputs (contain device serial + FireWire GUID) ----
+ipod-*.txt
+*device report*.txt
+*.bak
+*.original
+
+# ---- Dev screenshots / scratch images ----
+render*.png
+crop_*.png
+icon-preview.png
+
+# ---- IDE / OS ----
+.vs/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

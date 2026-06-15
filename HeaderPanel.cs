@@ -1,0 +1,140 @@
+using System.Drawing.Drawing2D;
+
+namespace iPodCommander;
+
+/// <summary>
+/// Apple-Music-style content header: a large generated artwork tile on the left, then a small
+/// accent "kicker" (LIBRARY / PLAYLIST), the big title, a "N songs · duration" subtitle, and the
+/// primary actions (Add music / Delete) as pill buttons. The buttons are public so the form
+/// wires their Click + Enabled.
+/// </summary>
+internal sealed class HeaderPanel : Panel
+{
+    public readonly ThemedButton AddButton = new() { Text = "Add music", Width = 132, Primary = true, Pill = true, Glyph = "+", Enabled = false };
+    public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, Enabled = false };
+
+    /// <summary>Raised when the artwork tile is clicked (only when <see cref="ArtClickable"/>) — used to pick a cover.</summary>
+    public event Action? ArtClicked;
+    /// <summary>When true the artwork shows a hand cursor + "Change cover" hint on hover and raises <see cref="ArtClicked"/>.</summary>
+    public bool ArtClickable { get; set; }
+
+    private string _kicker = "";
+    private string _title = "";
+    private string _subtitle = "";
+    private int _seed;
+    private Bitmap? _art;
+    private bool _artHover;
+
+    private const int Pad = 22;
+
+    public HeaderPanel()
+    {
+        BackColor = Theme.Bg;
+        DoubleBuffered = true;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        Controls.Add(AddButton);
+        Controls.Add(DeleteButton);
+
+        MouseMove += (_, e) =>
+        {
+            bool over = ArtClickable && ArtRect.Contains(e.Location);
+            if (over != _artHover) { _artHover = over; Cursor = over ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        };
+        MouseLeave += (_, _) => { if (_artHover) { _artHover = false; Cursor = Cursors.Default; Invalidate(); } };
+        MouseClick += (_, e) => { if (ArtClickable && ArtRect.Contains(e.Location)) ArtClicked?.Invoke(); };
+    }
+
+    private Rectangle ArtRect => new(Pad, Pad, ArtSize, ArtSize);
+
+    public void SetInfo(string kicker, string title, string subtitle, int seed)
+    {
+        _kicker = kicker; _title = title; _subtitle = subtitle; _seed = seed;
+        SetArt(null); // disposes any prior art
+    }
+
+    /// <summary>
+    /// Show real cover art instead of the generated gradient (null reverts to gradient). The header
+    /// takes a PRIVATE copy and owns it — so callers may pass a cache-owned bitmap (album art, a
+    /// CoverArt tile) or a fresh one freely, and the previous header art is disposed here (no leak).
+    /// </summary>
+    public void SetArt(Bitmap? art)
+    {
+        var old = _art;
+        _art = art is null ? null : new Bitmap(art);
+        if (!ReferenceEquals(old, _art)) old?.Dispose();
+        Invalidate();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _art?.Dispose(); _art = null; }
+        base.Dispose(disposing);
+    }
+
+    private int ArtSize => Math.Max(72, Height - Pad * 2);
+    private int TextX => Pad + ArtSize + 22;
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        int by = Height - Pad - AddButton.Height;
+        AddButton.Location = new Point(TextX, by);
+        DeleteButton.Location = new Point(TextX + AddButton.Width + 10, by);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Theme.Bg);
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        int artSize = ArtSize;
+        var artRect = new Rectangle(Pad, Pad, artSize, artSize);
+        // soft shadow under the art
+        using (var sh = new SolidBrush(Color.FromArgb(45, 0, 0, 0)))
+        using (var sp = Theme.RoundedRect(new RectangleF(artRect.X + 2, artRect.Y + 4, artSize, artSize), artSize * 0.14f))
+            g.FillPath(sh, sp);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.DrawImage(_art ?? Theme.MakeArt(artSize, _seed), artRect);
+        if (ArtClickable && _artHover)
+        {
+            using (var ov = new SolidBrush(Color.FromArgb(125, 0, 0, 0)))
+            using (var op = Theme.RoundedRect(artRect, artSize * 0.14f))
+                g.FillPath(ov, op);
+            TextRenderer.DrawText(g, "Change cover", Theme.UiFont(8.5f, FontStyle.Bold), artRect, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+
+        int tx = TextX;
+        int rightW = Width - tx - Pad;
+        // Stack kicker → title → subtitle using measured font heights so the big title never clips its
+        // descenders or collides with the subtitle when point-sized fonts grow at 125/150% DPI.
+        using var kickerFont = Theme.UiFont(8.5f, FontStyle.Bold);
+        using var titleFont = Theme.DisplayFont(26f, FontStyle.Bold);
+        using var subFont = Theme.UiFont(10f);
+
+        int ty = Pad + 16;
+        if (!string.IsNullOrEmpty(_kicker))
+        {
+            int kh = TextRenderer.MeasureText(g, _kicker, kickerFont).Height;
+            TextRenderer.DrawText(g, _kicker, kickerFont,
+                new Rectangle(tx, Pad + 4, rightW, kh), Theme.AccentBright, TextFormatFlags.Left | TextFormatFlags.Top);
+            ty = Pad + 4 + kh + 3;
+        }
+
+        int th = TextRenderer.MeasureText(g, string.IsNullOrEmpty(_title) ? "Ag" : _title, titleFont).Height;
+        TextRenderer.DrawText(g, _title, titleFont,
+            new Rectangle(tx, ty, rightW, th), Theme.TextCol,
+            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        ty += th + 2;
+
+        int subH = TextRenderer.MeasureText(g, "Ag", subFont).Height;
+        TextRenderer.DrawText(g, _subtitle, subFont,
+            new Rectangle(tx, ty, rightW, subH), Theme.Subtle,
+            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
+
+        using var pen = new Pen(Theme.Border);
+        g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
+    }
+}

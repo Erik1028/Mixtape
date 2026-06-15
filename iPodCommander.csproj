@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>  <!-- in-app media preview: WPF MediaElement (Media Foundation) for audio + video via ElementHost; no NuGet -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Mixtape</AssemblyName>
+    <RootNamespace>iPodCommander</RootNamespace>
+    <Version>0.1.0</Version>
+    <Product>Mixtape</Product>
+    <AssemblyTitle>Mixtape</AssemblyTitle>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+  </ItemGroup>
+
+  <!-- Enabling UseWPF changes the implicit-usings profile and drops System.IO; the codebase relies on it
+       implicitly (DriveInfo/File/Path/FileStream everywhere), so add it back globally. -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <!-- Milestone 1 (detect + read + list) is deliberately dependency-free so it builds
+       and runs offline. TagLib# (tag reading) and a plist parser arrive with Milestone 2
+       (copy/write), which is the first milestone that touches the device. -->
+
+</Project>
