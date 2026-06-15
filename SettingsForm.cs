@@ -16,6 +16,9 @@ internal sealed class SettingsForm : Form
     private readonly SettingsNav _nav;
     private readonly Panel _pane;
 
+    private int _homeTop;       // resting Top, captured on first show (anchor for the open/close slide)
+    private bool _closingAnim;  // true once the dismiss animation has begun
+
     private const int NavW = 212;                       // left category rail
     private const int SideMargin = 24;                  // symmetric gutter for the card column + page title
     private const int CardW = 608;                      // card width (fills the pane to a matching right gutter)
@@ -44,6 +47,37 @@ internal sealed class SettingsForm : Form
         Controls.Add(_pane);
         Controls.Add(_nav);
         ShowCategory(0);
+
+        if (Anim.MotionEnabled) Opacity = 0; // fade up from invisible in OnShown
+    }
+
+    /// <summary>Fade + rise into place when the window opens (Apple-modal entrance).</summary>
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        _homeTop = Top;
+        if (!Anim.MotionEnabled) { Opacity = 1; return; }
+        Top = _homeTop + 16;
+        Anim.Run(190, v =>
+        {
+            if (IsDisposed) return;
+            Opacity = v;
+            Top = _homeTop + (int)Math.Round(16 * (1 - v));
+        }, () => { if (!IsDisposed) { Opacity = 1; Top = _homeTop; } }, Easings.OutCubic);
+    }
+
+    /// <summary>Fade + settle down on dismiss before the window actually closes.</summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (_closingAnim || !Anim.MotionEnabled) { base.OnFormClosing(e); return; }
+        e.Cancel = true;
+        _closingAnim = true;
+        Anim.Run(130, v =>
+        {
+            if (IsDisposed) return;
+            Opacity = 1 - v;
+            Top = _homeTop + (int)Math.Round(10 * v);
+        }, () => { if (!IsDisposed) Close(); }, Easings.OutCubic);
     }
 
     private int _y;
@@ -53,8 +87,12 @@ internal sealed class SettingsForm : Form
 
     private void Rebuild() => ShowCategory(_nav.SelectedIndex);
 
+    private int _lastCat;
+
     private void ShowCategory(int index)
     {
+        bool categoryChanged = index != _lastCat;
+        _lastCat = index;
         var old = _pane.Controls.Cast<Control>().ToArray();
         _pane.Controls.Clear();
         // The page-title Label owns a DisplayFont; CardPanels dispose their own fonts. Free the title's
@@ -79,6 +117,24 @@ internal sealed class SettingsForm : Form
         // holds the exact content bottom (+10 trailing gap) since the layout is absolute.
         int desired = Math.Clamp(_y + 12, MinHeight, MaxHeight);
         if (ClientSize.Height != desired) ClientSize = new Size(ClientSize.Width, desired);
+
+        if (categoryChanged) AnimatePaneIn();
+    }
+
+    /// <summary>Settle the freshly-built page in with a small upward slide.</summary>
+    private void AnimatePaneIn()
+    {
+        if (!Anim.MotionEnabled) return;
+        var kids = _pane.Controls.Cast<Control>().ToArray();
+        var baseTops = Array.ConvertAll(kids, c => c.Top);
+        Anim.Run(180, v =>
+        {
+            if (IsDisposed) return;
+            int dy = (int)Math.Round(12 * (1 - v));
+            _pane.SuspendLayout();
+            for (int i = 0; i < kids.Length; i++) if (!kids[i].IsDisposed) kids[i].Top = baseTops[i] + dy;
+            _pane.ResumeLayout();
+        }, null, Easings.OutCubic);
     }
 
     // ---- category pages ----
@@ -171,7 +227,7 @@ internal sealed class SettingsForm : Form
 
     private void BuildAbout()
     {
-        Row("Mixtape", "Version 0.2", null);
+        Row("Mixtape", "Version 0.3", null);
         Row("A friendly manager for classic iPods", "Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes.", null);
     }
 

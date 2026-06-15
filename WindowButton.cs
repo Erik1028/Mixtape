@@ -14,21 +14,33 @@ internal sealed class WindowButton : Control
     public Kind Which { get; init; }
     private bool _maximized;
     public bool Maximized { get => _maximized; set { if (_maximized == value) return; _maximized = value; Invalidate(); } }
-    private bool _hover;
+    private float _hoverT;   // 0→1 hover highlight
+    private bool _painted;
+    private Tween? _tw;
 
     public WindowButton()
     {
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         TabStop = false;
-        MouseEnter += (_, _) => { _hover = true; Invalidate(); };
-        MouseLeave += (_, _) => { _hover = false; Invalidate(); };
+        MouseEnter += (_, _) => AnimHover(1f);
+        MouseLeave += (_, _) => AnimHover(0f);
+    }
+
+    private void AnimHover(float to)
+    {
+        if (!_painted || !Anim.MotionEnabled) { _hoverT = to; Invalidate(); return; }
+        _tw?.Cancel();
+        float from = _hoverT;
+        _tw = Anim.Run(110, v => { _hoverT = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutCubic);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        float h = Math.Clamp(_hoverT, 0f, 1f);
 
         // Paint the parent's wallpaper, translated, so this button is seamless with the caption strip.
         if (Parent is { } p)
@@ -40,13 +52,15 @@ internal sealed class WindowButton : Control
         }
         else g.Clear(Theme.WallpaperTop);
 
-        if (_hover)
+        if (h > 0.001f)
         {
-            using var hb = new SolidBrush(Which == Kind.Close ? Color.FromArgb(232, 17, 35) : Color.FromArgb(36, 255, 255, 255));
+            Color baseCol = Which == Kind.Close ? Color.FromArgb(232, 17, 35) : Color.FromArgb(255, 255, 255);
+            int a = (int)((Which == Kind.Close ? 255 : 36) * h);
+            using var hb = new SolidBrush(Color.FromArgb(a, baseCol));
             g.FillRectangle(hb, ClientRectangle);
         }
 
-        Color stroke = Which == Kind.Close && _hover ? Color.White : Color.FromArgb(218, 222, 226);
+        Color stroke = Which == Kind.Close ? Theme.Blend(Color.FromArgb(218, 222, 226), Color.White, h) : Color.FromArgb(218, 222, 226);
         using var pen = new Pen(stroke, 1.3f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float cx = Width / 2f, cy = Height / 2f, s = 5f; // glyph half-size
 
@@ -61,7 +75,7 @@ internal sealed class WindowButton : Control
             case Kind.Maximize: // restore: two offset squares
                 float o = 2f;
                 g.DrawRectangle(pen, cx - s + o, cy - s - o, s * 2 - o, s * 2 - o); // back square (top-right)
-                using (var fillFront = new SolidBrush(_hover ? Color.FromArgb(70, 0, 0, 0) : Theme.WallpaperTop))
+                using (var fillFront = new SolidBrush(h > 0.5f ? Color.FromArgb(70, 0, 0, 0) : Theme.WallpaperTop))
                     g.FillRectangle(fillFront, cx - s, cy - s + o, s * 2 - o, s * 2 - o);
                 g.DrawRectangle(pen, cx - s, cy - s + o, s * 2 - o, s * 2 - o);          // front square (bottom-left)
                 break;

@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 
 namespace iPodCommander;
 
@@ -112,6 +113,18 @@ internal static class Theme
 
     public static Color Blend(Color a, Color b, double f) => Color.FromArgb(
         (int)(a.R + (b.R - a.R) * f), (int)(a.G + (b.G - a.G) * f), (int)(a.B + (b.B - a.B) * f));
+
+    /// <summary>Draw an image into <paramref name="dest"/> at a fractional opacity (for cross-fades).</summary>
+    public static void DrawImageAlpha(Graphics g, Image img, RectangleF dest, float alpha)
+    {
+        if (alpha <= 0.001f) return;
+        if (alpha >= 0.999f) { g.DrawImage(img, dest.X, dest.Y, dest.Width, dest.Height); return; }
+        var cm = new ColorMatrix { Matrix33 = alpha };
+        using var ia = new ImageAttributes();
+        ia.SetColorMatrix(cm);
+        g.DrawImage(img, new[] { new PointF(dest.X, dest.Y), new PointF(dest.Right, dest.Y), new PointF(dest.X, dest.Bottom) },
+            new RectangleF(0, 0, img.Width, img.Height), GraphicsUnit.Pixel, ia);
+    }
 
     public static Color HsvToColor(double h, double s, double v)
     {
@@ -288,7 +301,10 @@ internal sealed class ThemedButton : Button
     public bool Pill { get; init; }
     public bool Ghost { get; init; }   // borderless icon button (no chip)
     public string? Glyph { get; init; }
-    private bool _hover;
+    private float _hoverT;  // 0→1 hover wash
+    private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
+    private bool _painted;
+    private Tween? _hoverTw, _pressTw;
 
     public ThemedButton()
     {
@@ -300,39 +316,68 @@ internal sealed class ThemedButton : Button
         Cursor = Cursors.Hand;
         Font = Theme.UiFont(9.5f, FontStyle.Bold);
         Height = 34;
-        MouseEnter += (_, _) => { _hover = true; Invalidate(); };
-        MouseLeave += (_, _) => { _hover = false; Invalidate(); };
+        MouseEnter += (_, _) => AnimHover(1f);
+        MouseLeave += (_, _) => { AnimHover(0f); AnimPress(0f); };
+        MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Enabled) AnimPress(1f); };
+        MouseUp += (_, me) => { if (me.Button == MouseButtons.Left) AnimPress(0f); };
         EnabledChanged += (_, _) => Invalidate();
+    }
+
+    private void AnimHover(float to)
+    {
+        if (!_painted || !Anim.MotionEnabled) { _hoverT = to; Invalidate(); return; }
+        _hoverTw?.Cancel();
+        float from = _hoverT;
+        _hoverTw = Anim.Run(130, v => { _hoverT = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutCubic);
+    }
+
+    private void AnimPress(float to)
+    {
+        if (!_painted || !Anim.MotionEnabled) { _pressT = to; Invalidate(); return; }
+        _pressTw?.Cancel();
+        float from = _pressT;
+        // press goes down fast; release eases back with a hint of spring
+        _pressTw = Anim.Run(to > 0 ? 80 : 170, v => { _pressT = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, to > 0 ? Easings.OutCubic : Easings.OutBack);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.Bg);
 
-        var r = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
-        float radius = Pill ? (Height - 1) / 2f : 7f;
+        float h = Math.Clamp(_hoverT, 0f, 1f);
+        float inset = 3f * Math.Clamp(_pressT, 0f, 1f);   // shrink toward centre while pressed
+        var r = new RectangleF(0.5f + inset, 0.5f + inset, Width - 1 - inset * 2, Height - 1 - inset * 2);
+        float radius = Pill ? r.Height / 2f : 7f;
         using var path = Theme.RoundedRect(r, radius);
+        var textRect = Rectangle.Round(r);
 
         if (Ghost)
         {
-            if (_hover) { using var hb = new SolidBrush(Theme.RowHover); g.FillPath(hb, path); }
-            TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, Rectangle.Round(r),
-                _hover ? Theme.TextCol : Color.FromArgb(205, 210, 214), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (h > 0.001f) { using var hb = new SolidBrush(Color.FromArgb((int)(h * 255), Theme.RowHover)); g.FillPath(hb, path); }
+            TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, textRect,
+                Theme.Blend(Color.FromArgb(205, 210, 214), Theme.TextCol, h), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
 
         Color fill, text, border;
         if (!Enabled) { fill = Theme.RowBg; text = Theme.Faint; border = Theme.Border; }
-        else if (Primary) { fill = _hover ? Theme.Blend(Theme.Accent, Color.White, 0.14) : Theme.Accent; text = Theme.OnAccent; border = fill; }
-        else { fill = _hover ? Theme.RowHover : Theme.RowBg; text = Theme.TextCol; border = Theme.Border; }
+        else if (Primary) { fill = Theme.Blend(Theme.Accent, Color.White, 0.14 * h); text = Theme.OnAccent; border = fill; }
+        else { fill = Theme.Blend(Theme.RowBg, Theme.RowHover, h); text = Theme.TextCol; border = Theme.Border; }
 
         using (var b = new SolidBrush(fill)) g.FillPath(b, path);
         if (!Primary) using (var p = new Pen(border)) g.DrawPath(p, path);
 
         string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
-        TextRenderer.DrawText(g, label, Font, Rectangle.Round(r), text,
+        TextRenderer.DrawText(g, label, Font, textRect, text,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _hoverTw?.Cancel(); _pressTw?.Cancel(); }
+        base.Dispose(disposing);
     }
 }

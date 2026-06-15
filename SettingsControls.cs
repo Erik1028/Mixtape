@@ -7,7 +7,10 @@ internal sealed class ToggleSwitch : Control
 {
     public event Action? CheckedChanged;
     private bool _checked;
-    public bool Checked { get => _checked; set { if (_checked == value) return; _checked = value; Invalidate(); CheckedChanged?.Invoke(); } }
+    private float _t;        // animated knob position: 0 = off, 1 = on
+    private bool _painted;   // suppresses the slide on the initial (programmatic) value
+    private Tween? _tw;
+    public bool Checked { get => _checked; set { if (_checked == value) return; _checked = value; AnimateKnob(); CheckedChanged?.Invoke(); } }
 
     public ToggleSwitch()
     {
@@ -19,19 +22,36 @@ internal sealed class ToggleSwitch : Control
         Click += (_, _) => Checked = !Checked;
     }
 
+    private void AnimateKnob()
+    {
+        float to = _checked ? 1f : 0f;
+        if (!_painted || !Anim.MotionEnabled) { _t = to; Invalidate(); return; }
+        _tw?.Cancel();
+        float from = _t;
+        _tw = Anim.Run(190, v => { _t = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutBack);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
+        _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.PanelBg);
+        float tc = Math.Clamp(_t, 0f, 1f);
         var r = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
         using (var track = Theme.RoundedRect(r, (Height - 1) / 2f))
-        using (var b = new SolidBrush(_checked ? Theme.Accent : Theme.Blend(Theme.PanelBg, Color.White, 0.14)))
+        using (var b = new SolidBrush(Theme.Blend(Theme.Blend(Theme.PanelBg, Color.White, 0.14), Theme.Accent, tc)))
             g.FillPath(b, track);
         int d = Height - 8;
-        int x = _checked ? Width - d - 4 : 4;
-        using var knob = new SolidBrush(_checked ? Theme.OnAccent : Color.FromArgb(220, 225, 230));
+        float x = 4 + (Width - d - 8) * _t;   // slides between the off/on insets (OutBack adds a tiny overshoot)
+        using var knob = new SolidBrush(Theme.Blend(Color.FromArgb(220, 225, 230), Theme.OnAccent, tc));
         g.FillEllipse(knob, x, 4, d, d);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _tw?.Cancel();
+        base.Dispose(disposing);
     }
 }
 
@@ -132,6 +152,9 @@ internal sealed class SettingsNav : Panel
     private readonly string[] _labels;
     private int _sel;
     private int _hover = -1;
+    private float _visSel;    // animated position of the selection pill
+    private bool _painted;
+    private Tween? _tw;
     private readonly List<Rectangle> _hit = new();
     private const int RowH = 40, Gap = 4, Pad = 10, TopPad = 14;
     // Cached once — OnPaint runs on every hover/selection change; allocating a Font per paint leaks GDI.
@@ -152,26 +175,45 @@ internal sealed class SettingsNav : Panel
     public int SelectedIndex
     {
         get => _sel;
-        set { if (_sel == value) return; _sel = value; Invalidate(); Selected?.Invoke(value); }
+        set { if (_sel == value) return; _sel = value; AnimateSel(value); Selected?.Invoke(value); }
+    }
+
+    private void AnimateSel(int to)
+    {
+        if (!_painted || !Anim.MotionEnabled) { _visSel = to; Invalidate(); return; }
+        _tw?.Cancel();
+        float from = _visSel;
+        _tw = Anim.Run(220, v => { _visSel = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutCubic);
     }
 
     private int HitAt(Point p) { for (int i = 0; i < _hit.Count; i++) if (_hit[i].Contains(p)) return i; return -1; }
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.SidebarBg);
         _hit.Clear();
+
+        // A single accent selection pill that slides between categories.
+        {
+            float y = TopPad + _visSel * (RowH + Gap);
+            var selRow = new RectangleF(Pad, y, Width - Pad * 2, RowH);
+            using var b = new SolidBrush(Color.FromArgb(48, Theme.Accent));
+            using var p = Theme.RoundedRect(selRow, 7);
+            g.FillPath(b, p);
+        }
+
         for (int i = 0; i < _labels.Length; i++)
         {
             int y = TopPad + i * (RowH + Gap);
             var row = new Rectangle(Pad, y, Width - Pad * 2, RowH);
             _hit.Add(row);
             bool sel = i == _sel, hov = i == _hover;
-            if (sel || hov)
+            if (hov && !sel)
             {
-                using var b = new SolidBrush(sel ? Color.FromArgb(48, Theme.Accent) : Theme.Blend(Theme.SidebarBg, Color.White, 0.06));
+                using var b = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.White, 0.06));
                 using var p = Theme.RoundedRect(row, 7);
                 g.FillPath(b, p);
             }
@@ -185,7 +227,7 @@ internal sealed class SettingsNav : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _font.Dispose(); _fontBold.Dispose(); }
+        if (disposing) { _tw?.Cancel(); _font.Dispose(); _fontBold.Dispose(); }
         base.Dispose(disposing);
     }
 
@@ -337,8 +379,20 @@ internal sealed class SegmentedControl : Control
     private int _selected;
     private int _hover = -1;
 
+    private float _visSel;    // animated position of the selection pill
+    private bool _painted;
+    private Tween? _tw;
+
     public string[] Options { get => _options; set { _options = value; Invalidate(); } }
-    public int SelectedIndex { get => _selected; set { if (_selected == value) return; _selected = value; Invalidate(); SelectedChanged?.Invoke(); } }
+    public int SelectedIndex { get => _selected; set { if (_selected == value) return; _selected = value; AnimateSel(value); SelectedChanged?.Invoke(); } }
+
+    private void AnimateSel(int to)
+    {
+        if (!_painted || !Anim.MotionEnabled) { _visSel = to; Invalidate(); return; }
+        _tw?.Cancel();
+        float from = _visSel;
+        _tw = Anim.Run(220, v => { _visSel = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutCubic);
+    }
 
     public SegmentedControl()
     {
@@ -355,7 +409,7 @@ internal sealed class SegmentedControl : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) Font?.Dispose(); // the ctor assigned a fresh Theme.UiFont; free it with the control
+        if (disposing) { _tw?.Cancel(); Font?.Dispose(); } // the ctor assigned a fresh Theme.UiFont; free it with the control
         base.Dispose(disposing);
     }
 
@@ -364,6 +418,7 @@ internal sealed class SegmentedControl : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.PanelBg);
@@ -371,18 +426,31 @@ internal sealed class SegmentedControl : Control
         using var op = Theme.RoundedRect(outer, 8);
         using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.18))) g.FillPath(bg, op);
 
-        // Clip the selected/hover fills to the track so a segment's rounded corners can't spill
-        // outside the container's rounded corners (which made the selected pill look like it bulged out).
+        // Clip fills to the track so segment corners can't spill outside the container's rounded corners.
         var savedClip = g.Clip;
         g.SetClip(op, CombineMode.Intersect);
         int w = SegW;
+
+        // Hover wash on a non-selected segment the mouse is over.
+        if (_hover >= 0 && Math.Abs(_hover - _visSel) > 0.02f)
+        {
+            var hseg = new RectangleF(_hover * w + 2, 2, w - 4, Height - 4);
+            using var hb = new SolidBrush(Theme.RowHover);
+            using var hp = Theme.RoundedRect(hseg, 6);
+            g.FillPath(hb, hp);
+        }
+
+        // A single accent pill that slides between segments.
+        var sel = new RectangleF(_visSel * w + 2, 2, w - 4, Height - 4);
+        using (var b = new SolidBrush(Theme.Accent))
+        using (var p = Theme.RoundedRect(sel, 6))
+            g.FillPath(b, p);
+
         for (int i = 0; i < _options.Length; i++)
         {
             var seg = new RectangleF(i * w + 2, 2, w - 4, Height - 4);
-            if (i == _selected || i == _hover)
-                using (var b = new SolidBrush(i == _selected ? Theme.Accent : Theme.RowHover))
-                using (var p = Theme.RoundedRect(seg, 6)) g.FillPath(b, p);
-            Color tc = i == _selected ? Theme.OnAccent : Theme.TextCol;
+            float cover = Math.Max(0f, 1f - Math.Abs(_visSel - i)); // text crossfades to OnAccent as the pill arrives
+            Color tc = Theme.Blend(Theme.TextCol, Theme.OnAccent, cover);
             TextRenderer.DrawText(g, _options[i], Font, Rectangle.Round(seg), tc,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }

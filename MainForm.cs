@@ -40,6 +40,8 @@ internal sealed class MainForm : Form
     private readonly Panel _deviceView = new() { Dock = DockStyle.Fill, Visible = false, AutoScroll = true, BackColor = Color.FromArgb(29, 30, 34) };
     private WallpaperPanel? _root;             // gradient shell + caption strip (custom title bar)
     private TableLayoutPanel? _content;        // kept so a theme-variant change can recolour it
+    private Panel? _center;                     // the swappable centre region (cross-dissolved on view switches)
+    private bool _viewTransitionBusy;          // guards against overlapping centre cross-dissolves
     private readonly SearchBox _search = new() { Dock = DockStyle.Fill };
     private string _searchQuery = "";
     private bool _navigating; // suppresses the search box's redundant ShowCurrent while we clear it on navigation
@@ -120,7 +122,7 @@ internal sealed class MainForm : Form
         gridHost.Controls.Add(searchHost);  // Top (added last → docks the top strip first)
 
         // The track grid, photo grid and device page share the centre cell; only one shows at a time.
-        var center = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
+        var center = _center = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
         center.Controls.Add(_deviceView);   // Fill, hidden until the Device view is active
         center.Controls.Add(_photoView);    // Fill, hidden until the Photos view is active
         center.Controls.Add(_browseView);   // Fill, hidden until the Albums/Artists view is active
@@ -687,26 +689,67 @@ internal sealed class MainForm : Form
     private void OnSidebarActivated(SidebarRowKind kind, object? tag)
     {
         ClearSearch(); // a query from a previous view must not leak into the one we're switching to
-        switch (kind)
+        TransitionCenter(() =>
         {
-            case SidebarRowKind.Device when tag is IPodDevice d:
-                if (!ReferenceEquals(d, _device)) LoadDevice(d); // switch first (resets to All songs)
-                _viewKind = SidebarRowKind.Device; _current = null;
-                BuildSidebar(); ShowCurrent();
-                break;
-            case SidebarRowKind.AllSongs:
-            case SidebarRowKind.Albums:
-            case SidebarRowKind.Artists:
-            case SidebarRowKind.Videos:
-            case SidebarRowKind.Photos:
-                _viewKind = kind; _current = null; _browseFilter = null; // clicking the section resets any drill-in
-                BuildSidebar(); ShowCurrent();
-                break;
-            case SidebarRowKind.Playlist when tag is Playlist pl:
-                _viewKind = SidebarRowKind.Playlist; _current = pl;
-                BuildSidebar(); ShowCurrent();
-                break;
+            switch (kind)
+            {
+                case SidebarRowKind.Device when tag is IPodDevice d:
+                    if (!ReferenceEquals(d, _device)) LoadDevice(d); // switch first (resets to All songs)
+                    _viewKind = SidebarRowKind.Device; _current = null;
+                    BuildSidebar(); ShowCurrent();
+                    break;
+                case SidebarRowKind.AllSongs:
+                case SidebarRowKind.Albums:
+                case SidebarRowKind.Artists:
+                case SidebarRowKind.Videos:
+                case SidebarRowKind.Photos:
+                    _viewKind = kind; _current = null; _browseFilter = null; // clicking the section resets any drill-in
+                    BuildSidebar(); ShowCurrent();
+                    break;
+                case SidebarRowKind.Playlist when tag is Playlist pl:
+                    _viewKind = SidebarRowKind.Playlist; _current = pl;
+                    BuildSidebar(); ShowCurrent();
+                    break;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Run a view switch with an Apple-style cross-dissolve over the centre region: snapshot the current
+    /// content, apply the switch (which repopulates the centre), snapshot the result, then dissolve from
+    /// one to the other. Falls back to an instant switch when motion is off or a snapshot isn't possible.
+    /// </summary>
+    private void TransitionCenter(Action switchViews)
+    {
+        var center = _center;
+        if (center is null || !Anim.MotionEnabled || _viewTransitionBusy || !center.IsHandleCreated || center.Width < 8 || center.Height < 8)
+        {
+            switchViews();
+            return;
         }
+
+        Bitmap? oldBmp = null, newBmp = null;
+        try
+        {
+            oldBmp = new Bitmap(center.Width, center.Height);
+            center.DrawToBitmap(oldBmp, new Rectangle(0, 0, center.Width, center.Height));
+        }
+        catch { oldBmp?.Dispose(); switchViews(); return; }
+
+        switchViews();
+
+        try
+        {
+            newBmp = new Bitmap(center.Width, center.Height);
+            center.DrawToBitmap(newBmp, new Rectangle(0, 0, center.Width, center.Height));
+        }
+        catch { oldBmp.Dispose(); newBmp?.Dispose(); return; }
+
+        var overlay = new CrossfadePanel(oldBmp, newBmp) { Bounds = new Rectangle(0, 0, center.Width, center.Height) };
+        _viewTransitionBusy = true;
+        center.Controls.Add(overlay);
+        overlay.BringToFront();
+        overlay.Start(() => { if (!center.IsDisposed) center.Controls.Remove(overlay); overlay.Dispose(); _viewTransitionBusy = false; });
     }
 
     // ---- track view ----
@@ -852,20 +895,23 @@ internal sealed class MainForm : Form
     {
         if (_db is null) return;
         ClearSearch(); // drilling into an album/artist starts unfiltered (no leftover query)
-        if (_viewKind == SidebarRowKind.Albums)
+        TransitionCenter(() =>
         {
-            _browseFilter = t => AlbumKey(t) == key;
-            var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
-            _browseTitle = first is not null ? DisplayAlbum(first) : "Album";
-            _browseKicker = "ALBUM";
-        }
-        else
-        {
-            _browseFilter = t => ArtistKey(t) == key;
-            _browseTitle = key.Length > 0 ? key : "Unknown Artist";
-            _browseKicker = "ARTIST";
-        }
-        ShowCurrent();
+            if (_viewKind == SidebarRowKind.Albums)
+            {
+                _browseFilter = t => AlbumKey(t) == key;
+                var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
+                _browseTitle = first is not null ? DisplayAlbum(first) : "Album";
+                _browseKicker = "ALBUM";
+            }
+            else
+            {
+                _browseFilter = t => ArtistKey(t) == key;
+                _browseTitle = key.Length > 0 ? key : "Unknown Artist";
+                _browseKicker = "ARTIST";
+            }
+            ShowCurrent();
+        });
     }
 
     private void LoadBrowseCoversAsync(Dictionary<string, Track> reps)
@@ -1073,7 +1119,7 @@ internal sealed class MainForm : Form
 
         string cap = total > 0 ? $"{CapacityBar.Human(total - free)} of {CapacityBar.Human(total)} used" : "Connected";
         _header.SetInfo("DEVICE", p.ModelName ?? p.ModelNumber ?? "iPod", cap, Theme.StableHash(p.ModelName ?? "iPod"));
-        using (var art = IpodArt.Render(p.Generation, 150)) _header.SetArt(art); // an iPod picture, not a cover-art gradient
+        using (var art = IpodArt.Render(p.Generation, 150, p.ModelNumber)) _header.SetArt(art); // a picture of THIS iPod, in its real colour
         _header.ArtClickable = false;
 
         BuildDeviceView(p, total, free, music, video, photoBytes, other, songCount, videoCount, photoCount);

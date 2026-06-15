@@ -23,6 +23,9 @@ internal sealed class HeaderPanel : Panel
     private string _subtitle = "";
     private int _seed;
     private Bitmap? _art;
+    private Bitmap? _artPrev;     // outgoing snapshot held during a cross-fade
+    private float _artFade = 1f;  // 0 = art just changed (show outgoing), 1 = settled (show current)
+    private Tween? _artTween;
     private bool _artHover;
 
     private const int Pad = 22;
@@ -59,15 +62,40 @@ internal sealed class HeaderPanel : Panel
     /// </summary>
     public void SetArt(Bitmap? art)
     {
+        var newCopy = art is null ? null : new Bitmap(art);
         var old = _art;
-        _art = art is null ? null : new Bitmap(art);
+        if (ReferenceEquals(old, newCopy)) return; // both null → nothing to do
+
+        // Capture whatever is on screen right now, then cross-dissolve to the new art (Apple-style).
+        _artTween?.Cancel();
+        _artPrev?.Dispose();
+        _artPrev = SnapshotTile();
+        _art = newCopy;
         if (!ReferenceEquals(old, _art)) old?.Dispose();
-        Invalidate();
+        _artFade = 0f;
+        _artTween = Anim.Run(220,
+            v => { _artFade = (float)v; if (!IsDisposed) InvalidateArt(); },
+            () => { _artTween = null; _artPrev?.Dispose(); _artPrev = null; _artFade = 1f; if (!IsDisposed) InvalidateArt(); },
+            Easings.OutCubic);
+        InvalidateArt();
     }
+
+    /// <summary>A square snapshot of the tile currently displayed (real art or the generated gradient).</summary>
+    private Bitmap SnapshotTile()
+    {
+        int sz = Math.Max(8, ArtSize);
+        var bmp = new Bitmap(sz, sz);
+        using var g = Graphics.FromImage(bmp);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.DrawImage(_art ?? Theme.MakeArt(sz, _seed), 0, 0, sz, sz);
+        return bmp;
+    }
+
+    private void InvalidateArt() => Invalidate(new Rectangle(Pad - 2, Pad - 2, ArtSize + 8, ArtSize + 12));
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _art?.Dispose(); _art = null; }
+        if (disposing) { _artTween?.Cancel(); _art?.Dispose(); _art = null; _artPrev?.Dispose(); _artPrev = null; }
         base.Dispose(disposing);
     }
 
@@ -96,7 +124,13 @@ internal sealed class HeaderPanel : Panel
         using (var sp = Theme.RoundedRect(new RectangleF(artRect.X + 2, artRect.Y + 4, artSize, artSize), artSize * 0.14f))
             g.FillPath(sh, sp);
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        g.DrawImage(_art ?? Theme.MakeArt(artSize, _seed), artRect);
+        var artNow = _art ?? Theme.MakeArt(artSize, _seed);
+        if (_artPrev is not null && _artFade < 1f)
+        {
+            g.DrawImage(_artPrev, artRect);                          // outgoing holds its place
+            Theme.DrawImageAlpha(g, artNow, artRect, _artFade);     // incoming dissolves in over it
+        }
+        else g.DrawImage(artNow, artRect);
         if (ArtClickable && _artHover)
         {
             using (var ov = new SolidBrush(Color.FromArgb(125, 0, 0, 0)))
