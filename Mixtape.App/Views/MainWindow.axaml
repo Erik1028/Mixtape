@@ -59,8 +59,8 @@
     </Style>
   </Window.Styles>
 
-  <!-- Wallpaper: 58° gradient + soft accent glow, then the floating cards on top -->
-  <Grid>
+  <!-- Wallpaper: 58° gradient + soft accent glow, then the floating cards on top (repainted by ApplyWallpaper) -->
+  <Grid x:Name="Root">
     <Grid.Background>
       <LinearGradientBrush StartPoint="0%,0%" EndPoint="53%,85%">
         <GradientStop Offset="0.0"  Color="#0E0E10"/>
@@ -69,8 +69,8 @@
       </LinearGradientBrush>
     </Grid.Background>
 
-    <!-- top-left teal glow -->
-    <Ellipse Width="780" Height="780" HorizontalAlignment="Left" VerticalAlignment="Top"
+    <!-- top-left accent glow -->
+    <Ellipse x:Name="Glow" Width="780" Height="780" HorizontalAlignment="Left" VerticalAlignment="Top"
              Margin="-220,-300,0,0" IsHitTestVisible="False">
       <Ellipse.Fill>
         <RadialGradientBrush>
@@ -92,6 +92,11 @@
             <TextBlock Text="Mixtape" FontSize="18" FontWeight="SemiBold"
                        VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"/>
           </StackPanel>
+
+          <Button DockPanel.Dock="Bottom" Content="⚙  Settings" Click="OnSettings"
+                  Background="Transparent" BorderThickness="0" HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Left" Margin="10,0,10,10" Padding="8,6"
+                  Foreground="{StaticResource SubtleBrush}"/>
 
           <ListBox ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebar, Mode=TwoWay}"
                    Background="Transparent" BorderThickness="0" Padding="8,4">

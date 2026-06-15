@@ -12,7 +12,15 @@ public partial class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            desktop.MainWindow = new MainWindow();
+        {
+            // Test aid: `--settings` opens the Settings dialog directly (for screenshots).
+            if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "--settings") >= 0)
+            {
+                AppTheme.Apply("Teal", "Graphite");
+                desktop.MainWindow = new Views.SettingsWindow();
+            }
+            else desktop.MainWindow = new MainWindow();
+        }
         base.OnFrameworkInitializationCompleted();
     }
 }
