@@ -113,10 +113,34 @@ internal static class Theme
         return path;
     }
 
-    /// <summary>A simple, crisp beamed double-note (♫), perfectly symmetric so it reads dead-centre in
-    /// <paramref name="r"/>: two parallel stems joined by a top beam, with a tilted oval head under each.
-    /// One shared placeholder mark for the idle player cover and generated album art.</summary>
+    // Windows' designed icon font, resolved once. Segoe Fluent Icons (Win11) draws a clean beamed
+    // double-note at U+E8D6; Segoe MDL2 Assets (Win10) is the fallback. Null only if neither exists.
+    private static readonly string? IconFont = ResolveIconFont();
+    private static string? ResolveIconFont()
+    {
+        foreach (var name in new[] { "Segoe Fluent Icons", "Segoe MDL2 Assets" })
+            try { using var ff = new FontFamily(name); return name; } catch { }
+        return null;
+    }
+
+    /// <summary>The placeholder music mark for the idle player cover and generated album art: a clean
+    /// beamed double-note from Windows' icon font, centred in <paramref name="r"/>. Falls back to a
+    /// hand-drawn vector note if the icon font is unavailable (so it can never render as a tofu box).</summary>
     public static void DrawNote(Graphics g, RectangleF r, Color c)
+    {
+        if (IconFont is null) { DrawNoteVector(g, r, c); return; }
+        var savedHint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+        using var f = new Font(IconFont, Math.Min(r.Width, r.Height) * 0.5f, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(c);
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString("\uE8D6", f, b, r, sf);
+        g.TextRenderingHint = savedHint;
+    }
+
+    /// <summary>Fallback beamed double-note, perfectly symmetric so it reads dead-centre: two parallel
+    /// stems joined by a top beam, with a tilted oval head under each.</summary>
+    private static void DrawNoteVector(Graphics g, RectangleF r, Color c)
     {
         var savedSmooth = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
