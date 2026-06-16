@@ -24,7 +24,7 @@ internal sealed class SettingsForm : Form
     private const int CardW = 608;                      // card width (fills the pane to a matching right gutter)
     private const int PaneW = CardW + SideMargin * 2;   // content pane width
     private const int ContentLeft = SideMargin;         // card column left edge
-    private const int MinHeight = 380, MaxHeight = 620; // size-to-content clamp
+    private const int MinHeight = 380, MaxHeight = 900; // size-to-content clamp (tall enough for the dense Library page → no scrollbar)
 
     private static readonly string[] Categories = { "Appearance", "Library", "Video", "Photos", "Safety", "This iPod", "About" };
 
@@ -115,7 +115,9 @@ internal sealed class SettingsForm : Form
         // Size the dialog to its content (clamped) so sparse pages (Photos/Safety/About) aren't a
         // mostly-empty 600px window, while dense ones (Library) still fit without scrolling. _y already
         // holds the exact content bottom (+10 trailing gap) since the layout is absolute.
-        int desired = Math.Clamp(_y + 12, MinHeight, MaxHeight);
+        // Grow to fit the content (so dense pages don't scroll), but never taller than the screen.
+        int screenMax = Screen.FromControl(this).WorkingArea.Height - 72;
+        int desired = Math.Clamp(_y + 12, MinHeight, Math.Min(MaxHeight, screenMax));
         if (ClientSize.Height != desired) ClientSize = new Size(ClientSize.Width, desired);
 
         if (categoryChanged) AnimatePaneIn();
@@ -308,11 +310,16 @@ internal sealed class SettingsForm : Form
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+    [System.Runtime.InteropServices.DllImport("uxtheme.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string? subAppName, string? subIdList);
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
         try { int caption = 0x001A1716; DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
+        // Dark scrollbar instead of the bright native one, for the rare case the pane still scrolls
+        // (a screen too short to fit a dense page).
+        try { SetWindowTheme(_pane.Handle, "DarkMode_Explorer", null); } catch { }
     }
 }
