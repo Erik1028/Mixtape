@@ -7,7 +7,8 @@ namespace iPodCommander;
 /// cover, title/artist, prev / play-pause / next, a draggable seek bar with elapsed/total time, an
 /// equalizer toggle and a volume slider. It owns a tiny audio-only engine and plays the file straight
 /// off the iPod (or a local PC file). When nothing is playing it shows a quiet idle state instead of
-/// hiding. Prev/Next are raised so the form can pick the neighbouring track in the current list.
+/// hiding. The layout is RESPONSIVE — as the window narrows it drops the volume slider, then the EQ,
+/// then the seek times, then the seek bar, then the title — so the controls never overlap.
 /// </summary>
 internal sealed class NowPlayingBar : Panel
 {
@@ -30,6 +31,8 @@ internal sealed class NowPlayingBar : Panel
     private double _scrubFrac = -1; // while dragging the seek bar
 
     public const int H = 88;
+    private const int RightPad = 20, ControlsY = 13;
+    private int SeekY => H - 24;
 
     public NowPlayingBar()
     {
@@ -110,31 +113,52 @@ internal sealed class NowPlayingBar : Panel
         Invalidate();
     }
 
-    // ---- layout (left = cover+title, centre = controls over a long seek bar, right = EQ + volume) ----
-    private const int RightPad = 20, LeftEnd = 268; // LeftEnd = where the cover+title zone ends
-    private Rectangle CoverRect => new(18, (H - 56) / 2, 56, 56);
-
-    // right zone, vertically centred
-    private Rectangle VolTrack => new(Width - RightPad - 96, H / 2 - 2, 96, 4);
-    private Rectangle SpeakerRect => new(VolTrack.Left - 10 - 20, (H - 22) / 2, 20, 22);
-    private Rectangle EqRect => new(SpeakerRect.Left - 14 - 24, (H - 24) / 2, 24, 24);
-    private int RightStart => EqRect.Left - 16;
-
-    // centre zone spans [LeftEnd, RightStart]; controls sit centred over a long seek bar beneath them
-    private int CenterX => (LeftEnd + Math.Max(LeftEnd + 160, RightStart)) / 2;
-    private int ControlsY => 13;
-    private Rectangle PlayRect => new(CenterX - 19, ControlsY, 38, 38);
-    private Rectangle PrevRect => new(PlayRect.Left - 14 - 30, ControlsY + 4, 30, 30);
-    private Rectangle NextRect => new(PlayRect.Right + 14, ControlsY + 4, 30, 30);
-
-    private int SeekY => H - 24;
-    private Rectangle SeekTrack
+    // ---- responsive layout (one source of truth for paint + hit-testing) ----
+    private struct Lo
     {
-        get
-        {
-            int left = LeftEnd + 44, right = Math.Max(left + 80, RightStart - 44);
-            return new Rectangle(left, SeekY, right - left, 5);
-        }
+        public Rectangle Cover; public int TextX, TextW; public bool ShowTitle;
+        public Rectangle Prev, Play, Next;
+        public Rectangle Seek; public bool ShowSeek, ShowTimes;
+        public Rectangle Eq; public bool ShowEq;
+        public Rectangle Speaker; public bool ShowSpeaker;
+        public Rectangle Vol; public bool ShowVol;
+    }
+
+    private Lo Layout()
+    {
+        int w = Width;
+        var l = new Lo { Cover = new Rectangle(16, (H - 56) / 2, 56, 56) };
+        int leftBound = l.Cover.Right + 8;
+
+        // Right cluster, built from the right edge inward; widgets appear only when there's room.
+        l.ShowVol = w >= 660;
+        l.ShowSpeaker = w >= 470;
+        l.ShowEq = w >= 540;
+        int rc = w - RightPad;
+        if (l.ShowVol) { l.Vol = new Rectangle(rc - 92, H / 2 - 2, 92, 4); rc = l.Vol.Left - 12; }
+        if (l.ShowSpeaker) { l.Speaker = new Rectangle(rc - 20, (H - 22) / 2, 20, 22); rc = l.Speaker.Left - 14; }
+        if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, (H - 24) / 2, 24, 24); rc = l.Eq.Left - 14; }
+        int rightStart = rc;
+
+        // Transport (122px block) centred between the cover and the right cluster, clamped so it never overlaps either.
+        const int half = 61;
+        int cx = Math.Clamp((leftBound + rightStart) / 2, leftBound + half, Math.Max(leftBound + half, rightStart - half));
+        l.Play = new Rectangle(cx - 19, ControlsY, 38, 38);
+        l.Prev = new Rectangle(l.Play.Left - 12 - 30, ControlsY + 4, 30, 30);
+        l.Next = new Rectangle(l.Play.Right + 12, ControlsY + 4, 30, 30);
+
+        // Title zone, left of the transport — hidden when there isn't enough room.
+        l.TextX = l.Cover.Right + 12;
+        l.TextW = l.Prev.Left - 12 - l.TextX;
+        l.ShowTitle = l.TextW >= 90;
+
+        // Seek bar at the bottom, spanning the centre; times at the ends only when wide.
+        l.ShowSeek = w >= 460 && rightStart - leftBound >= 150;
+        l.ShowTimes = w >= 740;
+        int sL = leftBound + (l.ShowTimes ? 44 : 4);
+        int sR = rightStart - (l.ShowTimes ? 44 : 4);
+        l.Seek = new Rectangle(sL, SeekY, Math.Max(60, sR - sL), 5);
+        return l;
     }
 
     // ---- interaction ----
@@ -143,34 +167,36 @@ internal sealed class NowPlayingBar : Panel
 
     private void OnDown(object? s, MouseEventArgs e)
     {
+        var l = Layout();
         // EQ + volume are settings — usable even with nothing loaded.
-        if (EqRect.Contains(e.Location)) { EqualizerRequested?.Invoke(); return; }
-        if (SpeakerRect.Contains(e.Location))
+        if (l.ShowEq && l.Eq.Contains(e.Location)) { EqualizerRequested?.Invoke(); return; }
+        if (l.ShowSpeaker && l.Speaker.Contains(e.Location))
         {
             _muted = !_muted;
-            if (!_muted && _volume <= 0.001) _volume = _lastVol > 0.001 ? _lastVol : 0.5; // unmuting from a slider-zero → audible again
+            if (!_muted && _volume <= 0.001) _volume = _lastVol > 0.001 ? _lastVol : 0.5;
             _engine.Volume = _muted ? 0 : _volume;
             Invalidate(); return;
         }
-        if (Inflate(VolTrack, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; SetVolumeFromX(e.X); return; }
+        if (l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; SetVolumeFromX(l.Vol, e.X); return; }
 
         if (_track is null) return; // transport needs a loaded track
-        if (PlayRect.Contains(e.Location)) { TogglePlay(); return; }
-        if (PrevRect.Contains(e.Location)) { PrevRequested?.Invoke(); return; }
-        if (NextRect.Contains(e.Location)) { NextRequested?.Invoke(); return; }
-        if (Inflate(SeekTrack, 0, 10).Contains(e.Location)) { _drag = Drag.Seek; ScrubTo(e.X); return; }
+        if (l.Play.Contains(e.Location)) { TogglePlay(); return; }
+        if (l.Prev.Contains(e.Location)) { PrevRequested?.Invoke(); return; }
+        if (l.Next.Contains(e.Location)) { NextRequested?.Invoke(); return; }
+        if (l.ShowSeek && Inflate(l.Seek, 0, 10).Contains(e.Location)) { _drag = Drag.Seek; ScrubTo(l.Seek, e.X); return; }
     }
 
     private void OnMove(object? s, MouseEventArgs e)
     {
-        if (_drag == Drag.Volume) { SetVolumeFromX(e.X); return; }
-        if (_drag == Drag.Seek) { ScrubTo(e.X); return; }
-        var h = SpeakerRect.Contains(e.Location) ? Hit.Speaker
-            : EqRect.Contains(e.Location) ? Hit.Eq
+        var l = Layout();
+        if (_drag == Drag.Volume && l.ShowVol) { SetVolumeFromX(l.Vol, e.X); return; }
+        if (_drag == Drag.Seek && l.ShowSeek) { ScrubTo(l.Seek, e.X); return; }
+        var h = l.ShowSpeaker && l.Speaker.Contains(e.Location) ? Hit.Speaker
+            : l.ShowEq && l.Eq.Contains(e.Location) ? Hit.Eq
             : _track is null ? Hit.None
-            : PlayRect.Contains(e.Location) ? Hit.Play
-            : PrevRect.Contains(e.Location) ? Hit.Prev
-            : NextRect.Contains(e.Location) ? Hit.Next
+            : l.Play.Contains(e.Location) ? Hit.Play
+            : l.Prev.Contains(e.Location) ? Hit.Prev
+            : l.Next.Contains(e.Location) ? Hit.Next
             : Hit.None;
         if (h != _hover) { _hover = h; Invalidate(); }
     }
@@ -184,17 +210,15 @@ internal sealed class NowPlayingBar : Panel
         Invalidate();
     }
 
-    private void ScrubTo(int x)
+    private void ScrubTo(Rectangle seek, int x)
     {
-        var t = SeekTrack;
-        _scrubFrac = Math.Clamp((x - t.Left) / (double)t.Width, 0, 1);
+        _scrubFrac = Math.Clamp((x - seek.Left) / (double)seek.Width, 0, 1);
         Invalidate();
     }
 
-    private void SetVolumeFromX(int x)
+    private void SetVolumeFromX(Rectangle vol, int x)
     {
-        var t = VolTrack;
-        _volume = Math.Clamp((x - t.Left) / (double)t.Width, 0, 1);
+        _volume = Math.Clamp((x - vol.Left) / (double)vol.Width, 0, 1);
         if (_volume > 0.001) _lastVol = _volume;
         _muted = _volume <= 0.001;
         _engine.Volume = _volume;
@@ -208,14 +232,14 @@ internal sealed class NowPlayingBar : Panel
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        // subtle vertical gradient for depth (sits a touch lighter at top, darker at the bottom edge)
         using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, H),
             Theme.Blend(Theme.SidebarBg, Color.White, 0.02), Theme.Blend(Theme.SidebarBg, Color.Black, 0.10), 90f))
             g.FillRectangle(bg, 0, 0, Width, H);
         using (var seam = new Pen(Theme.Border)) g.DrawLine(seam, 0, 0, Width, 0);
 
+        var l = Layout();
         bool idle = _track is null;
-        var cr = CoverRect;
+        var cr = l.Cover;
 
         // cover (soft shadow + rounded, clipped art or an idle placeholder)
         using (var shp = Theme.RoundedRect(new RectangleF(cr.X + 1, cr.Y + 2, cr.Width, cr.Height), 10))
@@ -227,7 +251,6 @@ internal sealed class NowPlayingBar : Panel
             if (idle)
                 using (var ph = new LinearGradientBrush(cr, Color.FromArgb(46, 52, 64), Color.FromArgb(28, 32, 40), 45f)) g.FillRectangle(ph, cr);
             else
-                // MakeArt returns a cache-owned bitmap — never dispose it; _cover is the bar's own clone.
                 g.DrawImage(_cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff)), cr);
             g.Clip = saved;
         }
@@ -236,37 +259,44 @@ internal sealed class NowPlayingBar : Panel
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(cr, 10); g.DrawPath(bp, cp2); }
 
-        // title / artist (vertically centred in the left zone)
-        int tx = cr.Right + 14, tw = LeftEnd - tx - 8;
-        string title = idle ? "Nothing playing" : _track!.DisplayTitle;
-        string sub = idle ? "Pick a song to start"
-                          : string.Join("  •  ", new[] { _track!.Artist, _track.Album }.Where(x => !string.IsNullOrWhiteSpace(x)));
-        TextRenderer.DrawText(g, title, Theme.UiFont(10.5f, FontStyle.Bold),
-            new Rectangle(tx, H / 2 - 20, tw, 20), idle ? Theme.Subtle : Theme.TextCol,
-            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
-        TextRenderer.DrawText(g, sub, Theme.UiFont(8.75f),
-            new Rectangle(tx, H / 2 + 2, tw, 18), idle ? Theme.Faint : Theme.Subtle,
-            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        // title / artist (hidden when the window is too narrow)
+        if (l.ShowTitle)
+        {
+            string title = idle ? "Nothing playing" : _track!.DisplayTitle;
+            string sub = idle ? "Pick a song to start"
+                              : string.Join("  •  ", new[] { _track!.Artist, _track.Album }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            TextRenderer.DrawText(g, title, Theme.UiFont(10.5f, FontStyle.Bold),
+                new Rectangle(l.TextX, H / 2 - 20, l.TextW, 20), idle ? Theme.Subtle : Theme.TextCol,
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(g, sub, Theme.UiFont(8.75f),
+                new Rectangle(l.TextX, H / 2 + 2, l.TextW, 18), idle ? Theme.Faint : Theme.Subtle,
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
 
         // transport (dimmed + inert when idle)
-        DrawCircleGlyph(g, PrevRect, _hover == Hit.Prev, GlyphPrev, idle);
-        DrawPlayButton(g, PlayRect, _hover == Hit.Play, idle);
-        DrawCircleGlyph(g, NextRect, _hover == Hit.Next, GlyphNext, idle);
+        DrawCircleGlyph(g, l.Prev, _hover == Hit.Prev, GlyphPrev, idle);
+        DrawPlayButton(g, l.Play, _hover == Hit.Play, idle);
+        DrawCircleGlyph(g, l.Next, _hover == Hit.Next, GlyphNext, idle);
 
         // seek
-        double dur = _engine.Duration.TotalSeconds;
-        double pos = _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
-        double frac = _scrubFrac >= 0 ? _scrubFrac : (dur > 0 ? Math.Clamp(pos / dur, 0, 1) : 0);
-        var st = SeekTrack;
-        DrawSlider(g, st, idle ? 0 : frac, !idle);
-        double shown = _scrubFrac >= 0 ? _scrubFrac * dur : pos;
-        TextRenderer.DrawText(g, idle ? "0:00" : Fmt(shown), Theme.UiFont(8f), new Rectangle(st.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-        TextRenderer.DrawText(g, idle ? "0:00" : Fmt(dur), Theme.UiFont(8f), new Rectangle(st.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        if (l.ShowSeek)
+        {
+            double dur = _engine.Duration.TotalSeconds;
+            double pos = _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
+            double frac = _scrubFrac >= 0 ? _scrubFrac : (dur > 0 ? Math.Clamp(pos / dur, 0, 1) : 0);
+            DrawSlider(g, l.Seek, idle ? 0 : frac, !idle);
+            if (l.ShowTimes)
+            {
+                double shown = _scrubFrac >= 0 ? _scrubFrac * dur : pos;
+                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(shown), Theme.UiFont(8f), new Rectangle(l.Seek.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(dur), Theme.UiFont(8f), new Rectangle(l.Seek.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            }
+        }
 
-        // equalizer + volume (always interactive)
-        DrawEqGlyph(g, EqRect, _hover == Hit.Eq);
-        DrawSpeaker(g, SpeakerRect, _muted, _hover == Hit.Speaker);
-        DrawSlider(g, VolTrack, _muted ? 0 : _volume, false);
+        // equalizer + volume (always interactive when shown)
+        if (l.ShowEq) DrawEqGlyph(g, l.Eq, _hover == Hit.Eq);
+        if (l.ShowSpeaker) DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
+        if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, false);
     }
 
     private static string Fmt(double sec)
@@ -344,7 +374,6 @@ internal sealed class NowPlayingBar : Panel
         using var b = new SolidBrush(c);
         using var p = new Pen(c, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X, cy = r.Y + r.Height / 2f;
-        // speaker body
         g.FillPolygon(b, new[]
         {
             new PointF(x, cy - 3), new PointF(x + 5, cy - 3), new PointF(x + 10, cy - 7),
@@ -365,13 +394,12 @@ internal sealed class NowPlayingBar : Panel
     private void DrawEqGlyph(Graphics g, Rectangle r, bool hover)
     {
         if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, 6); g.FillPath(hb, hp); }
-        // three little sliders (EQ icon); tinted accent when the EQ is on
         Color c = _eqOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var bar = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var dot = new SolidBrush(c);
         float[] xs = { r.X + 7, r.X + 12, r.X + 17 };
         float top = r.Y + 6, bot = r.Bottom - 6;
-        float[] knob = { r.Y + 13, r.Y + 9, r.Y + 15 }; // each slider's knob height
+        float[] knob = { r.Y + 13, r.Y + 9, r.Y + 15 };
         for (int i = 0; i < 3; i++)
         {
             g.DrawLine(bar, xs[i], top, xs[i], bot);
