@@ -274,11 +274,13 @@ internal sealed class NowPlayingBar : Panel
             string title = idle ? "Nothing playing" : _track!.DisplayTitle;
             string sub = idle ? "Pick a song to start"
                               : string.Join("  •  ", new[] { _track!.Artist, _track.Album }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            // Sit the title/artist in the TOP band (aligned with the transport), not vertically centred —
+            // otherwise the subtitle drops onto the seek bar + "0:00" times along the bottom.
             TextRenderer.DrawText(g, title, Theme.UiFont(10.5f, FontStyle.Bold),
-                new Rectangle(l.TextX, H / 2 - 20, l.TextW, 20), idle ? Theme.Subtle : Theme.TextCol,
+                new Rectangle(l.TextX, 12, l.TextW, 22), idle ? Theme.Subtle : Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
             TextRenderer.DrawText(g, sub, Theme.UiFont(8.75f),
-                new Rectangle(l.TextX, H / 2 + 2, l.TextW, 18), idle ? Theme.Faint : Theme.Subtle,
+                new Rectangle(l.TextX, 34, l.TextW, 16), idle ? Theme.Faint : Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
