@@ -50,6 +50,9 @@ internal sealed class AppSettings
     // ---- Safety ----
     /// <summary>Ask for confirmation before the first write of a session.</summary>
     public bool ConfirmWrites { get; set; } = true;
+    /// <summary>Automatically recover a read-only hash58 iPod's FireWire GUID on connect, but only enable
+    /// writing when the recovered ID provably matches the device's existing signature.</summary>
+    public bool AutoEnableWriting { get; set; } = true;
 
     // ---- Cover art ----
     /// <summary>Chosen pre-made cover art per target (playlist pid hex, or "lib:&lt;dbid&gt;"); value = CoverArt id.</summary>

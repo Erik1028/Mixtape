@@ -199,6 +199,7 @@ internal sealed class SettingsForm : Form
     private void BuildSafety()
     {
         Row("Confirm before writing", "Show a reminder before the first change each session.", Toggle(_s.ConfirmWrites, v => { _s.ConfirmWrites = v; _s.Save(); }));
+        Row("Auto-enable writing", "On read-only iPods, read the hardware ID from the device and enable writing automatically — but only when it provably matches the iPod's existing signature.", Toggle(_s.AutoEnableWriting, v => { _s.AutoEnableWriting = v; _s.Save(); }));
         if (_device is not null)
         {
             var restore = new ThemedButton { Text = "Restore…", Pill = true, Width = 110, Height = 30 };

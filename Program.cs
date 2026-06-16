@@ -78,6 +78,9 @@ internal static class Program
         // Self-test for the GUID-recovery picker: candidate selection by signature + SysInfo persistence. → ipod-guidpicktest.txt
         if (args.Length >= 1 && args[0] == "--guidpicktest") { RunGuidPickTest(args.Length >= 2 ? args[1] : null); return; }
 
+        // Dry-run the auto-recovery engine on a real iPod (read-only — does NOT write to the device). → ipod-recovertest.txt
+        if (args.Length >= 2 && args[0] == "--recovertest") { RunRecoverTest(args[1]); return; }
+
         // Offline ArtworkDB build/parse/round-trip + DBID-linkage self-test → ipod-artworktest.txt
         if (args.Length >= 1 && args[0] == "--artworktest") { RunArtworkTest(); return; }
 
@@ -1769,6 +1772,48 @@ internal static class Program
         }
         catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-guidpicktest.txt"), log.ToString());
+    }
+
+    /// <summary>
+    /// Dry-run the automatic GUID-recovery engine against a real iPod and report what it would do,
+    /// WITHOUT writing anything to the device. Mirrors the auto path (USB-serial only, no SCSI, no
+    /// trusting an unverifiable id). → ipod-recovertest.txt
+    /// </summary>
+    private static void RunRecoverTest(string root)
+    {
+        var log = new StringBuilder();
+        try
+        {
+            var device = DeviceDetector.Build(root);
+            if (device is null) { log.AppendLine($"No iPod_Control under '{root}'."); }
+            else
+            {
+                var p = device.Profile;
+                log.AppendLine($"device : {device.DisplayName}");
+                log.AppendLine($"scheme : {p.SchemeLabel}");
+                log.AppendLine($"GUID   : {p.FirewireGuid ?? "(none)"}");
+                log.AppendLine();
+                // Same parameters the automatic on-connect path uses, but dry-run so nothing is written.
+                var r = GuidRecovery.Recover(device, allowScsi: false, allowTrustUnverified: false, dryRun: true);
+                log.AppendLine($"recovery status : {r.Status}");
+                if (r.Guid is not null) log.AppendLine($"id read         : {r.Guid}");
+                if (r.SwapVariant is not null) log.AppendLine($"swap variant    : {r.SwapVariant}");
+                if (r.Message is not null) log.AppendLine($"detail          : {r.Message}");
+                log.AppendLine();
+                log.AppendLine(r.Status switch
+                {
+                    GuidRecoveryStatus.EnabledVerified => "Auto-recovery WOULD enable writing (the read id matches this iPod's signature).",
+                    GuidRecoveryStatus.Unverified => "Auto-recovery would do nothing (an id was read but there's no signature to verify it; use the manual button to trust it).",
+                    GuidRecoveryStatus.Mismatch => "Auto-recovery would do nothing (the read id does NOT match this iPod's signature).",
+                    GuidRecoveryStatus.NoIdFound => "Auto-recovery would do nothing (no hardware id could be read over USB).",
+                    _ => $"Auto-recovery result: {r.Status}.",
+                });
+            }
+            log.AppendLine();
+            log.AppendLine("RESULT: OK");
+        }
+        catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-recovertest.txt"), log.ToString());
     }
 
     private static void RunPhotoRoundtrip(string root)
