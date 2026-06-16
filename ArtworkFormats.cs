@@ -12,10 +12,13 @@ internal static class ArtworkFormats
     private static readonly PhotoFormat[] Photo = { new(1017, 56, 56, false), new(1016, 140, 140, true) };     // iPod photo (4G)
     private static readonly PhotoFormat[] Video = { new(1028, 100, 100, false), new(1029, 200, 200, true) };   // 5G video
     private static readonly PhotoFormat[] Nano12 = { new(1031, 42, 42, false), new(1027, 100, 100, true) };    // nano 1G/2G
-    private static readonly PhotoFormat[] Nano3 = { new(1061, 56, 56, false), new(1055, 128, 128, true) };     // nano 3G
+    // Nano 3G + Classic share libgpod's ipod_classic_1_cover_art_info — the FULL set: 56×56 list thumb,
+    // two 128×128, and the 320×320 now-playing image. (Verified via deep research: writing only a
+    // subset left the now-playing screen blank; extra formats are tolerated.)
+    private static readonly PhotoFormat[] Nano3 = { new(1061, 56, 56, false), new(1055, 128, 128, false), new(1068, 128, 128, false), new(1060, 320, 320, true) };
+    private static readonly PhotoFormat[] Classic = { new(1061, 56, 56, false), new(1055, 128, 128, false), new(1068, 128, 128, false), new(1060, 320, 320, true) };
     private static readonly PhotoFormat[] Nano4 = { new(1055, 128, 128, false), new(1071, 240, 240, true) };   // nano 4G
     private static readonly PhotoFormat[] Nano5 = { new(1078, 80, 80, false), new(1073, 240, 240, true) };     // nano 5G
-    private static readonly PhotoFormat[] Classic = { new(1061, 56, 56, false), new(1055, 128, 128, true) };   // classic 1/2/3 (+ shared list thumb)
 
     /// <summary>Album-art formats for this device, or empty if the model has no on-screen artwork.</summary>
     public static PhotoFormat[] For(IPodGeneration gen) => gen switch

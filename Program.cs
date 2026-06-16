@@ -1591,7 +1591,8 @@ internal static class Program
             {
                 var it = m.Items[0];
                 Check(it.TrackDbid == dbid, "item DBID links back to the track (mhii@0x18 == mhit@0x70)");
-                Check(it.Thumbs.Count == 2, $"2 thumbs (got {it.Thumbs.Count}) — Nano3 1061 + 1055");
+                int want = ArtworkFormats.For(IPodGeneration.Nano3).Length;
+                Check(it.Thumbs.Count == want, $"{want} thumbs (got {it.Thumbs.Count}) — Nano3 cover-art formats");
                 foreach (var t in it.Thumbs)
                 {
                     string f = Path.Combine(sandbox, "iPod_Control", "Artwork", $"F{t.FormatId}_{t.FileIndex}.ithmb");
