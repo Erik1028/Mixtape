@@ -262,7 +262,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.AllowUserToAddRows = false;
         _tracks.AllowUserToDeleteRows = false;
         _tracks.AllowUserToResizeRows = false;
-        _tracks.AllowUserToResizeColumns = false;
+        _tracks.AllowUserToResizeColumns = true;   // drag column borders to resize (Fill columns adjust their weights)
         _tracks.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _tracks.MultiSelect = true;
         _tracks.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
@@ -1026,7 +1026,7 @@ internal sealed class MainForm : Form, IMessageFilter
         foreach (var t in list) totalMs += t.LengthMs;
         SortTracks(list);
         UpdateSortIndicators();
-        int artSize = _settings.Compact ? 30 : 36;
+        int artSize = _settings.Compact ? 22 : 36;
 
         _tracks.SuspendLayout();
         _populatingGrid = true; // ignore the selection churn while we add rows
@@ -2191,7 +2191,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void FillLocalGrid()
     {
-        int artSize = _settings.Compact ? 30 : 36;
+        int artSize = _settings.Compact ? 22 : 36;
         var list = _localTracks.AsEnumerable();
         if (_searchQuery.Length > 0) list = list.Where(t => Match(t, _searchQuery));
         var shown = list.ToList();
@@ -2314,7 +2314,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void FillLocalPlaylistGrid(LocalPlaylistData lp, List<Track> tracks)
     {
-        int artSize = _settings.Compact ? 30 : 36;
+        int artSize = _settings.Compact ? 22 : 36;
         var list = (_searchQuery.Length > 0 ? tracks.Where(t => Match(t, _searchQuery)) : tracks).ToList(); // preserve playlist order
         _tracks.SuspendLayout(); _populatingGrid = true; _tracks.Rows.Clear();
         long totalMs = 0;

@@ -33,7 +33,7 @@ internal sealed class ThinScrollBar : Control
         grid.RowsRemoved += (_, _) => Invalidate();
         grid.Scroll += (_, _) => Invalidate();
         grid.SizeChanged += (_, _) => Invalidate();
-        grid.MouseWheel += (_, e) => SetFirst(First - Math.Sign(e.Delta) * 3);
+        grid.MouseWheel += (_, e) => AnimateScrollBy(-Math.Sign(e.Delta) * 3);
     }
 
     /// <summary>Drive a manually-scrolled content panel (pixel-based): <paramref name="content"/> is taller
@@ -60,6 +60,22 @@ internal sealed class ThinScrollBar : Control
         if (PanelMode) _content!.Top = -v;
         else if (_grid is not null) { try { _grid.FirstDisplayedScrollingRowIndex = v; } catch { } }
         Invalidate();
+    }
+
+    // Eased, momentum-style wheel scrolling so flicks glide instead of jumping in hard steps.
+    private Tween? _scrollTween;
+    private int _scrollTarget = int.MinValue; // pending target so successive flicks accumulate
+
+    private void AnimateScrollBy(int deltaRows)
+    {
+        int max = Math.Max(0, Total - Visible);
+        int basis = _scrollTarget == int.MinValue ? First : _scrollTarget;
+        _scrollTarget = Math.Clamp(basis + deltaRows, 0, max);
+        if (!Anim.MotionEnabled) { SetFirst(_scrollTarget); _scrollTarget = int.MinValue; return; }
+        double from = First; int to = _scrollTarget;
+        _scrollTween?.Cancel();
+        _scrollTween = Anim.Run(170, v => SetFirst((int)Math.Round(from + (to - from) * v)),
+            () => { _scrollTween = null; _scrollTarget = int.MinValue; }, Easings.OutCubic);
     }
 
     private (int Y, int H) Thumb()

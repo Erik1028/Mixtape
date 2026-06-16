@@ -107,7 +107,7 @@ internal sealed class AppSettings
         catch { /* settings are best-effort */ }
     }
 
-    public int RowHeight => Compact ? 40 : 52;
+    public int RowHeight => Compact ? 34 : 52;
 
     /// <summary>Resolve <see cref="Accent"/> (preset name or hex) to a colour, falling back to Teal.</summary>
     public Color ResolveAccent()
