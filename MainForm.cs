@@ -1848,20 +1848,24 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Background-loads real embedded cover art into the header + each row (album-cached, gen-guarded).</summary>
     private void LoadArtworkAsync(List<Track> tags, int size)
     {
-        if (!_settings.ShowArtwork || _device is null || tags.Count == 0) return;
+        if (!_settings.ShowArtwork || tags.Count == 0) return;   // works for Local Music too — no iPod required
         int gen = ++_artGen;
-        string mount = _device.MountRoot;
-        var jobs = tags.Select((t, i) => (Index: i, Key: ArtworkService.KeyFor(t), Path: t.ResolveFilePath(mount))).ToList();
+        string? mount = _device?.MountRoot;
+        // Local Music tracks live on the PC (LocalPath); iPod tracks resolve against the mount.
+        string? PathOf(Track t) => !string.IsNullOrEmpty(t.LocalPath) ? t.LocalPath
+                                   : mount is not null ? t.ResolveFilePath(mount) : null;
+        var jobs = tags.Select((t, i) => (Index: i, Key: ArtworkService.KeyFor(t), Path: PathOf(t))).ToList();
         var first = tags[0];
 
         Task.Run(() =>
         {
-            var hdr = ArtworkService.Load(ArtworkService.KeyFor(first), first.ResolveFilePath(mount), 150);
+            var hdr = ArtworkService.Load(ArtworkService.KeyFor(first), PathOf(first), 150);
             if (hdr != null) TryBeginInvoke(() => { if (_artGen == gen && !_currentHasCustomCover) _header.SetArt(hdr); });
             foreach (var j in jobs)
             {
                 if (_artGen != gen) return;
-                var art = ArtworkService.Load(j.Key, j.Path, size);
+                if (string.IsNullOrEmpty(j.Path)) continue;
+            var art = ArtworkService.Load(j.Key, j.Path, size);
                 if (art != null)
                 {
                     int idx = j.Index;
@@ -2175,6 +2179,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         _populatingGrid = false;
         _tracks.ResumeLayout();
+        LoadArtworkAsync(shown, artSize);   // replace the placeholder thumbnails with real embedded cover art
 
         int folders = _settings.LocalMusicFolders.Count;
         _emptyMsg = folders == 0 ? "Click “Add folder” to add music from your PC."

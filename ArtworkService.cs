@@ -14,7 +14,9 @@ internal static class ArtworkService
     private static readonly object Gate = new();
 
     public static string KeyFor(Track t) =>
-        !string.IsNullOrEmpty(t.Album) ? "alb:" + t.Album!.ToLowerInvariant() : "loc:" + (t.Location ?? "");
+        !string.IsNullOrEmpty(t.Album) ? "alb:" + t.Album!.ToLowerInvariant()
+        : !string.IsNullOrEmpty(t.LocalPath) ? "loc:" + t.LocalPath!.ToLowerInvariant()   // unique per PC file (else albumless locals collide)
+        : "loc:" + (t.Location ?? "");
 
     /// <summary>Cached embedded-art bitmap for the key at the given size, or null if none / not loaded yet.</summary>
     public static Bitmap? TryGet(string key, int size)
