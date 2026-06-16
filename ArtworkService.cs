@@ -33,16 +33,12 @@ internal static class ArtworkService
         Bitmap? result = null;
         try
         {
-            if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+            // One extractor for both display + iPod sync: embedded front cover, else an external cover image.
+            if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath) && MetadataExtractor.ReadArt(filePath) is { Length: > 0 } bytes)
             {
-                using var f = TagLib.File.Create(filePath);
-                var pics = f.Tag.Pictures;
-                if (pics.Length > 0 && pics[0].Data.Data.Length > 0)
-                {
-                    using var ms = new MemoryStream(pics[0].Data.Data);
-                    using var src = Image.FromStream(ms);
-                    result = RoundScaled(src, size);
-                }
+                using var ms = new MemoryStream(bytes);
+                using var src = Image.FromStream(ms);
+                result = RoundScaled(src, size);
             }
         }
         catch { /* unreadable art → treat as none */ }

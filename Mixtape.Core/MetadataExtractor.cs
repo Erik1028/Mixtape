@@ -57,16 +57,56 @@ internal static class MetadataExtractor
         return nt;
     }
 
-    /// <summary>The embedded cover-art bytes for an audio file, or null if there's none / unreadable.</summary>
+    /// <summary>
+    /// Cover-art bytes for an audio file: the embedded picture if present (preferring the real Front
+    /// Cover and skipping empty/placeholder frames — some files carry several pictures and the first
+    /// isn't the cover), else an external image next to the file (cover/folder/front/&lt;name&gt;.jpg…).
+    /// Null when there's genuinely no art.
+    /// </summary>
     public static byte[]? ReadArt(string path)
     {
         try
         {
             using var f = TagLib.File.Create(path);
             var pics = f.Tag.Pictures;
-            if (pics is { Length: > 0 } && pics[0].Data?.Data is { Length: > 0 } data) return data;
+            if (pics is { Length: > 0 })
+            {
+                var best = pics.FirstOrDefault(p => p.Type == TagLib.PictureType.FrontCover && p.Data?.Data is { Length: > 0 })
+                        ?? pics.FirstOrDefault(p => p.Type == TagLib.PictureType.Other && p.Data?.Data is { Length: > 0 })
+                        ?? pics.FirstOrDefault(p => p.Data?.Data is { Length: > 0 });
+                if (best?.Data?.Data is { Length: > 0 } data) return data;
+            }
+        }
+        catch { /* unreadable tags → try an external image below */ }
+
+        try
+        {
+            string? dir = Path.GetDirectoryName(path);
+            if (dir is not null && Directory.Exists(dir))
+            {
+                string stem = Path.GetFileNameWithoutExtension(path);
+                foreach (var name in ExternalArtCandidates(stem))
+                {
+                    string p = Path.Combine(dir, name);
+                    if (File.Exists(p)) { try { return File.ReadAllBytes(p); } catch { } }
+                }
+            }
         }
         catch { }
         return null;
+    }
+
+    /// <summary>Common external cover-image filenames, most-specific first (Windows FS is case-insensitive).</summary>
+    private static IEnumerable<string> ExternalArtCandidates(string stem)
+    {
+        foreach (var ext in new[] { ".jpg", ".jpeg", ".png" })
+        {
+            yield return stem + ext;        // matches the song's own name
+            yield return "cover" + ext;
+            yield return "folder" + ext;
+            yield return "front" + ext;
+            yield return "albumart" + ext;
+            yield return "album" + ext;
+        }
     }
 }
