@@ -2315,7 +2315,9 @@ internal sealed class MainForm : Form, IMessageFilter
     private void FillLocalPlaylistGrid(LocalPlaylistData lp, List<Track> tracks)
     {
         int artSize = _settings.Compact ? 22 : 36;
-        var list = (_searchQuery.Length > 0 ? tracks.Where(t => Match(t, _searchQuery)) : tracks).ToList(); // preserve playlist order
+        var list = (_searchQuery.Length > 0 ? tracks.Where(t => Match(t, _searchQuery)) : tracks).ToList();
+        SortTracks(list);          // honor a clicked column header; SortTracks no-ops (keeps playlist order) when none is chosen
+        UpdateSortIndicators();
         _tracks.SuspendLayout(); _populatingGrid = true; _tracks.Rows.Clear();
         long totalMs = 0;
         foreach (var t in list)
