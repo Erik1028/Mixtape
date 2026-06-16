@@ -1183,7 +1183,8 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             _header.AddButton.Visible = _header.DeleteButton.Visible = true;
             _header.AddButton.Text = "Add folder"; _header.AddButton.BlockedReason = null;
-            _header.DeleteButton.Text = "Manage…"; _header.DeleteButton.BlockedReason = _settings.LocalMusicFolders.Count == 0 ? "Add a folder first." : null;
+            _header.DeleteButton.Text = "Manage…"; _header.DeleteButton.Danger = false; // Manage isn't destructive
+            _header.DeleteButton.BlockedReason = _settings.LocalMusicFolders.Count == 0 ? "Add a folder first." : null;
             return;
         }
         bool canAudio = _device?.Profile.CanWrite == true;
@@ -1196,6 +1197,7 @@ internal sealed class MainForm : Form, IMessageFilter
         bool photos = _viewKind == SidebarRowKind.Photos;
         bool allowed = photos ? canPhotos : canAudio;
         string reason = photos ? PhotoBlockReason() : AudioBlockReason();
+        _header.DeleteButton.Text = "Delete"; _header.DeleteButton.Danger = true; // restore destructive identity after Local Music
         _header.AddButton.Text = _viewKind switch
         {
             SidebarRowKind.Videos => "Add video",

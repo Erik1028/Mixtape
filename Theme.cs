@@ -300,7 +300,8 @@ internal sealed class ThemedButton : Button
     public bool Primary { get; init; }
     public bool Pill { get; init; }
     public bool Ghost { get; init; }   // borderless icon button (no chip)
-    public bool Danger { get; init; }  // destructive (e.g. Delete): red label + tinted border, red wash on hover
+    private bool _danger;
+    public bool Danger { get => _danger; set { if (_danger != value) { _danger = value; Invalidate(); } } }  // destructive: red label + tinted border
     public string? Glyph { get; init; }
     private float _hoverT;  // 0→1 hover wash
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
