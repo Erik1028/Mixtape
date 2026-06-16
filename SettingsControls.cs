@@ -61,7 +61,6 @@ internal sealed class AccentPicker : Control
     public event Action<string>? AccentChosen; // preset name or "#RRGGBB"
     private string _current;
     private const int D = 22, Gap = 8;
-    private readonly Font _glyphFont = Theme.UiFont(11f, FontStyle.Bold);
 
     public AccentPicker(string current)
     {
@@ -69,10 +68,10 @@ internal sealed class AccentPicker : Control
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
-        Height = D + 4;
-        // Width = the painted extent of the last swatch (+2 ring room), NOT one extra (D+Gap) stride —
+        Height = D + 6;   // room for the selection ring + its gap, top and bottom
+        // Width = the painted extent of the last swatch (+ ring room), NOT one extra (D+Gap) stride —
         // so the right-most swatch lines up with the toggles/segmented controls on other rows.
-        Width = (CountSwatches - 1) * (D + Gap) + D + 4;
+        Width = (CountSwatches - 1) * (D + Gap) + D + 6;
         Cursor = Cursors.Hand;
         Click += OnClick;
     }
@@ -108,40 +107,36 @@ internal sealed class AccentPicker : Control
         for (int i = 0; i < Theme.AccentPresets.Length; i++)
         {
             var (name, color) = Theme.AccentPresets[i];
-            DrawSwatch(g, i, color, !customSelected && _current == name, null);
+            DrawSwatch(g, i, color, !customSelected && _current == name, addButton: false);
         }
         Color custom = AppSettings.TryParseHex(_current, out var cc) ? cc : Theme.Blend(Theme.PanelBg, Color.White, 0.16);
-        DrawSwatch(g, Theme.AccentPresets.Length, custom, customSelected, customSelected ? null : "+");
+        DrawSwatch(g, Theme.AccentPresets.Length, custom, customSelected, addButton: !customSelected);
     }
 
-    private void DrawSwatch(Graphics g, int i, Color color, bool selected, string? glyph)
+    private void DrawSwatch(Graphics g, int i, Color color, bool selected, bool addButton)
     {
-        int x = i * (D + Gap) + 2, y = 2; // +2 so the selected ring on the first swatch isn't clipped
-        if (glyph is not null)
+        int x = i * (D + Gap) + 3, y = 3;
+        float cx = x + D / 2f, cy = y + D / 2f;
+        if (addButton)
         {
-            // "Add custom colour" affordance: a dim outlined ring with a +, so it reads as an action
-            // rather than a greyed-out preset disc.
-            using var ring = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.30f), 1.4f);
-            g.DrawEllipse(ring, x + 0.7f, y + 0.7f, D - 1.4f, D - 1.4f);
-            TextRenderer.DrawText(g, glyph, _glyphFont, new Rectangle(x, y, D, D), Color.FromArgb(210, 215, 220),
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            // "Add custom colour": an outlined ring with a crisp vector + (a font glyph colour-fringes on dark).
+            using var ring = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.34f), 1.5f);
+            g.DrawEllipse(ring, x + 0.75f, y + 0.75f, D - 1.5f, D - 1.5f);
+            using var plus = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.62f), 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            float r = D * 0.20f;
+            g.DrawLine(plus, cx - r, cy, cx + r, cy);
+            g.DrawLine(plus, cx, cy - r, cx, cy + r);
+            return;
         }
-        else
-        {
-            using var b = new SolidBrush(color);
-            g.FillEllipse(b, x, y, D, D);
-        }
+        using (var b = new SolidBrush(color)) g.FillEllipse(b, x, y, D, D);
+        // A faint dark rim so light swatches don't melt into the panel.
+        using (var rim = new Pen(Color.FromArgb(45, 0, 0, 0), 1f)) g.DrawEllipse(rim, x + 0.5f, y + 0.5f, D - 1, D - 1);
         if (selected)
         {
-            using var pen = new Pen(Color.White, 2);
-            g.DrawEllipse(pen, x - 2, y - 2, D + 4, D + 4);
+            // A thin, soft-white ring with a clean gap reads as "selected" without the harsh heavy outline.
+            using var pen = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.90f), 1.6f);
+            g.DrawEllipse(pen, x - 2.5f, y - 2.5f, D + 5, D + 5);
         }
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing) _glyphFont.Dispose();
-        base.Dispose(disposing);
     }
 }
 
