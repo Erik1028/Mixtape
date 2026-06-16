@@ -3031,7 +3031,13 @@ internal sealed class MainForm : Form, IMessageFilter
         return false;
     }
 
-    private void SetStatus(string text) => _status.Text = text;
+    private void SetStatus(string text)
+    {
+        _status.Text = text;
+        // Collapse the status strip when there's nothing to show, so no empty band sits under the player.
+        if (_content is not null && _content.RowStyles.Count > 3)
+            _content.RowStyles[3].Height = string.IsNullOrEmpty(text) ? 0 : 28;
+    }
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int flags);
