@@ -23,6 +23,7 @@ internal sealed class AudioPlayer : IDisposable
     private bool _eqEnabled;
     private float[] _gains;
     private bool _stoppingForLoad; // tells PlaybackStopped apart: manual close vs. natural end
+    private int _loadGen;          // bumped on every (re)load so a late end-callback from a replaced track is ignored
 
     public event Action? Opened;
     public event Action? Ended;
@@ -85,6 +86,7 @@ internal sealed class AudioPlayer : IDisposable
     /// <summary>Stop and fully release the current media (so the file isn't held open).</summary>
     public void CloseMedia()
     {
+        _loadGen++;       // invalidate any end-callback still in flight for the track we're closing
         _tick.Stop();
         if (_out is not null)
         {
@@ -103,8 +105,10 @@ internal sealed class AudioPlayer : IDisposable
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
         if (_stoppingForLoad) return; // a manual close, not a finished track
+        int gen = _loadGen;
         bool natural = _reader is not null && _reader.Position >= _reader.Length - 1;
-        void Raise() { _tick.Stop(); if (natural) Ended?.Invoke(); }
+        // Ignore if a new track was loaded between this stop and its UI-thread delivery (stale end-callback).
+        void Raise() { if (gen != _loadGen) return; _tick.Stop(); if (natural) Ended?.Invoke(); }
         if (_sync is not null) _sync.Post(_ => Raise(), null); else Raise();
     }
 

@@ -563,6 +563,8 @@ internal sealed class MainForm : Form, IMessageFilter
             var pool = new List<int>();
             for (int i = 0; i < _tracks.Rows.Count; i++) if (i != cur && IsPlayableRow(i, out _, out _)) pool.Add(i);
             if (pool.Count > 0) { PlayFromNav(cur, pool[Random.Shared.Next(pool.Count)]); return; }
+            // Current track is the only playable one: under Repeat One, keep it going rather than dead-stopping.
+            if (_nowPlaying.Repeat == NowPlayingBar.RepeatMode.One && IsPlayableRow(cur, out var st, out var sp)) { PlayAudio(st, sp, cur); return; }
         }
 
         // Sequential scan in the requested direction.

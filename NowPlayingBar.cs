@@ -102,6 +102,7 @@ internal sealed class NowPlayingBar : Panel
     {
         _engine.CloseMedia();
         _track = null;
+        _path = null;
         _cover?.Dispose(); _cover = null;
         _playing = false;
         _scrubFrac = -1;
