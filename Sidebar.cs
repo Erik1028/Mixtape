@@ -359,6 +359,7 @@ internal sealed class Sidebar : Panel
 
         // hairline above the footer, inset so it doesn't run into the card's rounded corners
         using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, Pad, Height - FooterH, Width - Pad, Height - FooterH);
-        using (var seam = new Pen(Theme.Border)) g.DrawLine(seam, Width - 1, 0, Width - 1, Height);
+        // (No right-edge seam — the sidebar's darker background already separates it from the content;
+        //  a hard vertical line there read as an out-of-place divider.)
     }
 }

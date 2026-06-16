@@ -2947,13 +2947,13 @@ internal sealed class MainForm : Form, IMessageFilter
     private void ApplyColumns()
     {
         if (_tracks.Columns.Count < 8) return;
-        int w = _tracks.ClientSize.Width;
+        int w = _tracks.ClientSize.Width;   // default window → ~720; minimum window → ~500
         _tracks.Columns[0].Visible = _settings.ShowArtwork;
         _tracks.Columns[2].Visible = _settings.ShowArtist    && w >= 380;
-        _tracks.Columns[3].Visible = _settings.ShowAlbum     && w >= 480;
-        _tracks.Columns[6].Visible = _settings.ShowDateAdded && w >= 600;
-        _tracks.Columns[5].Visible = _settings.ShowPlays     && w >= 680;
-        _tracks.Columns[4].Visible = _settings.ShowRating    && w >= 760;
+        _tracks.Columns[3].Visible = _settings.ShowAlbum     && w >= 460;
+        _tracks.Columns[6].Visible = _settings.ShowDateAdded && w >= 550;
+        _tracks.Columns[5].Visible = _settings.ShowPlays     && w >= 610;
+        _tracks.Columns[4].Visible = _settings.ShowRating    && w >= 680;
         _tracks.Columns[7].Visible = _settings.ShowTime;
     }
 
