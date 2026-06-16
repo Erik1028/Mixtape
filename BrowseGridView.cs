@@ -146,8 +146,9 @@ internal sealed class BrowseGridView : Panel
     private void DrawCard(Graphics g, int x, int y, Card c)
     {
         var cover = new Rectangle(x, y, CoverW, CoverW);
+        int cr = (int)Math.Round(CoverW * Theme.TileFrac);
         bool hover = ReferenceEquals(c, _hover);
-        using (var path = Theme.RoundedRect(cover, 10))
+        using (var path = Theme.RoundedRect(cover, cr))
         {
             var clip = g.Clip; g.SetClip(path, CombineMode.Intersect);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -157,8 +158,8 @@ internal sealed class BrowseGridView : Panel
             g.DrawImage(c.Cover ?? Theme.MakeArt(CoverW, c.Seed), cover);
             g.Clip = clip;
         }
-        if (hover) { using var hp = Theme.RoundedRect(cover, 10); using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255)); g.FillPath(hb, hp); }
-        using (var bp = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.08))) { using var p2 = Theme.RoundedRect(cover, 10); g.DrawPath(bp, p2); }
+        if (hover) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255)); g.FillPath(hb, hp); }
+        using (var bp = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.08))) { using var p2 = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cr); g.DrawPath(bp, p2); }
 
         TextRenderer.DrawText(g, c.Title, Theme.UiFont(9.5f, FontStyle.Bold),
             new Rectangle(x, y + CoverW + 6, CoverW, 18), Theme.TextCol,

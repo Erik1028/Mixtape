@@ -123,7 +123,7 @@ internal sealed class HeaderPanel : Panel
         var artRect = new Rectangle(Pad, Pad, artSize, artSize);
         // soft shadow under the art
         using (var sh = new SolidBrush(Color.FromArgb(45, 0, 0, 0)))
-        using (var sp = Theme.RoundedRect(new RectangleF(artRect.X + 2, artRect.Y + 4, artSize, artSize), artSize * 0.14f))
+        using (var sp = Theme.RoundedRect(new RectangleF(artRect.X + 2, artRect.Y + 4, artSize, artSize), artSize * Theme.TileFrac))
             g.FillPath(sh, sp);
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         var artNow = _art ?? Theme.MakeArt(artSize, _seed);
@@ -136,7 +136,7 @@ internal sealed class HeaderPanel : Panel
         if (ArtClickable && _artHover)
         {
             using (var ov = new SolidBrush(Color.FromArgb(125, 0, 0, 0)))
-            using (var op = Theme.RoundedRect(artRect, artSize * 0.14f))
+            using (var op = Theme.RoundedRect(artRect, artSize * Theme.TileFrac))
                 g.FillPath(ov, op);
             TextRenderer.DrawText(g, "Change cover", Theme.UiFont(8.5f, FontStyle.Bold), artRect, Color.White,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);

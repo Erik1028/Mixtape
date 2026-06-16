@@ -45,12 +45,13 @@ internal static class IpodArt
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.Clear(Color.Transparent);
 
         // rounded tile background: subtle dark gradient with a faint accent tint
-        using (var tp = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, size - 1, size - 1), size * 0.14f))
+        using (var tp = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, size - 1, size - 1), size * Theme.TileFrac))
         using (var bg = new LinearGradientBrush(new RectangleF(0, 0, size, size),
-            Theme.Blend(Theme.PanelBg, Theme.Accent, 0.18), Theme.Blend(Theme.PanelBg, Color.Black, 0.22), 55f))
+            Theme.Blend(Theme.PanelBg, Theme.Accent, 0.14), Theme.Blend(Theme.PanelBg, Color.Black, 0.22), Theme.ArtAngle))
             g.FillPath(bg, tp);
 
         var spec = For(gen);
@@ -86,10 +87,10 @@ internal static class IpodArt
     private static void DrawScreen(Graphics g, RectangleF screen, float radius)
     {
         using var scp = Theme.RoundedRect(screen, radius);
-        using (var scb = new LinearGradientBrush(screen, Color.FromArgb(20, 28, 34), Color.FromArgb(8, 11, 15), 90f)) g.FillPath(scb, scp);
+        using (var scb = new LinearGradientBrush(screen, Theme.Blend(Color.FromArgb(16, 22, 28), Theme.Accent, 0.08), Color.FromArgb(8, 11, 15), 90f)) g.FillPath(scb, scp);
         var saved = g.Clip;
         g.SetClip(scp);
-        using (var glow = new SolidBrush(Color.FromArgb(46, Theme.Accent)))
+        using (var glow = new SolidBrush(Color.FromArgb(38, Theme.Accent)))
             g.FillEllipse(glow, screen.X + screen.Width * 0.08f, screen.Y + screen.Height * 0.25f, screen.Width * 0.84f, screen.Height * 0.95f);
         g.Clip = saved;
     }
@@ -106,7 +107,7 @@ internal static class IpodArt
         float wd = Math.Min(body.Width * 0.76f, lowerH);
         var wheel = new RectangleF(body.X + (body.Width - wd) / 2, lowerTop + (lowerH - wd) / 2, wd, wd);
         using (var wb = new SolidBrush(Color.FromArgb(60, 0, 0, 0))) g.FillEllipse(wb, wheel); // recessed wheel reads on any body colour
-        using (var wp = new Pen(Color.FromArgb(45, 255, 255, 255), 1f)) g.DrawEllipse(wp, wheel);
+        using (var wp = new Pen(Color.FromArgb(45, 255, 255, 255), 1f)) g.DrawEllipse(wp, wheel.X + 0.5f, wheel.Y + 0.5f, wheel.Width - 1, wheel.Height - 1);
         float cc = wd * 0.36f;
         using (var cb = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(cb, wheel.X + (wd - cc) / 2, wheel.Y + (wd - cc) / 2, cc, cc);
     }

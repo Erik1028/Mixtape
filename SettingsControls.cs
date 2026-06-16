@@ -201,7 +201,7 @@ internal sealed class SettingsNav : Panel
             float y = TopPad + _visSel * (RowH + Gap);
             var selRow = new RectangleF(Pad, y, Width - Pad * 2, RowH);
             using var b = new SolidBrush(Color.FromArgb(48, Theme.Accent));
-            using var p = Theme.RoundedRect(selRow, 7);
+            using var p = Theme.RoundedRect(selRow, Theme.RadControl);
             g.FillPath(b, p);
         }
 
@@ -214,7 +214,7 @@ internal sealed class SettingsNav : Panel
             if (hov && !sel)
             {
                 using var b = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.White, 0.06));
-                using var p = Theme.RoundedRect(row, 7);
+                using var p = Theme.RoundedRect(row, Theme.RadControl);
                 g.FillPath(b, p);
             }
             var iconR = new Rectangle(row.X + 9, y + (RowH - 18) / 2, 18, 18);
@@ -294,6 +294,19 @@ internal sealed class CardPanel : Panel
         Width = width;
         Height = 0;
         BackColor = Theme.PanelBg;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        // Owner-painted rounded card: an anti-aliased FillPath (the old Region clip hard-aliased every
+        // corner). The transparent corners outside the path reveal whatever sits behind the card.
+        var g = e.Graphics;
+        g.Clear(Parent?.BackColor ?? Theme.Bg);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Theme.RadCard);
+        using var b = new SolidBrush(Theme.PanelBg);
+        g.FillPath(b, p);
     }
 
     protected override void Dispose(bool disposing)
@@ -366,8 +379,9 @@ internal sealed class CardPanel : Panel
 
     public void Finish()
     {
-        using var p = Theme.RoundedRect(new RectangleF(0, 0, Width, Height), 12);
-        Region = new Region(p);
+        // The rounded card is now owner-painted (anti-aliased) in OnPaint — just trigger a repaint at
+        // the final size. (Was a Region clip, which hard-aliased the corners.)
+        Invalidate();
     }
 }
 
@@ -423,7 +437,7 @@ internal sealed class SegmentedControl : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         var outer = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
-        using var op = Theme.RoundedRect(outer, 8);
+        using var op = Theme.RoundedRect(outer, Theme.RadControl);
         using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.18))) g.FillPath(bg, op);
 
         // Clip fills to the track so segment corners can't spill outside the container's rounded corners.
@@ -436,14 +450,14 @@ internal sealed class SegmentedControl : Control
         {
             var hseg = new RectangleF(_hover * w + 2, 2, w - 4, Height - 4);
             using var hb = new SolidBrush(Theme.RowHover);
-            using var hp = Theme.RoundedRect(hseg, 6);
+            using var hp = Theme.RoundedRect(hseg, Theme.RadChipInset);
             g.FillPath(hb, hp);
         }
 
         // A single accent pill that slides between segments.
         var sel = new RectangleF(_visSel * w + 2, 2, w - 4, Height - 4);
         using (var b = new SolidBrush(Theme.Accent))
-        using (var p = Theme.RoundedRect(sel, 6))
+        using (var p = Theme.RoundedRect(sel, Theme.RadChipInset))
             g.FillPath(b, p);
 
         for (int i = 0; i < _options.Length; i++)

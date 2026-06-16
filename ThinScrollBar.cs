@@ -80,7 +80,7 @@ internal sealed class ThinScrollBar : Control
         var (y, h) = Thumb();
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         var r = new RectangleF((Width - 6) / 2f, y, 6, h);
-        using var path = Theme.RoundedRect(r, 3);
+        using var path = Theme.RoundedRect(r, r.Width / 2f);
         // Thumb derived from the theme so it reads on every variant (was a fixed gray).
         var thumb = _dragging || _hover ? Theme.Blend(Theme.Bg, Theme.TextCol, 0.42)
                                         : Theme.Blend(Theme.Bg, Theme.TextCol, 0.22);

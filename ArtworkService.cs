@@ -58,13 +58,13 @@ internal static class ArtworkService
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        using (var path = Theme.RoundedRect(new RectangleF(0, 0, size - 1, size - 1), Math.Max(2, size * 0.13f)))
+        using (var path = Theme.RoundedRect(new RectangleF(0, 0, size - 1, size - 1), Math.Max(2, size * Theme.TileFrac)))
             g.SetClip(path);
         float scale = Math.Max((float)size / src.Width, (float)size / src.Height); // cover-fit / center-crop
         float w = src.Width * scale, h = src.Height * scale;
         g.DrawImage(src, (size - w) / 2f, (size - h) / 2f, w, h);
         g.ResetClip();
-        using (var ip = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), Math.Max(2, size * 0.13f)))
+        using (var ip = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), Math.Max(2, size * Theme.TileFrac)))
         using (var pen = new Pen(Color.FromArgb(36, 255, 255, 255)))
             g.DrawPath(pen, ip);
         return bmp;

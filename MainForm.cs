@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
 namespace iPodCommander;
@@ -135,7 +136,7 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     private const int Gap = 14;        // wallpaper gap around + between the floating cards
-    private const int CardRadius = 16; // rounded card corners
+    private const int CardRadius = Theme.RadShell; // rounded card corners
     private const int CaptionH = 36;   // the custom title-bar strip height
     private const int ResizeBorder = 6;
     private readonly WindowButton _btnMin = new() { Which = WindowButton.Kind.Minimize };
@@ -355,9 +356,12 @@ internal sealed class MainForm : Form, IMessageFilter
                 int y;
                 if (_dropRow < _tracks.Rows.Count) y = _tracks.GetRowDisplayRectangle(_dropRow, false).Top;
                 else { var last = _tracks.GetRowDisplayRectangle(_tracks.Rows.Count - 1, false); y = last.Bottom; }
+                // AA on only now (the column-header hairline above stayed crisp 1px); the round bullet needs it.
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 using var ip = new Pen(Theme.Accent, 2.5f);
                 e.Graphics.DrawLine(ip, 2, y, _tracks.Width - 4, y);
-                e.Graphics.FillEllipse(new SolidBrush(Theme.Accent), 0, y - 3, 6, 6);
+                using var db = new SolidBrush(Theme.Accent);
+                e.Graphics.FillEllipse(db, 0, y - 3, 6, 6);
             }
         };
     }
@@ -370,10 +374,16 @@ internal sealed class MainForm : Form, IMessageFilter
         var artCol = _tracks.Columns[0];
         int x0 = b.X + (artCol.Visible ? artCol.Width : 0);
         // List dividers get a touch more presence than the calm device-card hairlines.
+        // Draw the divider FIRST on integer bounds with AA off so it stays a true crisp 1px.
         using (var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.07))) e.Graphics.DrawLine(pen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
         // Selection is carried by one crisp, bright accent bar (the row fill itself only whispers a tint).
         if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
-            using (var bar = new SolidBrush(Theme.AccentBright)) e.Graphics.FillRectangle(bar, b.X, b.Y + 1, 4, b.Height - 2);
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var bar = new SolidBrush(Theme.AccentBright);
+            using var bp = Theme.RoundedRect(new RectangleF(b.X, b.Y + 1, 4, b.Height - 2), 2);
+            e.Graphics.FillPath(bar, bp);
+        }
     }
 
     // ---- drag-to-reorder a playlist's tracks ----

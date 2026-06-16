@@ -27,7 +27,7 @@ internal static class CoverArt
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             double h = id * (360.0 / Count);
-            float r = Math.Max(3, size * 0.13f);
+            float r = Math.Max(3, size * Theme.TileFrac);
             using var clip = Theme.RoundedRect(new RectangleF(0, 0, size - 1, size - 1), r);
             g.SetClip(clip);
             Paint(g, id % Styles, h, size);
@@ -43,7 +43,7 @@ internal static class CoverArt
     private static void Paint(Graphics g, int style, double h, int s)
     {
         Color c1 = Theme.HsvToColor(h, 0.58, 0.88);
-        Color c2 = Theme.HsvToColor(h + 28, 0.70, 0.48);
+        Color c2 = Theme.HsvToColor(h + 28, 0.70, 0.52);
         Color c3 = Theme.HsvToColor(h - 34, 0.52, 0.97);
         Color dark = Theme.HsvToColor(h + 10, 0.65, 0.26);
         var full = new Rectangle(0, 0, s, s);
@@ -51,7 +51,7 @@ internal static class CoverArt
         switch (style)
         {
             case 0: // diagonal gradient
-                using (var b = new LinearGradientBrush(full, c1, c2, 55f)) g.FillRectangle(b, full);
+                using (var b = new LinearGradientBrush(full, c1, c2, Theme.ArtAngle)) g.FillRectangle(b, full);
                 break;
 
             case 1: // radial glow
@@ -71,7 +71,7 @@ internal static class CoverArt
                 break;
 
             case 3: // diagonal stripes
-                using (var b = new LinearGradientBrush(full, c2, dark, 90f)) g.FillRectangle(b, full);
+                using (var b = new LinearGradientBrush(full, c2, dark, Theme.ArtAngle)) g.FillRectangle(b, full);
                 using (var pen = new Pen(Color.FromArgb(210, c1), s * 0.10f))
                 {
                     for (int i = -s; i < s * 2; i += (int)(s * 0.26f)) g.DrawLine(pen, i, 0, i + s, s);
@@ -89,7 +89,7 @@ internal static class CoverArt
                 break;
 
             case 5: // dot grid over a gradient
-                using (var b = new LinearGradientBrush(full, c1, c2, 35f)) g.FillRectangle(b, full);
+                using (var b = new LinearGradientBrush(full, c1, c2, Theme.ArtAngle)) g.FillRectangle(b, full);
                 using (var b = new SolidBrush(Color.FromArgb(120, c3)))
                 {
                     float step = s / 5f, d = s * 0.1f;
@@ -100,13 +100,13 @@ internal static class CoverArt
                 break;
 
             case 6: // layered peaks
-                using (var b = new LinearGradientBrush(full, c3, c1, 90f)) g.FillRectangle(b, full);
+                using (var b = new LinearGradientBrush(full, c3, c1, Theme.ArtAngle)) g.FillRectangle(b, full);
                 Peak(g, c2, s, 0.62f, 0.55f);
                 Peak(g, dark, s, 0.78f, 0.30f);
                 break;
 
             default: // 7: soft blobs
-                using (var b = new LinearGradientBrush(full, c2, dark, 70f)) g.FillRectangle(b, full);
+                using (var b = new LinearGradientBrush(full, c2, dark, Theme.ArtAngle)) g.FillRectangle(b, full);
                 using (var b = new SolidBrush(Color.FromArgb(200, c1))) g.FillEllipse(b, -s * 0.1f, s * 0.45f, s * 0.8f, s * 0.8f);
                 using (var b = new SolidBrush(Color.FromArgb(170, c3))) g.FillEllipse(b, s * 0.45f, s * 0.05f, s * 0.7f, s * 0.7f);
                 break;

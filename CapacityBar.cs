@@ -61,14 +61,18 @@ internal sealed class CapacityBar : Control
             // Clip to the rounded track so segments inherit the rounded ends.
             var saved = g.Clip;
             g.SetClip(track, CombineMode.Intersect);
-            float x = 0;
+            float xExact = 0;
             foreach (var s in _segs)
             {
                 if (s.Bytes <= 0) continue;
                 float w = (float)((double)s.Bytes / _total * (Width - 1));
-                using var b = new SolidBrush(s.Color);
-                g.FillRectangle(b, x, 0, w + 0.5f, barH);
-                x += w;
+                // Integer-snapped boundaries so adjacent segments share an exact edge (no sub-pixel seam).
+                float xi = (float)Math.Floor(xExact);
+                float wi = (float)(Math.Ceiling(xExact + w) - Math.Floor(xExact));
+                using var b = new LinearGradientBrush(new RectangleF(xi, 0, wi, barH),
+                    Theme.Blend(s.Color, Color.White, 0.10), Theme.Blend(s.Color, Color.Black, 0.08), 90f);
+                g.FillRectangle(b, xi, 0, wi, barH);
+                xExact += w;
             }
             g.Clip = saved;
         }

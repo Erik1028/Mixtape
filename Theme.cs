@@ -111,6 +111,15 @@ internal static class Theme
         return path;
     }
 
+    // ---- corner-radius scale (one language across the whole UI) ----
+    public const int RadControl = 8;       // non-pill buttons, selection/hover pills, segmented outer track, hover chips
+    public const int RadChipInset = 6;     // pills nested inside the segmented track only (= RadControl - 2)
+    public const int RadCard = 14;         // inner content cards (CardPanel: Settings + device ABOUT/BACKUPS/OPTIONS)
+    public const int RadShell = 16;        // top-level floating sidebar/content shells
+    public const float TileFrac = 0.12f;   // cover-tile radius as a fraction of size (round(TileFrac*size))
+    public const int RadTileSmall = 4;     // the tiny 18px sidebar mini-cover only
+    public const float ArtAngle = 60f;     // single light direction for all diagonally-lit generated art
+
     public static Color Blend(Color a, Color b, double f) => Color.FromArgb(
         (int)(a.R + (b.R - a.R) * f), (int)(a.G + (b.G - a.G) * f), (int)(a.B + (b.B - a.B) * f));
 
@@ -161,15 +170,16 @@ internal static class Theme
     {
         if (r.Width <= 0 || r.Height <= 0) return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        Color top = WallpaperTop;                                        // deep near-black base
-        Color mid = Blend(Blend(SidebarBg, Color.Black, 0.30), Accent, 0.16); // subtle accent-tinted band
-        Color bot = Blend(SidebarBg, Color.Black, 0.50);
-        using (var br = new LinearGradientBrush(r, top, bot, 58f))
+        Color a0 = WallpaperTop;                                              // deep near-black base
+        Color a1 = Blend(SidebarBg, Color.Black, 0.42);
+        Color mid = Blend(Blend(SidebarBg, Color.Black, 0.30), Accent, 0.12); // subtle accent-tinted band (centred)
+        Color a3 = Blend(SidebarBg, Color.Black, 0.52);
+        using (var br = new LinearGradientBrush(r, a0, a3, Theme.ArtAngle))
         {
             br.InterpolationColors = new ColorBlend
             {
-                Colors = new[] { top, mid, bot },
-                Positions = new[] { 0f, 0.45f, 1f },
+                Colors = new[] { a0, a1, mid, a3 },
+                Positions = new[] { 0f, 0.30f, 0.62f, 1f },
             };
             g.FillRectangle(br, r);
         }
@@ -236,12 +246,15 @@ internal static class Theme
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             double h = 150 + (seed % 360) / 360.0 * 130; // teal→blue→violet family
-            Color c1 = HsvToColor(h, 0.46, 0.50);
-            Color c2 = HsvToColor(h + 26, 0.58, 0.30);
-            float radius = Math.Max(3, size * 0.13f);
+            Color c1 = HsvToColor(h, 0.50, 0.56);
+            Color c2 = HsvToColor(h + 24, 0.60, 0.34);
+            float radius = Math.Max(3, size * Theme.TileFrac);
             using var path = RoundedRect(new RectangleF(0, 0, size - 1, size - 1), radius);
-            using (var br = new LinearGradientBrush(new Rectangle(0, 0, size, size), c1, c2, 55f))
+            using (var br = new LinearGradientBrush(new Rectangle(0, 0, size, size), c1, c2, Theme.ArtAngle))
             {
                 g.SetClip(path);
                 g.FillRectangle(br, 0, 0, size, size);
@@ -381,7 +394,7 @@ internal sealed class ThemedButton : Button
         float h = Math.Clamp(_hoverT, 0f, 1f);
         float inset = 3f * Math.Clamp(_pressT, 0f, 1f);   // shrink toward centre while pressed
         var r = new RectangleF(0.5f + inset, 0.5f + inset, Width - 1 - inset * 2, Height - 1 - inset * 2);
-        float radius = Pill ? r.Height / 2f : 7f;
+        float radius = Pill ? r.Height / 2f : Theme.RadControl;
         using var path = Theme.RoundedRect(r, radius);
         var textRect = Rectangle.Round(r);
 

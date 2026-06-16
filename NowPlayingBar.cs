@@ -233,23 +233,31 @@ internal sealed class NowPlayingBar : Panel
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, H),
-            Theme.Blend(Theme.SidebarBg, Color.White, 0.02), Theme.Blend(Theme.SidebarBg, Color.Black, 0.10), 90f))
+            Theme.Blend(Theme.SidebarBg, Color.White, 0.03), Theme.Blend(Theme.SidebarBg, Color.Black, 0.12), 90f))
+        {
+            bg.InterpolationColors = new ColorBlend
+            {
+                Colors = new[] { Theme.Blend(Theme.SidebarBg, Color.White, 0.03), Theme.SidebarBg, Theme.Blend(Theme.SidebarBg, Color.Black, 0.12) },
+                Positions = new[] { 0f, 0.5f, 1f },
+            };
             g.FillRectangle(bg, 0, 0, Width, H);
+        }
         using (var seam = new Pen(Theme.Border)) g.DrawLine(seam, 0, 0, Width, 0);
 
         var l = Layout();
         bool idle = _track is null;
         var cr = l.Cover;
+        int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
 
         // cover (soft shadow + rounded, clipped art or an idle placeholder)
-        using (var shp = Theme.RoundedRect(new RectangleF(cr.X + 1, cr.Y + 2, cr.Width, cr.Height), 10))
+        using (var shp = Theme.RoundedRect(new RectangleF(cr.X + 1, cr.Y + 2, cr.Width, cr.Height), cvr))
         using (var sh = new SolidBrush(Color.FromArgb(55, 0, 0, 0))) g.FillPath(sh, shp);
-        using (var cp = Theme.RoundedRect(cr, 10))
+        using (var cp = Theme.RoundedRect(cr, cvr))
         {
             var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             if (idle)
-                using (var ph = new LinearGradientBrush(cr, Color.FromArgb(46, 52, 64), Color.FromArgb(28, 32, 40), 45f)) g.FillRectangle(ph, cr);
+                using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.PanelBg, Color.White, 0.06), Theme.Blend(Theme.PanelBg, Color.Black, 0.10), Theme.ArtAngle)) g.FillRectangle(ph, cr);
             else
                 g.DrawImage(_cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff)), cr);
             g.Clip = saved;
@@ -257,7 +265,7 @@ internal sealed class NowPlayingBar : Panel
         if (idle)
             TextRenderer.DrawText(g, "♪", Theme.UiFont(20f), cr, Color.FromArgb(95, 255, 255, 255),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-        using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(cr, 10); g.DrawPath(bp, cp2); }
+        using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(cr, cvr); g.DrawPath(bp, cp2); }
 
         // title / artist (hidden when the window is too narrow)
         if (l.ShowTitle)
@@ -308,15 +316,16 @@ internal sealed class NowPlayingBar : Panel
 
     private static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob)
     {
+        var t = new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1, track.Height - 1);
         using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1)))
-        using (var tp = Theme.RoundedRect(track, track.Height / 2f)) g.FillPath(tb, tp);
-        int fw = (int)Math.Round(track.Width * Math.Clamp(frac, 0, 1));
+        using (var tp = Theme.RoundedRect(t, t.Height / 2f)) g.FillPath(tb, tp);
+        float fw = (float)(t.Width * Math.Clamp(frac, 0, 1));
         if (fw > 0)
             using (var fb = new SolidBrush(Theme.Accent))
-            using (var fp = Theme.RoundedRect(new Rectangle(track.X, track.Y, fw, track.Height), track.Height / 2f)) g.FillPath(fb, fp);
+            using (var fp = Theme.RoundedRect(new RectangleF(t.X, t.Y, fw, t.Height), t.Height / 2f)) g.FillPath(fb, fp);
         if (knob)
         {
-            int kx = track.X + fw, ky = track.Y + track.Height / 2;
+            float kx = t.X + fw, ky = t.Y + t.Height / 2f;
             using var kb = new SolidBrush(Color.White);
             g.FillEllipse(kb, kx - 5, ky - 5, 10, 10);
         }
@@ -393,7 +402,7 @@ internal sealed class NowPlayingBar : Panel
 
     private void DrawEqGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, 6); g.FillPath(hb, hp); }
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
         Color c = _eqOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var bar = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var dot = new SolidBrush(c);

@@ -297,7 +297,7 @@ internal sealed class Sidebar : Panel
                         ? Color.FromArgb(48, Theme.Accent)
                         : Theme.Blend(Theme.SidebarBg, Color.White, 0.06);
                     using var pb = new SolidBrush(fill);
-                    using var pp = Theme.RoundedRect(pill, 7);
+                    using var pp = Theme.RoundedRect(pill, Theme.RadControl);
                     g.FillPath(pb, pp);
                 }
 
@@ -311,21 +311,22 @@ internal sealed class Sidebar : Panel
                     var prevI = g.InterpolationMode; var prevP = g.PixelOffsetMode;
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                    using (var ip = Theme.RoundedRect(tile, 5))
+                    using (var ip = Theme.RoundedRect(tile, Theme.RadTileSmall))
                     {
                         var saved = g.Clip;
                         g.SetClip(ip, CombineMode.Intersect);
                         g.DrawImage(row.Icon, tile);
                         g.Clip = saved;
                         using var bp = new Pen(Color.FromArgb(70, 0, 0, 0)); // subtle edge so light covers don't bleed into the rail
-                        g.DrawPath(bp, ip);
+                        using var ip2 = Theme.RoundedRect(new RectangleF(tile.X + 0.5f, tile.Y + 0.5f, tile.Width - 1, tile.Height - 1), Theme.RadTileSmall);
+                        g.DrawPath(bp, ip2);
                     }
                     g.InterpolationMode = prevI; g.PixelOffsetMode = prevP;
                 }
                 else
                 {
                     using (var tb = new SolidBrush(row.Tile))
-                    using (var tp = Theme.RoundedRect(tile, 5))
+                    using (var tp = Theme.RoundedRect(tile, Theme.RadTileSmall))
                         g.FillPath(tb, tp);
                     DrawRowGlyph(g, tile, row.Kind, Color.FromArgb(244, 255, 255, 255));
                 }

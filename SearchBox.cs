@@ -68,9 +68,10 @@ internal sealed class SearchBox : Panel
         // magnifier
         using (var pen = new Pen(Theme.Faint, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
         {
-            int cx = 14, cy = Height / 2, r = 5;
-            g.DrawEllipse(pen, cx - r, cy - r - 1, r * 2, r * 2);
-            g.DrawLine(pen, cx + r - 1, cy + r - 2, cx + r + 3, cy + r + 2);
+            int cx = 14, r = 5;
+            float cy = Height / 2f;
+            g.DrawEllipse(pen, cx - r + 0.5f, cy - r - 0.5f, r * 2, r * 2);
+            g.DrawLine(pen, cx + r - 1 + 0.5f, cy + r - 2 + 0.5f, cx + r + 3 + 0.5f, cy + r + 2 + 0.5f);
         }
         // clear ×
         if (_tb.Text.Length > 0)
@@ -79,8 +80,8 @@ internal sealed class SearchBox : Panel
             if (_clearHover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(cr, cr.Width / 2f); g.FillPath(hb, hp); }
             using var xpen = new Pen(_clearHover ? Theme.TextCol : Theme.Faint, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
             int m = 5;
-            g.DrawLine(xpen, cr.Left + m, cr.Top + m, cr.Right - m, cr.Bottom - m);
-            g.DrawLine(xpen, cr.Right - m, cr.Top + m, cr.Left + m, cr.Bottom - m);
+            g.DrawLine(xpen, cr.Left + m + 0.5f, cr.Top + m + 0.5f, cr.Right - m + 0.5f, cr.Bottom - m + 0.5f);
+            g.DrawLine(xpen, cr.Right - m + 0.5f, cr.Top + m + 0.5f, cr.Left + m + 0.5f, cr.Bottom - m + 0.5f);
         }
     }
 }
