@@ -1,6 +1,22 @@
 namespace iPodCommander;
 
 /// <summary>
+/// Stages and writes album art to the iPod's ArtworkDB + .ithmb files. Implemented in the Windows
+/// app (it needs System.Drawing); Core only depends on this interface so artwork can be wired into
+/// the normal add/save flow without Core taking a graphics dependency.
+/// </summary>
+internal interface IArtworkSink
+{
+    /// <summary>True only on colour-screen devices whose ArtworkDB we can safely write.</summary>
+    bool SupportsArtwork { get; }
+    /// <summary>Render + stage one track's cover from <paramref name="sourcePath"/>; returns the
+    /// assigned ArtworkDB image id and the total thumbnail byte size, or null if the file has no art.</summary>
+    (uint MhiiId, uint Size)? Stage(ulong trackDbid, string sourcePath);
+    /// <summary>Write the staged artwork (append .ithmb + rebuild ArtworkDB). Best-effort.</summary>
+    void Commit();
+}
+
+/// <summary>
 /// Orchestrates reading + editing + saving one iPod's library. Holds both a display model
 /// (<see cref="View"/>, parsed for the UI) and the byte-preserving edit model
 /// (<see cref="RawDb"/>). Edits stage into the RawDb; <see cref="Save"/> serializes it,
@@ -11,6 +27,9 @@ internal sealed class IpodLibrary
     public IPodDevice Device { get; }
     public RawDb Raw { get; private set; }
     public ITunesDb View { get; private set; }
+
+    /// <summary>Optional cover-art writer (set by the host on colour-screen devices). Null = no artwork sync.</summary>
+    public IArtworkSink? Artwork { get; set; }
 
     private IpodLibrary(IPodDevice device, RawDb raw, ITunesDb view)
     {
@@ -53,6 +72,13 @@ internal sealed class IpodLibrary
         nt.Location = location;
         nt.UniqueId = Raw.MaxUniqueId() + 1;
         nt.Dbid = RandomDbid();
+        // Stage cover art (colour-screen devices only); link the track's mhit to its ArtworkDB image.
+        if (Artwork is { SupportsArtwork: true } sink && !MediaType.IsVideo(mediaType) && sink.Stage(nt.Dbid, fileToCopy) is { } art)
+        {
+            nt.HasArtwork = true;
+            nt.MhiiLink = art.MhiiId;
+            nt.ArtworkSize = art.Size;
+        }
         Raw.AddTrack(RawDb.BuildMhitChunk(nt), nt.UniqueId);
         return string.IsNullOrEmpty(nt.Title) ? Path.GetFileName(fileToCopy) : nt.Title!;
     }
@@ -100,6 +126,9 @@ internal sealed class IpodLibrary
         byte[] bytes = Raw.Serialize();
         ChecksumWriter.Apply(bytes, Device.Profile.Scheme, Device.Profile.FirewireGuid); // sign for hash58 devices; no-op for NONE
         SafeDbWriter.Write(Device, bytes, Raw.TrackCount);
+        // The iTunesDB is now safely on disk. Write the ArtworkDB after it (best-effort: a failure here
+        // leaves tracks flagged for art with no thumbnails — the iPod simply shows none, never corruption).
+        try { Artwork?.Commit(); } catch { }
         byte[] fresh = File.ReadAllBytes(Device.ITunesDbPath);
         View = ITunesDbReader.Read(fresh);
         Raw = RawDb.Parse(fresh);

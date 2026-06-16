@@ -78,6 +78,9 @@ internal static class Program
         // Offline ArtworkDB build/parse/round-trip + DBID-linkage self-test → ipod-artworktest.txt
         if (args.Length >= 1 && args[0] == "--artworktest") { RunArtworkTest(); return; }
 
+        // End-to-end cover-art sync into a temp Nano3 iPod from a real audio file → ipod-artworksynctest.txt
+        if (args.Length >= 2 && args[0] == "--artworksynctest") { RunArtworkSyncTest(args[1]); return; }
+
         // Diagnostic: how many tracks have ratings/play counts in the DB, and what the Play Counts file
         // (on-device deltas) holds. Read-only. Usage: --ratings <root|db> → ipod-ratings.txt
         if (args.Length >= 2 && args[0] == "--ratings") { RunRatingScan(args[1]); return; }
@@ -1552,6 +1555,55 @@ internal static class Program
         U64(0);                          // topObject
         U64(offTable);                   // offsetTableOffset
         return ms.ToArray();
+    }
+
+    // Drive the whole Windows-side cover-art pipeline against a throwaway Nano3 iPod folder: load,
+    // stage a real audio file's embedded art, commit, then re-parse the written ArtworkDB + .ithmb files.
+    private static void RunArtworkSyncTest(string audioFile)
+    {
+        var log = new System.Text.StringBuilder();
+        int pass = 0, fail = 0;
+        void Check(bool ok, string what) { if (ok) { pass++; log.AppendLine("  PASS  " + what); } else { fail++; log.AppendLine("  FAIL  " + what); } }
+        log.AppendLine("=== ArtworkDB sync end-to-end ===");
+        log.AppendLine("audio: " + audioFile);
+        try
+        {
+            string sandbox = Path.Combine(Path.GetTempPath(), "ipodcmd-artsync");
+            if (Directory.Exists(sandbox)) Directory.Delete(sandbox, true);
+            Directory.CreateDirectory(Path.Combine(sandbox, "iPod_Control", "Artwork"));
+            var device = new IPodDevice { MountRoot = sandbox, Profile = new DeviceProfile { Generation = IPodGeneration.Nano3, SupportsArtwork = true } };
+
+            var art = ArtworkLibrary.Load(device);
+            Check(art.SupportsArtwork, "Nano3 library supports artwork (formats resolved)");
+
+            const ulong dbid = 0xDEADBEEFCAFEF00DUL;
+            var staged = art.Stage(dbid, audioFile);
+            Check(staged is not null, "Stage returned art (embedded image found + encoded)");
+            if (staged is { } s) { Check(s.Size > 0, $"staged size = {s.Size} bytes, mhii id = {s.MhiiId}"); }
+            art.Commit();
+
+            string dbFile = Path.Combine(sandbox, "iPod_Control", "Artwork", "ArtworkDB");
+            Check(File.Exists(dbFile), "ArtworkDB written");
+            var m = ArtworkDb.Parse(File.ReadAllBytes(dbFile));
+            Check(m.Warnings.Count == 0, "written ArtworkDB parses cleanly (" + string.Join("; ", m.Warnings) + ")");
+            Check(m.Items.Count == 1, $"1 artwork item (got {m.Items.Count})");
+            if (m.Items.Count == 1)
+            {
+                var it = m.Items[0];
+                Check(it.TrackDbid == dbid, "item DBID links back to the track (mhii@0x18 == mhit@0x70)");
+                Check(it.Thumbs.Count == 2, $"2 thumbs (got {it.Thumbs.Count}) — Nano3 1061 + 1055");
+                foreach (var t in it.Thumbs)
+                {
+                    string f = Path.Combine(sandbox, "iPod_Control", "Artwork", $"F{t.FormatId}_{t.FileIndex}.ithmb");
+                    long len = File.Exists(f) ? new FileInfo(f).Length : -1;
+                    Check(len >= t.Offset + t.Size, $"F{t.FormatId}_{t.FileIndex}.ithmb holds slot ({t.Offset}+{t.Size} ≤ {len}), {t.Width}x{t.Height}");
+                }
+            }
+            log.AppendLine();
+            log.AppendLine(fail == 0 ? "RESULT: OK" : $"RESULT: {fail} FAILED");
+        }
+        catch (Exception ex) { log.AppendLine("RESULT: EXCEPTION - " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-artworksynctest.txt"), log.ToString());
     }
 
     private static void RunArtworkTest()

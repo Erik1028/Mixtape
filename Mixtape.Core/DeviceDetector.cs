@@ -129,6 +129,9 @@ internal static class DeviceDetector
         bool unknown = gen == IPodGeneration.Unknown;
         profile.SupportsPhotos = GenSupportsPhotos(gen) || unknown || Directory.Exists(Path.Combine(mountRoot, "Photos"));
         profile.SupportsVideo = GenSupportsVideo(gen) || unknown;
+        // Album art needs the exact per-model thumbnail formats, so it's gated to KNOWN colour-screen
+        // generations only (never the permissive "unknown" branch — we'd have no formats to render).
+        profile.SupportsArtwork = GenSupportsPhotos(gen);
 
         return new IPodDevice { MountRoot = mountRoot, Profile = profile };
     }

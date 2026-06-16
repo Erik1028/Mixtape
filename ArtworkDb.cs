@@ -22,6 +22,7 @@ internal sealed class ArtworkThumb
     public int Width, Height;
     public int VPad, HPad;
     public int FileIndex = 1;    // F<FormatId>_<FileIndex>.ithmb
+    public byte[] Pixels = System.Array.Empty<byte>(); // staged RGB565 bytes for a NEW thumb (written to the .ithmb on commit; not part of the DB)
     public string MhodPath => $":iPod_Control:Artwork:F{FormatId}_{FileIndex}.ithmb";
 }
 

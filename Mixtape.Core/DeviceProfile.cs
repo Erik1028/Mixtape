@@ -19,6 +19,8 @@ internal sealed class DeviceProfile
 
     /// <summary>Colour-screen models that can display photos (set in <see cref="DeviceDetector"/>).</summary>
     public bool SupportsPhotos;
+    /// <summary>Colour-screen models that show album art on screen (set in <see cref="DeviceDetector"/>).</summary>
+    public bool SupportsArtwork;
     /// <summary>Models with a video decoder (5G/Classic/Nano 3G+); set in <see cref="DeviceDetector"/>.</summary>
     public bool SupportsVideo;
     /// <summary>

@@ -830,6 +830,7 @@ internal sealed class MainForm : Form, IMessageFilter
         try
         {
             _lib = IpodLibrary.Load(device);
+            _lib.Artwork = ArtworkLibrary.Load(device);   // cover-art sync on colour-screen models (no-op otherwise)
             _db = _lib.View;
         }
         catch (Exception ex)

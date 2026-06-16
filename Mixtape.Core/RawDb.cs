@@ -468,6 +468,13 @@ internal sealed class RawDb
         PatchU32(h, 0x3C, t.SampleRate << 16); // Hz in the high 16 bits
         PatchU32(h, 0x68, nowMac);            // date added
         PatchU64(h, 0x70, t.Dbid);
+        if (t.HasArtwork)                     // cover-art link (offsets from libgpod's mhit; header is 0x184)
+        {
+            PatchU16(h, 0x7C, 1);             // artwork_count
+            PatchU32(h, 0x80, t.ArtworkSize); // artwork_size (sum of thumbnail bytes)
+            h[0xA4] = 1;                      // has_artwork: 1 = yes (2 = no)
+            PatchU32(h, 0x160, t.MhiiLink);   // mhii_link → ArtworkDB image id
+        }
         PatchU32(h, 0xD0, t.MediaType);       // 1 = audio, 2 = movie, 0x20 = music video, 0x40 = TV show
         if (MediaType.IsVideo(t.MediaType))
         {
@@ -560,6 +567,7 @@ internal sealed class RawDb
         return r;
     }
 
+    private static void PatchU16(byte[] buf, int off, ushort v) => BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(off, 2), v);
     private static void PatchU32(byte[] buf, int off, uint v) => BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(off, 4), v);
 
     private static void PatchU64(byte[] buf, int off, ulong v) => BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(off, 8), v);
@@ -642,4 +650,9 @@ internal sealed class NewTrack
     public byte Type2 = 1;                // MP3 = 1, AAC = 0
     public uint MediaType = 1;            // 1 = audio
     public DateTime? DateAdded;
+
+    // Cover art (set only when the device shows artwork and the source had an embedded image).
+    public bool HasArtwork;
+    public uint MhiiLink;                 // the ArtworkDB image id (mhii @0x10) this track links to
+    public uint ArtworkSize;              // total bytes of this track's thumbnails (mhit @0x80)
 }
