@@ -652,7 +652,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.SetInfo("", "No iPod connected", "Plug in your iPod — Mixtape detects it automatically. Or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows.", 0);
         SetActionButtons(); // recompute visibility + the "No iPod is connected" blocked reason
         BuildSidebar();
-        SetStatus("No device.");
+        SetStatus("");   // the header already says "No iPod connected" — don't echo it at the bottom too
     }
 
     /// <summary>Safely eject the connected iPod (flush + dismount), then return to the "no iPod" screen.</summary>
@@ -1421,7 +1421,13 @@ internal sealed class MainForm : Form, IMessageFilter
 
         BuildDeviceView(p, total, free, music, video, photoBytes, other, songCount, videoCount, photoCount);
         SetActionButtons();
-        SetStatus(p.ModelName ?? "iPod");
+        // The device name is already the header title + the sidebar row — don't echo it at the bottom.
+        // Show a useful at-a-glance summary instead (consistent with the song views' status line).
+        var bits = new List<string> { $"{songCount} song{(songCount == 1 ? "" : "s")}" };
+        if (videoCount > 0) bits.Add($"{videoCount} video{(videoCount == 1 ? "" : "s")}");
+        if (photoCount > 0) bits.Add($"{photoCount} photo{(photoCount == 1 ? "" : "s")}");
+        if (total > 0) bits.Add($"{CapacityBar.Human(free)} free");
+        SetStatus(string.Join("   ·   ", bits));
     }
 
     private long PhotoBytes()
