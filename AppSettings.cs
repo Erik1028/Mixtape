@@ -58,6 +58,9 @@ internal sealed class AppSettings
     // ---- Safety ----
     /// <summary>Ask for confirmation before the first write of a session.</summary>
     public bool ConfirmWrites { get; set; } = true;
+    /// <summary>When a hash58 iPod with no stored GUID is detected, offer to read its hardware ID
+    /// automatically (instead of making the user find the "Read device ID" button on the device page).</summary>
+    public bool AutoGuidRecovery { get; set; } = true;
 
     // ---- Cover art ----
     /// <summary>Chosen pre-made cover art per target (playlist pid hex, or "lib:&lt;dbid&gt;"); value = CoverArt id.</summary>

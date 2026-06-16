@@ -201,6 +201,7 @@ internal sealed class SettingsForm : Form
     private void BuildSafety()
     {
         Row("Confirm before writing", "Show a reminder before the first change each session.", Toggle(_s.ConfirmWrites, v => { _s.ConfirmWrites = v; _s.Save(); }));
+        Row("Auto device-ID recovery", "When a hash58 iPod with no stored ID is plugged in, offer to read its hardware ID automatically (a safe, read-only query) so music can be written — no hunting for the “Read device ID” button.", Toggle(_s.AutoGuidRecovery, v => { _s.AutoGuidRecovery = v; _s.Save(); }));
         if (_device is not null)
         {
             var restore = new ThemedButton { Text = "Restore…", Pill = true, Width = 110, Height = 30 };

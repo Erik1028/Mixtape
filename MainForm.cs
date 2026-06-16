@@ -849,6 +849,24 @@ internal sealed class MainForm : Form, IMessageFilter
         _browseFilter = null;
         BuildSidebar();
         ShowCurrent();
+        MaybeAutoRecoverGuid();
+    }
+
+    private readonly HashSet<string> _autoGuidOffered = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>When "Auto device-ID recovery" is on, the moment a hash58 iPod with no stored GUID is
+    /// detected we offer to read its hardware ID — so the user never has to hunt for the device-page
+    /// "Read device ID" button. Offered once per device per session; the recovery flow confirms + reports.</summary>
+    private void MaybeAutoRecoverGuid()
+    {
+        if (!_settings.AutoGuidRecovery) return;
+        var dev = _device; var p = dev?.Profile;
+        if (dev is null || p is null) return;
+        if (p.CanWrite || p.Scheme != ChecksumScheme.Hash58 || !string.IsNullOrEmpty(p.FirewireGuid)) return;
+        if (dev.MountRoot.Length < 2 || dev.MountRoot[1] != ':') return;   // only drive-letter mounts can be read
+        if (!_autoGuidOffered.Add(dev.MountRoot)) return;                  // don't re-offer the same iPod this session
+        // Let the device page finish painting first; the recovery flow has its own confirm + result dialogs.
+        BeginInvoke(() => { if (ReferenceEquals(_device, dev)) EnableWritingByReadingDeviceId(dev); });
     }
 
     private void RebuildPlaylists()
