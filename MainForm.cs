@@ -382,9 +382,9 @@ internal sealed class MainForm : Form, IMessageFilter
         // left edge when the artwork column is hidden, so dividers don't start indented in a ragged gap.
         var artCol = _tracks.Columns[0];
         int x0 = b.X + (artCol.Visible ? artCol.Width : 0);
-        // List dividers get a touch more presence than the calm device-card hairlines.
-        // Draw the divider FIRST on integer bounds with AA off so it stays a true crisp 1px.
-        using (var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.07))) e.Graphics.DrawLine(pen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
+        // A whisper-faint row divider — just enough to separate tracks without reading as a grid.
+        // Draw it FIRST on integer bounds with AA off so it stays a true crisp 1px.
+        using (var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.03))) e.Graphics.DrawLine(pen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
         // Selection is carried by one crisp, bright accent bar (the row fill itself only whispers a tint).
         if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
         {
