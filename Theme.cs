@@ -113,6 +113,49 @@ internal static class Theme
         return path;
     }
 
+    /// <summary>A crisp vector eighth-note, optically centred in <paramref name="r"/> (the head sits
+    /// low-left and the flag top-right, so the whole mark is nudged right a hair to read centred).
+    /// One shared placeholder mark for the idle player cover and generated album art.</summary>
+    public static void DrawNote(Graphics g, RectangleF r, Color c)
+    {
+        var savedSmooth = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float s = Math.Min(r.Width, r.Height);
+        float cx = r.X + r.Width / 2f + s * 0.03f;
+        float cy = r.Y + r.Height / 2f;
+        using var b = new SolidBrush(c);
+
+        float headRx = s * 0.165f, headRy = s * 0.12f;
+        float hx = cx - s * 0.11f, hy = cy + s * 0.17f;     // note head, low-left
+        float stemW = s * 0.05f;
+        float stemX = cx + s * 0.05f;                        // stem rises from the head's right side
+        float stemTop = cy - s * 0.30f;
+
+        using (var sp = RoundedRect(new RectangleF(stemX - stemW, stemTop, stemW, hy - stemTop), stemW / 2f))
+            g.FillPath(b, sp);
+
+        using (var flag = new GraphicsPath())               // a small filled flag off the stem top
+        {
+            flag.AddBezier(new PointF(stemX, stemTop),
+                new PointF(stemX + s * 0.17f, stemTop + s * 0.05f),
+                new PointF(stemX + s * 0.15f, stemTop + s * 0.20f),
+                new PointF(stemX + s * 0.05f, stemTop + s * 0.23f));
+            flag.AddBezier(new PointF(stemX + s * 0.05f, stemTop + s * 0.23f),
+                new PointF(stemX + s * 0.10f, stemTop + s * 0.13f),
+                new PointF(stemX + s * 0.085f, stemTop + s * 0.06f),
+                new PointF(stemX, stemTop));
+            flag.CloseFigure();
+            g.FillPath(b, flag);
+        }
+
+        var st = g.Save();                                   // tilted oval head
+        g.TranslateTransform(hx, hy);
+        g.RotateTransform(-22f);
+        g.FillEllipse(b, -headRx, -headRy, headRx * 2, headRy * 2);
+        g.Restore(st);
+        g.SmoothingMode = savedSmooth;
+    }
+
     // ---- corner-radius scale (one language across the whole UI) ----
     public const int RadControl = 8;       // non-pill buttons, selection/hover pills, segmented outer track, hover chips
     public const int RadChipInset = 6;     // pills nested inside the segmented track only (= RadControl - 2)
@@ -263,12 +306,7 @@ internal static class Theme
                 g.ResetClip();
             }
             if (size >= 44)
-            {
-                using var f = new Font(TextFamily, size * 0.42f, FontStyle.Bold);
-                using var tb = new SolidBrush(Color.FromArgb(54, 255, 255, 255));
-                var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                g.DrawString("♪", f, tb, new RectangleF(0, 0, size, size), sf);
-            }
+                DrawNote(g, new RectangleF(0, 0, size, size), Color.FromArgb(64, 255, 255, 255));
             using (var ip = RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), radius))
             using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255)))
                 g.DrawPath(pen, ip);

@@ -249,10 +249,12 @@ internal sealed class NowPlayingBar : Panel
         var cr = l.Cover;
         int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
 
-        // cover (soft shadow + rounded, clipped art or an idle placeholder)
+        // cover (soft shadow + rounded, clipped art or an idle placeholder). Fill + stroke share a
+        // half-pixel-inset rect so every corner antialiases identically (no soft bottom-right edge).
+        var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
         using (var shp = Theme.RoundedRect(new RectangleF(cr.X + 1, cr.Y + 2, cr.Width, cr.Height), cvr))
         using (var sh = new SolidBrush(Color.FromArgb(55, 0, 0, 0))) g.FillPath(sh, shp);
-        using (var cp = Theme.RoundedRect(cr, cvr))
+        using (var cp = Theme.RoundedRect(crF, cvr))
         {
             var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -263,10 +265,8 @@ internal sealed class NowPlayingBar : Panel
                 g.DrawImage(_cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff)), cr);
             g.Clip = saved;
         }
-        if (idle)
-            TextRenderer.DrawText(g, "♪", Theme.UiFont(20f), cr, Color.FromArgb(95, 255, 255, 255),
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-        using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(cr, cvr); g.DrawPath(bp, cp2); }
+        if (idle) Theme.DrawNote(g, cr, Color.FromArgb(110, 255, 255, 255));   // crisp, optically-centred eighth note
+        using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(crF, cvr); g.DrawPath(bp, cp2); }
 
         // title / artist (hidden when the window is too narrow)
         if (l.ShowTitle)
