@@ -58,7 +58,7 @@ internal static class Theme
     public static readonly Color ErrorCol = Color.FromArgb(255, 120, 110);
 
     /// <summary>The selectable background palettes (the "Background" customization). Text stays light on all.</summary>
-    public static readonly string[] ThemeVariants = { "Graphite", "Midnight", "Carbon", "Mocha" };
+    public static readonly string[] ThemeVariants = { "Graphite", "Midnight", "Carbon", "Mocha", "Forest", "Plum" };
 
     public static void SetThemeVariant(string name)
     {
@@ -67,6 +67,8 @@ internal static class Theme
             "Midnight" => (Color.FromArgb(19, 24, 43), Color.FromArgb(13, 16, 32), Color.FromArgb(32, 40, 64), Color.FromArgb(28, 35, 58), Color.FromArgb(30, 37, 60), Color.FromArgb(38, 47, 76)),
             "Carbon"   => (Color.FromArgb(12, 12, 14), Color.FromArgb(3, 3, 4),     Color.FromArgb(26, 26, 30), Color.FromArgb(24, 24, 28), Color.FromArgb(26, 27, 31), Color.FromArgb(34, 35, 40)),
             "Mocha"    => (Color.FromArgb(36, 29, 25), Color.FromArgb(27, 20, 17),  Color.FromArgb(54, 43, 37), Color.FromArgb(50, 40, 34), Color.FromArgb(50, 41, 35), Color.FromArgb(62, 50, 43)),
+            "Forest"   => (Color.FromArgb(20, 34, 28), Color.FromArgb(13, 24, 19),  Color.FromArgb(31, 49, 40), Color.FromArgb(27, 43, 35), Color.FromArgb(29, 45, 37), Color.FromArgb(39, 58, 48)),
+            "Plum"     => (Color.FromArgb(33, 26, 42), Color.FromArgb(24, 18, 32),  Color.FromArgb(48, 39, 60), Color.FromArgb(43, 35, 54), Color.FromArgb(45, 37, 56), Color.FromArgb(57, 47, 71)),
             _          => (Color.FromArgb(29, 30, 34), Color.FromArgb(22, 23, 26),  Color.FromArgb(40, 43, 48), Color.FromArgb(38, 42, 46), Color.FromArgb(44, 46, 51), Color.FromArgb(44, 47, 49)),
         };
         RowBg = Blend(PanelBg, Color.White, 0.05); // a touch lighter than PanelBg so secondary buttons read as raised
