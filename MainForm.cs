@@ -152,7 +152,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var content = _content = new TableLayoutPanel { Dock = DockStyle.None, ColumnCount = 1, RowCount = 4, BackColor = Theme.Bg, Margin = new Padding(0) };
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 178));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // now-playing bar — collapsed until a song plays
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, NowPlayingBar.H));   // now-playing bar — always visible (idle state when nothing plays)
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
 
         SetupTrackGrid();
@@ -196,7 +196,6 @@ internal sealed class MainForm : Form, IMessageFilter
 
         _nowPlaying.PrevRequested += () => PlayRelative(-1);
         _nowPlaying.NextRequested += () => PlayRelative(+1);
-        _nowPlaying.CloseRequested += () => { _playingTrack = null; SetNowPlayingVisible(false); };
         _nowPlaying.EqualizerRequested += OpenEqualizer;
         _nowPlaying.ApplyEq(_settings.EqEnabled, _settings.EqGains ?? EqualizerSampleProvider.FlatGains()); // restore saved EQ
 
@@ -526,7 +525,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void SetNowPlayingVisible(bool on)
     {
         if (_content is null) return;
-        _content.RowStyles[2].Height = on ? NowPlayingBar.H : 0;
+        _content.RowStyles[2].Height = NowPlayingBar.H;   // always visible; the bar shows an idle state when nothing plays
     }
 
     private void OpenPhotoViewer(uint startId)
