@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace iPodCommander;
 
-internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic }
+internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist }
 
 /// <summary>
 /// Apple-Music-style left rail: a "Mixtape" wordmark, then sections (DEVICE / LIBRARY /
@@ -155,6 +155,7 @@ internal sealed class Sidebar : Panel
                 break;
             }
             case SidebarRowKind.Playlist: // list with a note bullet
+            case SidebarRowKind.LocalPlaylist:
             {
                 float bx = x + s * 0.24f, bw = s * 0.40f;
                 for (int i = 0; i < 3; i++)

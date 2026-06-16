@@ -838,6 +838,10 @@ internal sealed class MainForm : Form, IMessageFilter
         // Always available, with or without an iPod: music that lives on this PC.
         _sidebar.AddSection("ON THIS PC");
         _sidebar.AddItem(SidebarRowKind.LocalMusic, "Local Music", "local", _viewKind == SidebarRowKind.LocalMusic);
+        foreach (var lp in _settings.LocalPlaylists)
+            _sidebar.AddItem(SidebarRowKind.LocalPlaylist, lp.Name.Length == 0 ? "Untitled" : lp.Name, lp,
+                _viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(lp, _currentLocalPlaylist));
+        if (_settings.LocalPlaylists.Count == 0) _sidebar.AddHint("Right-click to add a playlist");
 
         _sidebar.End();
         // Playlists with a chosen cover get it as their sidebar icon instantly; the rest fall back to
@@ -908,6 +912,10 @@ internal sealed class MainForm : Form, IMessageFilter
                     _viewKind = SidebarRowKind.Playlist; _current = pl;
                     BuildSidebar(); ShowCurrent();
                     break;
+                case SidebarRowKind.LocalPlaylist when tag is LocalPlaylistData lp:
+                    _viewKind = SidebarRowKind.LocalPlaylist; _current = null; _currentLocalPlaylist = lp; _browseFilter = null;
+                    BuildSidebar(); ShowCurrent();
+                    break;
             }
         });
     }
@@ -966,6 +974,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void ShowCurrent()
     {
+        if (_viewKind == SidebarRowKind.LocalPlaylist) { ShowLocalPlaylist(); return; }
         if (_viewKind == SidebarRowKind.LocalMusic) { ShowLocalMusic(); return; }
         if (_viewKind == SidebarRowKind.Photos) { ShowPhotos(); return; }
         if (_viewKind == SidebarRowKind.Device) { ShowDevice(); return; }
@@ -1189,6 +1198,11 @@ internal sealed class MainForm : Form, IMessageFilter
     /// isn't allowed the button stays clickable-but-greyed (BlockedReason), so clicking it explains why.</summary>
     private void SetActionButtons()
     {
+        if (_viewKind == SidebarRowKind.LocalPlaylist)   // a local playlist: add/remove songs via right-click, no header buttons
+        {
+            _header.AddButton.Visible = false; _header.DeleteButton.Visible = false;
+            return;
+        }
         if (_viewKind == SidebarRowKind.LocalMusic)
         {
             _header.AddButton.Visible = _header.DeleteButton.Visible = true;
@@ -2160,6 +2174,7 @@ internal sealed class MainForm : Form, IMessageFilter
     // ---- Local Music (PC files browsed inside Mixtape) ----
 
     private readonly List<Track> _localTracks = new();
+    private LocalPlaylistData? _currentLocalPlaylist;   // the local playlist being viewed (ON THIS PC)
     private int _localGen;
     private bool _localStale = true; // true → next ShowLocalMusic re-scans the folders (set on entry / folder change)
 
@@ -2255,6 +2270,162 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();
             });
         });
+    }
+
+    // ---- local playlists (PC-side playlists shown under ON THIS PC) ----
+
+    private void ShowLocalPlaylist()
+    {
+        SetCenter();
+        _hotRow = -1; _header.ArtClickable = false; _header.SetArt(null); _currentHasCustomCover = false;
+        var lp = _currentLocalPlaylist;
+        if (lp is null) { _viewKind = SidebarRowKind.LocalMusic; ShowLocalMusic(); return; }
+
+        FillLocalPlaylistGrid(lp, ResolveLocalTracks(lp.Paths, cacheOnly: true)); // instant from cache
+        int gen = ++_localGen;
+        var paths = lp.Paths.ToList();
+        Task.Run(() =>
+        {
+            var built = ResolveLocalTracks(paths, cacheOnly: false);
+            if (_localGen != gen) return;
+            TryBeginInvoke(() => { if (_localGen == gen && _viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) FillLocalPlaylistGrid(lp, built); });
+        });
+    }
+
+    /// <summary>Resolve file paths to tracks, reusing the Local Music scan cache; reads uncached files unless cacheOnly.</summary>
+    private List<Track> ResolveLocalTracks(IEnumerable<string> paths, bool cacheOnly)
+    {
+        var cache = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in _localTracks) if (t.LocalPath is { } p) cache[p] = t;
+        var result = new List<Track>();
+        foreach (var p in paths)
+        {
+            if (cache.TryGetValue(p, out var c)) { result.Add(c); continue; }
+            if (cacheOnly || !File.Exists(p)) continue;
+            Track t;
+            try { var nt = MetadataExtractor.Read(p, isVideo: false); t = new Track { Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(p), Artist = nt.Artist, Album = nt.Album, LengthMs = nt.LengthMs }; }
+            catch { t = new Track { Title = Path.GetFileNameWithoutExtension(p) }; }
+            t.MediaType = MediaType.Audio; t.LocalPath = p;
+            try { t.DateAdded = File.GetLastWriteTime(p); } catch { }
+            result.Add(t);
+        }
+        return result;
+    }
+
+    private void FillLocalPlaylistGrid(LocalPlaylistData lp, List<Track> tracks)
+    {
+        int artSize = _settings.Compact ? 30 : 36;
+        var list = (_searchQuery.Length > 0 ? tracks.Where(t => Match(t, _searchQuery)) : tracks).ToList(); // preserve playlist order
+        _tracks.SuspendLayout(); _populatingGrid = true; _tracks.Rows.Clear();
+        long totalMs = 0;
+        foreach (var t in list)
+        {
+            totalMs += t.LengthMs;
+            var thumb = Theme.MakeArt(artSize, Theme.StableHash(t.Album ?? t.DisplayTitle));
+            int r = _tracks.Rows.Add(thumb, t.DisplayTitle, t.Artist ?? "", t.Album ?? "",
+                RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.DurationStr);
+            _tracks.Rows[r].Tag = t;
+        }
+        _populatingGrid = false; _tracks.ResumeLayout();
+        LoadArtworkAsync(list, artSize);
+        string name = lp.Name.Length == 0 ? "Untitled" : lp.Name;
+        _emptyMsg = list.Count == 0 ? "This playlist is empty — right-click songs in Local Music to add them." : "";
+        _header.SetInfo("PLAYLIST · ON THIS PC", name, Summary(list.Count, totalMs, "song"), Theme.StableHash(name));
+        string st = $"{list.Count} song{(list.Count == 1 ? "" : "s")}";
+        _baseStatus = st; SetStatus(st);
+        SetActionButtons();
+    }
+
+    private void CreateLocalPlaylist(List<string>? initialPaths)
+    {
+        string? name = PromptDialog.Show(this, "New playlist", "Playlist name:", "New Playlist");
+        if (string.IsNullOrWhiteSpace(name)) return;
+        var lp = new LocalPlaylistData { Name = name.Trim() };
+        if (initialPaths is not null) lp.Paths.AddRange(initialPaths.Where(p => !string.IsNullOrEmpty(p)));
+        _settings.LocalPlaylists.Add(lp); _settings.Save();
+        _viewKind = SidebarRowKind.LocalPlaylist; _currentLocalPlaylist = lp;
+        BuildSidebar(); ShowCurrent();
+        SetStatus($"Created playlist “{lp.Name}”" + (lp.Paths.Count > 0 ? $" with {lp.Paths.Count} song(s)." : "."));
+    }
+
+    private void AddPathsToLocalPlaylist(LocalPlaylistData lp, List<string> paths)
+    {
+        int added = 0;
+        foreach (var p in paths) if (!lp.Paths.Any(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase))) { lp.Paths.Add(p); added++; }
+        _settings.Save(); BuildSidebar();
+        if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) ShowCurrent();
+        SetStatus(added == 0 ? $"Already in “{lp.Name}”." : $"Added {added} song(s) to “{lp.Name}”.");
+    }
+
+    private void RenameLocalPlaylist(LocalPlaylistData lp)
+    {
+        string? name = PromptDialog.Show(this, "Rename playlist", "New name:", lp.Name);
+        if (string.IsNullOrWhiteSpace(name) || name.Trim() == lp.Name) return;
+        lp.Name = name.Trim(); _settings.Save(); BuildSidebar();
+        if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) ShowCurrent();
+        SetStatus($"Renamed playlist to “{lp.Name}”.");
+    }
+
+    private void DeleteLocalPlaylist(LocalPlaylistData lp)
+    {
+        string label = lp.Name.Length == 0 ? "Untitled" : lp.Name;
+        if (MessageBox.Show(this, $"Delete the playlist “{label}”?\n\nThis only removes the playlist — your music files on the PC are untouched.",
+                "Delete playlist", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        _settings.LocalPlaylists.Remove(lp); _settings.Save();
+        if (ReferenceEquals(_currentLocalPlaylist, lp)) { _currentLocalPlaylist = null; _viewKind = SidebarRowKind.LocalMusic; }
+        BuildSidebar(); ShowCurrent();
+        SetStatus($"Deleted playlist “{label}”.");
+    }
+
+    private void RemoveFromLocalPlaylist(LocalPlaylistData lp, List<string> paths)
+    {
+        int n = lp.Paths.RemoveAll(p => paths.Any(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase)));
+        _settings.Save(); BuildSidebar();
+        if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) ShowCurrent();
+        SetStatus($"Removed {n} song(s) from “{lp.Name}”.");
+    }
+
+    private List<string> SelectedLocalPaths()
+    {
+        var paths = new List<string>();
+        foreach (DataGridViewRow row in _tracks.SelectedRows) if (row.Tag is Track t && t.LocalPath is { } p) paths.Add(p);
+        return paths;
+    }
+
+    /// <summary>Right-click menu for tracks in Local Music / a local playlist (no iPod write involved).</summary>
+    private void ShowLocalTrackMenu(Point screen)
+    {
+        var paths = SelectedLocalPaths();
+        if (paths.Count == 0) return;
+        var m = ThemedMenu.New();
+
+        int firstRow = -1;
+        foreach (DataGridViewRow r in _tracks.SelectedRows) if (firstRow < 0 || r.Index < firstRow) firstRow = r.Index;
+        if (firstRow >= 0) { int fr = firstRow; var play = new ToolStripMenuItem("Play"); play.Click += (_, _) => ActivateTrackRow(fr); m.Items.Add(play); }
+        m.Items.Add(new ToolStripSeparator());
+
+        var addTo = new ToolStripMenuItem("Add to playlist");
+        foreach (var lp in _settings.LocalPlaylists)
+        {
+            if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(lp, _currentLocalPlaylist)) continue; // already here
+            var r = lp; var it = new ToolStripMenuItem(lp.Name.Length == 0 ? "Untitled" : lp.Name);
+            it.Click += (_, _) => AddPathsToLocalPlaylist(r, paths);
+            addTo.DropDownItems.Add(it);
+        }
+        if (addTo.DropDownItems.Count > 0) addTo.DropDownItems.Add(new ToolStripSeparator());
+        var nu = new ToolStripMenuItem("New playlist…"); nu.Click += (_, _) => CreateLocalPlaylist(paths);
+        addTo.DropDownItems.Add(nu);
+        addTo.DropDown.BackColor = Theme.PanelBg; addTo.DropDown.Renderer = new DarkMenuRenderer();
+        m.Items.Add(addTo);
+
+        if (_viewKind == SidebarRowKind.LocalPlaylist && _currentLocalPlaylist is { } cur)
+        {
+            m.Items.Add(new ToolStripSeparator());
+            var rem = new ToolStripMenuItem($"Remove from “{(cur.Name.Length == 0 ? "Untitled" : cur.Name)}”   ({paths.Count})");
+            rem.Click += (_, _) => RemoveFromLocalPlaylist(cur, paths);
+            m.Items.Add(rem);
+        }
+        m.Show(screen);
     }
 
     private void AddLocalFolder()
@@ -2651,6 +2822,27 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void OnSidebarRightClick(SidebarRowKind kind, object? tag, Point screen)
     {
+        // Local-music rows work with or without an iPod, so handle them before the device check.
+        if (kind == SidebarRowKind.LocalMusic)
+        {
+            var lm = ThemedMenu.New();
+            var n = new ToolStripMenuItem("New playlist…"); n.Click += (_, _) => CreateLocalPlaylist(null);
+            lm.Items.Add(n);
+            lm.Show(screen);
+            return;
+        }
+        if (kind == SidebarRowKind.LocalPlaylist && tag is LocalPlaylistData lp)
+        {
+            var lm = ThemedMenu.New();
+            var ren = new ToolStripMenuItem("Rename…"); ren.Click += (_, _) => RenameLocalPlaylist(lp); lm.Items.Add(ren);
+            lm.Items.Add(new ToolStripSeparator());
+            var ldel = new ToolStripMenuItem("Delete playlist"); ldel.Click += (_, _) => DeleteLocalPlaylist(lp); lm.Items.Add(ldel);
+            lm.Items.Add(new ToolStripSeparator());
+            var lnu = new ToolStripMenuItem("New playlist…"); lnu.Click += (_, _) => CreateLocalPlaylist(null); lm.Items.Add(lnu);
+            lm.Show(screen);
+            return;
+        }
+
         if (_db is null) return;
 
         // The library row offers just the cover chooser (a local preference, always available).
@@ -2702,7 +2894,9 @@ internal sealed class MainForm : Form, IMessageFilter
             _tracks.ClearSelection();
             _tracks.Rows[hit.RowIndex].Selected = true;
         }
-        ShowTrackMenu(_tracks.PointToScreen(e.Location));
+        var pt = _tracks.PointToScreen(e.Location);
+        if (_viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist) ShowLocalTrackMenu(pt);
+        else ShowTrackMenu(pt);
     }
 
     private void ShowTrackMenu(Point screen)

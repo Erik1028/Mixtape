@@ -30,6 +30,9 @@ internal sealed class AppSettings
     /// <summary>Folders on the PC scanned for the "Local Music" library view.</summary>
     public List<string> LocalMusicFolders { get; set; } = new();
 
+    /// <summary>User-made playlists of PC files, shown under "ON THIS PC". Each is a name + ordered file paths.</summary>
+    public List<LocalPlaylistData> LocalPlaylists { get; set; } = new();
+
     // ---- Equalizer (applied to PC playback via NAudio) ----
     public bool EqEnabled { get; set; }
     /// <summary>Per-band gains in dB (10 bands: 31 Hz … 16 kHz). Empty/short = flat.</summary>
@@ -122,4 +125,11 @@ internal sealed class AppSettings
         color = Color.FromArgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
         return true;
     }
+}
+
+/// <summary>A PC-side playlist: a name plus an ordered list of local audio file paths.</summary>
+internal sealed class LocalPlaylistData
+{
+    public string Name { get; set; } = "";
+    public List<string> Paths { get; set; } = new();
 }
