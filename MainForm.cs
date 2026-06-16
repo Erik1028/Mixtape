@@ -319,6 +319,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.Columns.Add(time);
 
         _scrollbar.Attach(_tracks);
+        _tracks.SizeChanged += (_, _) => ApplyColumns();   // drop low-priority columns as the grid narrows
         _tracks.RowPostPaint += OnRowPostPaint;
         _tracks.SelectionChanged += (_, _) => OnTrackSelectionChanged();
         _tracks.CellMouseEnter += (_, e) => SetHotRow(e.RowIndex);
@@ -2940,15 +2941,19 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.AddButton.Invalidate();
     }
 
-    /// <summary>Show/hide the Artist/Album/Time columns per settings.</summary>
+    /// <summary>Show/hide columns per the user's settings AND the available width — as the grid narrows the
+    /// low-priority columns drop (Rating → Plays → Added → Album → Artist) so Song/Artist/Album keep readable
+    /// width instead of collapsing to "S… / A / A.". Song + Time always stay; art per the artwork setting.</summary>
     private void ApplyColumns()
     {
         if (_tracks.Columns.Count < 8) return;
-        _tracks.Columns[2].Visible = _settings.ShowArtist;
-        _tracks.Columns[3].Visible = _settings.ShowAlbum;
-        _tracks.Columns[4].Visible = _settings.ShowRating;
-        _tracks.Columns[5].Visible = _settings.ShowPlays;
-        _tracks.Columns[6].Visible = _settings.ShowDateAdded;
+        int w = _tracks.ClientSize.Width;
+        _tracks.Columns[0].Visible = _settings.ShowArtwork;
+        _tracks.Columns[2].Visible = _settings.ShowArtist    && w >= 380;
+        _tracks.Columns[3].Visible = _settings.ShowAlbum     && w >= 480;
+        _tracks.Columns[6].Visible = _settings.ShowDateAdded && w >= 600;
+        _tracks.Columns[5].Visible = _settings.ShowPlays     && w >= 680;
+        _tracks.Columns[4].Visible = _settings.ShowRating    && w >= 760;
         _tracks.Columns[7].Visible = _settings.ShowTime;
     }
 
