@@ -15,7 +15,6 @@ internal sealed class MainForm : Form, IMessageFilter
     private readonly HeaderPanel _header = new() { Dock = DockStyle.Fill };
     private readonly DataGridView _tracks = new() { Dock = DockStyle.Fill };
     private readonly ThinScrollBar _scrollbar = new() { Dock = DockStyle.Right };
-    private readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(22, 0, 0, 0) };
     private int _hotRow = -1;
     private int _dragRow = -1, _dropRow = -1, _dragStartY; // drag-to-reorder a playlist's tracks
     private bool _rowDragging;
@@ -38,6 +37,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "RATING", "PLAYS", "ADDED", "TIME" };
     private string _emptyMsg = ""; // shown centred when the song list has no rows
     private string _baseStatus = ""; // the view's normal status line (restored when a multi-selection clears)
+    private bool _baseStatusClickable; // true when _baseStatus is the clickable warning line
     private bool _populatingGrid;    // suppress selection-status churn while rows are being added
     private SidebarRowKind _viewKind = SidebarRowKind.AllSongs; // which top-level view is active
     private PhotoLibrary? _photos;
@@ -151,11 +151,10 @@ internal sealed class MainForm : Form, IMessageFilter
         // LayoutShell() positions the cards + window buttons so the wallpaper shows through the gaps.
         var root = _root = new WallpaperPanel { Dock = DockStyle.Fill, CaptionHeight = CaptionH, ResizeBorder = ResizeBorder };
 
-        var content = _content = new TableLayoutPanel { Dock = DockStyle.None, ColumnCount = 1, RowCount = 4, BackColor = Theme.Bg, Margin = new Padding(0) };
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));   // compact content header (art · title · actions)
+        var content = _content = new TableLayoutPanel { Dock = DockStyle.None, ColumnCount = 1, RowCount = 3, BackColor = Theme.Bg, Margin = new Padding(0) };
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));   // compact content header (art · title · actions · status)
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, NowPlayingBar.H));   // now-playing bar — always visible (idle state when nothing plays)
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, NowPlayingBar.H));   // now-playing bar — always the bottom row (idle state when nothing plays)
 
         SetupTrackGrid();
         ApplyColumns();
@@ -190,11 +189,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _photoView.ItemActivated += OpenPhotoViewer;
         _browseView.ItemActivated += OnBrowseActivated;
 
-        var statusPanel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.SidebarBg };
-        _status.ForeColor = Theme.Subtle;
-        _status.BackColor = Theme.SidebarBg;
-        _status.Click += (_, _) => ShowDbWarnings();
-        statusPanel.Controls.Add(_status);
+        _header.StatusClicked += () => ShowDbWarnings();   // the status line (warnings) moved into the header
 
         _nowPlaying.PrevRequested += () => PlayRelative(-1);
         _nowPlaying.NextRequested += () => PlayRelative(+1);
@@ -210,8 +205,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         content.Controls.Add(_header, 0, 0);
         content.Controls.Add(center, 0, 1);
-        content.Controls.Add(_nowPlaying, 0, 2);
-        content.Controls.Add(statusPanel, 0, 3);
+        content.Controls.Add(_nowPlaying, 0, 2);   // now-playing bar is the bottom row
 
         _sidebar.Dock = DockStyle.None;
         root.Controls.Add(_sidebar);
@@ -1112,12 +1106,13 @@ internal sealed class MainForm : Form, IMessageFilter
         _currentHasCustomCover = coverId >= 0;
         if (_currentHasCustomCover) _header.SetArt(CoverArt.Generate(coverId, 150)); // chosen art wins over the song thumbnail
         _header.ArtClickable = _viewKind is SidebarRowKind.AllSongs or SidebarRowKind.Playlist; // click the cover to choose art
-        string st = $"{list.Count} {noun}{(list.Count == 1 ? "" : "s")}";
-        if (_db.Warnings.Count > 0) st += $"   ·   ⚠ {_db.Warnings.Count} warning(s)";
-        _status.Cursor = _db.Warnings.Count > 0 ? Cursors.Hand : Cursors.Default;   // click the status to read them
-        if (_device is not null && !_device.Profile.CanWrite) st += "   ·   Read-only — " + _device.Profile.WriteBlockReason;
-        _baseStatus = st;
-        SetStatus(st);
+        // The count lives in the header subtitle now; the under-button line carries only warnings + read-only note.
+        bool warn = _db.Warnings.Count > 0;
+        string st = warn ? $"⚠ {_db.Warnings.Count} warning(s)" : "";
+        if (_device is not null && !_device.Profile.CanWrite)
+            st = (st.Length > 0 ? st + "   ·   " : "") + "Read-only — " + _device.Profile.WriteBlockReason;
+        _baseStatus = st; _baseStatusClickable = warn;
+        SetStatus(st, warn);
         SetActionButtons();
         LoadArtworkAsync(list, artSize);
     }
@@ -1170,7 +1165,7 @@ internal sealed class MainForm : Form, IMessageFilter
         string sub = $"{cards.Count} {(albums ? "album" : "artist")}{(cards.Count == 1 ? "" : "s")}";
         _header.SetInfo("LIBRARY", title, sub, Theme.StableHash(title));
         _header.SetArt(null); // the header uses its generated gradient for these overview pages
-        SetStatus(sub);
+        _baseStatus = ""; _baseStatusClickable = false; SetStatus("");  // count shows in the subtitle
         SetActionButtons();
         LoadBrowseCoversAsync(reps);
     }
@@ -1885,7 +1880,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_populatingGrid) return;
         if (_tracks.Parent is Control gh && !gh.Visible) return; // only when the track grid is the visible centre
         int n = _tracks.SelectedRows.Count;
-        if (n <= 1) { if (_baseStatus.Length > 0) SetStatus(_baseStatus); return; }
+        if (n <= 1) { SetStatus(_baseStatus, _baseStatusClickable); return; }
         long ms = 0, bytes = 0;
         foreach (DataGridViewRow row in _tracks.SelectedRows)
             if (row.Tag is Track t) { ms += t.LengthMs; bytes += t.FileSize; }
@@ -2287,9 +2282,10 @@ internal sealed class MainForm : Form, IMessageFilter
             : "";
         _header.SetInfo("ON THIS PC", "Local Music",
             folders == 0 ? "Music from folders on your PC" : Summary(shown.Count, totalMs, "song"), Theme.StableHash("Local Music"));
+        // Song count is in the subtitle; the under-button line carries only the folder count (or the empty hint).
         string st = folders == 0 ? "No folders added yet — click “Add folder”."
-            : $"{shown.Count} song{(shown.Count == 1 ? "" : "s")}   ·   {folders} folder{(folders == 1 ? "" : "s")}";
-        _baseStatus = st; SetStatus(st);
+            : $"{folders} folder{(folders == 1 ? "" : "s")}";
+        _baseStatus = st; _baseStatusClickable = false; SetStatus(st);
         SetActionButtons();
     }
 
@@ -2399,8 +2395,7 @@ internal sealed class MainForm : Form, IMessageFilter
         string name = lp.Name.Length == 0 ? "Untitled" : lp.Name;
         _emptyMsg = list.Count == 0 ? "This playlist is empty — right-click songs in Local Music to add them." : "";
         _header.SetInfo("PLAYLIST · ON THIS PC", name, Summary(list.Count, totalMs, "song"), Theme.StableHash(name));
-        string st = $"{list.Count} song{(list.Count == 1 ? "" : "s")}";
-        _baseStatus = st; SetStatus(st);
+        _baseStatus = ""; _baseStatusClickable = false; SetStatus("");   // count shows in the subtitle
         SetActionButtons();
     }
 
@@ -3226,7 +3221,6 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         _header.BackColor = Theme.Bg;
         _sidebar.BackColor = Theme.SidebarBg;
-        _status.BackColor = Theme.SidebarBg;
         _search.Restyle();
         if (_search.Parent is Control searchHost) searchHost.BackColor = Theme.Bg;
         _scrollbar.BackColor = Theme.Bg;       // music-list scrollbar track (baked at field-init)
@@ -3244,9 +3238,6 @@ internal sealed class MainForm : Form, IMessageFilter
         RecolorBakedControls();
         if (_photoView.Parent is Control center) center.BackColor = Theme.Bg;
         if (_tracks.Parent is Control gh) gh.BackColor = Theme.Bg;
-        if (_status.Parent is Control sp) sp.BackColor = Theme.SidebarBg;
-        _status.BackColor = Theme.SidebarBg;
-        _status.ForeColor = Theme.Subtle;
         _deviceView.BackColor = Theme.Bg;
         _deviceScrollPanel.BackColor = Theme.Bg;
         _deviceScroll.BackColor = Theme.Bg;
@@ -3293,13 +3284,9 @@ internal sealed class MainForm : Form, IMessageFilter
         return false;
     }
 
-    private void SetStatus(string text)
-    {
-        _status.Text = text;
-        // Collapse the status strip when there's nothing to show, so no empty band sits under the player.
-        if (_content is not null && _content.RowStyles.Count > 3)
-            _content.RowStyles[3].Height = string.IsNullOrEmpty(text) ? 0 : 28;
-    }
+    // The status line now lives in the header (under the action buttons). Transient messages aren't
+    // clickable; the persistent warning line is (clickable = true → opens the warnings list).
+    private void SetStatus(string text, bool clickable = false) => _header.SetStatus(text, clickable);
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int flags);

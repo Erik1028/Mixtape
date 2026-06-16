@@ -28,6 +28,23 @@ internal sealed class HeaderPanel : Panel
     private Tween? _artTween;
     private bool _artHover;
 
+    // A small status line under the action buttons: warnings (clickable), read-only notes, and transient
+    // feedback ("Updated…", "N selected…"). Replaces the old bottom status strip.
+    private string _status = "";
+    private bool _statusClickable;
+    private Rectangle _statusRect = Rectangle.Empty;
+    private bool _statusHover;
+    /// <summary>Raised when the (clickable) status line is clicked — wired to show the DB warnings.</summary>
+    public event Action? StatusClicked;
+
+    public void SetStatus(string text, bool clickable)
+    {
+        text ??= "";
+        if (_status == text && _statusClickable == clickable) return;
+        _status = text; _statusClickable = clickable;
+        Invalidate();
+    }
+
     private const int Pad = 18;
 
     public HeaderPanel()
@@ -40,11 +57,21 @@ internal sealed class HeaderPanel : Panel
 
         MouseMove += (_, e) =>
         {
-            bool over = ArtClickable && ArtRect.Contains(e.Location);
-            if (over != _artHover) { _artHover = over; Cursor = over ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            bool overArt = ArtClickable && ArtRect.Contains(e.Location);
+            bool overStatus = _statusClickable && _statusRect.Contains(e.Location);
+            if (overArt != _artHover || overStatus != _statusHover)
+            {
+                _artHover = overArt; _statusHover = overStatus;
+                Cursor = (overArt || overStatus) ? Cursors.Hand : Cursors.Default;
+                Invalidate();
+            }
         };
-        MouseLeave += (_, _) => { if (_artHover) { _artHover = false; Cursor = Cursors.Default; Invalidate(); } };
-        MouseClick += (_, e) => { if (ArtClickable && ArtRect.Contains(e.Location)) ArtClicked?.Invoke(); };
+        MouseLeave += (_, _) => { if (_artHover || _statusHover) { _artHover = _statusHover = false; Cursor = Cursors.Default; Invalidate(); } };
+        MouseClick += (_, e) =>
+        {
+            if (ArtClickable && ArtRect.Contains(e.Location)) ArtClicked?.Invoke();
+            else if (_statusClickable && _statusRect.Contains(e.Location)) StatusClicked?.Invoke();
+        };
     }
 
     private Rectangle ArtRect => new(Pad, Pad, ArtSize, ArtSize);
@@ -190,6 +217,24 @@ internal sealed class HeaderPanel : Panel
                 new Rectangle(tx, ty, rightW, subH), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         }
+
+        // Status line under the action buttons (right-aligned): warnings / read-only / transient feedback.
+        if (!string.IsNullOrEmpty(_status))
+        {
+            using var statusFont = Theme.UiFont(8.75f, _statusClickable ? FontStyle.Bold : FontStyle.Regular);
+            var sz = TextRenderer.MeasureText(g, _status, statusFont);
+            int sw = Math.Min(sz.Width + 6, (int)(Width * 0.55));
+            int sx = Width - Pad - sw;
+            int sy = AddButton.Visible ? AddButton.Bottom + 7 : Height - 12 - sz.Height;
+            _statusRect = new Rectangle(sx, sy, sw, sz.Height);
+            // Warnings read in a warm amber; everything else stays quiet. Brighten on hover.
+            Color col = _statusClickable
+                ? Theme.Blend(Theme.Bg, _statusHover ? Color.FromArgb(255, 245, 190, 90) : Color.FromArgb(255, 226, 162, 70), 0.92)
+                : Theme.Subtle;
+            TextRenderer.DrawText(g, _status, statusFont, _statusRect, col,
+                TextFormatFlags.Right | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+        else _statusRect = Rectangle.Empty;
 
         using var pen = new Pen(Theme.Border);
         g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
