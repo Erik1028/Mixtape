@@ -257,7 +257,8 @@ internal sealed class NowPlayingBar : Panel
             var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             if (idle)
-                using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.PanelBg, Color.White, 0.06), Theme.Blend(Theme.PanelBg, Color.Black, 0.10), Theme.ArtAngle)) g.FillRectangle(ph, cr);
+                // a quiet recessed tile (just above the bar's own shade), not a bright grey box
+                using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.SidebarBg, Color.White, 0.09), Theme.Blend(Theme.SidebarBg, Color.Black, 0.06), Theme.ArtAngle)) g.FillRectangle(ph, cr);
             else
                 g.DrawImage(_cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff)), cr);
             g.Clip = saved;
