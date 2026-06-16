@@ -2,7 +2,10 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- windows10 TFM pulls in the CsWinRT projections so we can use System Media Transport Controls
+         (the Win11 media flyout + global media keys). Min-supported stays at Win10 1809 for broad reach. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>  <!-- in-app media preview: WPF MediaElement (Media Foundation) for audio + video via ElementHost; no NuGet -->
     <Nullable>enable</Nullable>

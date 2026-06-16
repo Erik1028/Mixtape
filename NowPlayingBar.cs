@@ -35,6 +35,7 @@ internal sealed class NowPlayingBar : Panel
     private bool _shuffle;
     private RepeatMode _repeat = RepeatMode.Off;
     private string? _path;        // last loaded file path, kept so repeat-one can restart the track
+    private SmtcController? _smtc; // Windows media flyout + global media keys (created lazily once the window exists)
 
     private enum Drag { None, Seek, Volume }
     private Drag _drag = Drag.None;
@@ -76,10 +77,10 @@ internal sealed class NowPlayingBar : Panel
     public void ApplyEq(bool enabled, float[] gains) { _eqOn = enabled; _engine.SetEqEnabled(enabled); _engine.SetEqGains(gains); Invalidate(); }
 
     /// <summary>Pause playback (e.g. when a video preview opens) without clearing the bar. Returns true if it was playing.</summary>
-    public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; Invalidate(); return true; }
+    public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); Invalidate(); return true; }
 
     /// <summary>Resume after an external pause (e.g. when the video preview closes).</summary>
-    public void Resume() { if (_track is not null && !_playing) { _engine.Play(); _playing = true; Invalidate(); } }
+    public void Resume() { if (_track is not null && !_playing) { _engine.Play(); _playing = true; _smtc?.Playing(); Invalidate(); } }
 
     /// <summary>Load and play a track's file. <paramref name="cover"/> may be null (a gradient is used).</summary>
     public void Play(Track track, string filePath, Bitmap? cover)
@@ -94,6 +95,9 @@ internal sealed class NowPlayingBar : Panel
         _engine.Play();
         _playing = true;
         _scrubFrac = -1;
+        EnsureSmtc();
+        _smtc?.SetMetadata(track.DisplayTitle, track.Artist, track.Album, _cover);
+        _smtc?.Playing();
         Invalidate();
     }
 
@@ -106,7 +110,20 @@ internal sealed class NowPlayingBar : Panel
         _cover?.Dispose(); _cover = null;
         _playing = false;
         _scrubFrac = -1;
+        _smtc?.Stopped();
         Invalidate();
+    }
+
+    // Create the system-media-controls bridge once the hosting window exists (skipped in headless renders).
+    private void EnsureSmtc()
+    {
+        if (_smtc is not null || !Application.MessageLoop) return;
+        var form = FindForm();
+        if (form is null || !form.IsHandleCreated) return;
+        _smtc = new SmtcController(form.Handle, a => { try { if (IsHandleCreated) BeginInvoke(a); } catch { } });
+        _smtc.PlayPause += MediaPlayPause;
+        _smtc.Next += () => NextRequested?.Invoke();
+        _smtc.Previous += () => PrevRequested?.Invoke();
     }
 
     private void OnEnded()
@@ -119,11 +136,13 @@ internal sealed class NowPlayingBar : Panel
             _engine.Load(_path);
             _engine.Play();
             _playing = true; _scrubFrac = -1;
+            _smtc?.Playing();
             Invalidate();
             return;
         }
         // Otherwise advance (the host applies shuffle / repeat-all); if there's no next it rests, paused.
         _playing = false;
+        _smtc?.Paused();   // Play() will flip back to Playing if a next track starts
         Invalidate();
         NextRequested?.Invoke();
     }
@@ -134,8 +153,8 @@ internal sealed class NowPlayingBar : Panel
     private void TogglePlay()
     {
         if (_track is null) return;
-        if (_playing) { _engine.Pause(); _playing = false; }
-        else { _engine.Play(); _playing = true; }
+        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); }
+        else { _engine.Play(); _playing = true; _smtc?.Playing(); }
         Invalidate();
     }
 
@@ -504,7 +523,7 @@ internal sealed class NowPlayingBar : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _engine.Dispose(); _cover?.Dispose(); }
+        if (disposing) { _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); }
         base.Dispose(disposing);
     }
 }
