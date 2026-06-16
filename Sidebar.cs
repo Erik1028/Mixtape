@@ -43,8 +43,8 @@ internal sealed class Sidebar : Panel
 
     private readonly ThemedButton _refresh = new() { Text = "Refresh", Pill = true, Height = 30 };
     private readonly ThemedButton _openFolder = new() { Text = "Open folder", Pill = true, Height = 30 };
-    private readonly ThemedButton _settings = new() { Text = "⚙", Width = 30, Height = 28, Ghost = true, Font = Theme.UiFont(13f) };
-    private readonly ThemedButton _playFile = new() { Text = "▶", Width = 30, Height = 28, Ghost = true, Font = Theme.UiFont(10f) };
+    private readonly ThemedButton _settings = new() { Icon = ThemedButton.Ico.Settings, Width = 30, Height = 28, Ghost = true };
+    private readonly ThemedButton _playFile = new() { Icon = ThemedButton.Ico.Play, Width = 30, Height = 28, Ghost = true };
     private readonly ToolTip _tip = new();
 
     private const int HeaderH = 60, SectionH = 30, ItemH = 34, FooterH = 56, Pad = 12;

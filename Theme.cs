@@ -318,6 +318,9 @@ internal sealed class ThemedButton : Button
     private bool _danger;
     public bool Danger { get => _danger; set { if (_danger != value) { _danger = value; Invalidate(); } } }  // destructive: red label + tinted border
     public string? Glyph { get; init; }
+    public enum Ico { None, Play, Settings }
+    public Ico Icon { get; init; }   // crisp vector icon (Ghost buttons) instead of a symbol-font glyph
+    protected override bool ShowFocusCues => false;   // no dotted focus rectangle on our custom buttons
     private float _hoverT;  // 0→1 hover wash
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
     private bool _painted;
@@ -405,8 +408,10 @@ internal sealed class ThemedButton : Button
         if (Ghost)
         {
             if (h > 0.001f) { using var hb = new SolidBrush(Color.FromArgb((int)(h * 255), Theme.RowHover)); g.FillPath(hb, path); }
-            TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, textRect,
-                disabled ? Theme.Faint : Theme.Blend(Color.FromArgb(205, 210, 214), Theme.TextCol, h), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            Color ic = disabled ? Theme.Faint : Theme.Blend(Color.FromArgb(205, 210, 214), Theme.TextCol, h);
+            if (Icon != Ico.None) DrawIcon(g, r, Icon, ic);
+            else TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, textRect, ic,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
 
@@ -422,6 +427,37 @@ internal sealed class ThemedButton : Button
         string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
         TextRenderer.DrawText(g, label, Font, textRect, text,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    /// <summary>Crisp, perfectly-centred vector icon (symbol-font glyphs sit off-centre at this size).</summary>
+    private static void DrawIcon(Graphics g, RectangleF r, Ico icon, Color c)
+    {
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        using var b = new SolidBrush(c);
+        if (icon == Ico.Play)
+        {
+            float s = Math.Min(r.Width, r.Height) * 0.26f;
+            // nudge the triangle a hair right so it reads optically centred
+            g.FillPolygon(b, new[] { new PointF(cx - s * 0.78f, cy - s), new PointF(cx - s * 0.78f, cy + s), new PointF(cx + s * 1.02f, cy) });
+        }
+        else if (icon == Ico.Settings)
+        {
+            float ro = Math.Min(r.Width, r.Height) * 0.30f;   // tooth-tip radius
+            float ri = ro * 0.74f;                             // valley radius
+            const int teeth = 8;
+            var poly = new PointF[teeth * 2];
+            for (int i = 0; i < teeth * 2; i++)
+            {
+                double a = -Math.PI / 2 + i * Math.PI / teeth;
+                float rad = (i % 2 == 0) ? ro : ri;
+                poly[i] = new PointF(cx + (float)Math.Cos(a) * rad, cy + (float)Math.Sin(a) * rad);
+            }
+            using var gp = new GraphicsPath { FillMode = FillMode.Alternate };
+            gp.AddPolygon(poly);
+            float rh = ro * 0.38f;                             // centre hole (even-odd punches it out)
+            gp.AddEllipse(cx - rh, cy - rh, rh * 2, rh * 2);
+            g.FillPath(b, gp);
+        }
     }
 
     protected override void Dispose(bool disposing)
