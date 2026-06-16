@@ -28,7 +28,7 @@ internal sealed class HeaderPanel : Panel
     private Tween? _artTween;
     private bool _artHover;
 
-    private const int Pad = 22;
+    private const int Pad = 18;
 
     public HeaderPanel()
     {
@@ -99,15 +99,17 @@ internal sealed class HeaderPanel : Panel
         base.Dispose(disposing);
     }
 
-    private int ArtSize => Math.Max(72, Height - Pad * 2);
-    private int TextX => Pad + ArtSize + 22;
+    private int ArtSize => Math.Max(64, Height - Pad * 2);
+    private int TextX => Pad + ArtSize + 18;
 
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        int by = Height - Pad - AddButton.Height;
-        AddButton.Location = new Point(TextX, by);
-        DeleteButton.Location = new Point(TextX + AddButton.Width + 10, by);
+        // Buttons live on the right, vertically centred (compact horizontal header) — Add music | Delete.
+        int by = (Height - AddButton.Height) / 2;
+        int rx = Width - Pad - DeleteButton.Width;
+        DeleteButton.Location = new Point(rx, by);
+        AddButton.Location = new Point(rx - 10 - AddButton.Width, by);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -141,37 +143,42 @@ internal sealed class HeaderPanel : Panel
         }
 
         int tx = TextX;
-        int rightW = Width - tx - Pad;
-        // Stack kicker → title → subtitle using measured font heights so the big title never clips its
-        // descenders or collides with the subtitle when point-sized fonts grow at 125/150% DPI.
+        // Leave room for the right-aligned action buttons so the title never runs under them.
+        int rightLimit = AddButton.Visible ? AddButton.Left - 16 : Width - Pad;
+        int rightW = Math.Max(120, rightLimit - tx);
         using var kickerFont = Theme.UiFont(8.5f, FontStyle.Bold);
-        using var titleFont = Theme.DisplayFont(26f, FontStyle.Bold);
-        using var subFont = Theme.UiFont(10f);
+        using var titleFont = Theme.DisplayFont(21f, FontStyle.Bold);
+        using var subFont = Theme.UiFont(9.5f);
 
-        int ty = Pad + 16;
-        if (!string.IsNullOrEmpty(_kicker))
+        // Vertically centre the kicker → title → subtitle block (compact header).
+        bool hasKicker = !string.IsNullOrEmpty(_kicker);
+        int kh = hasKicker ? TextRenderer.MeasureText(g, _kicker, kickerFont).Height : 0;
+        int th = TextRenderer.MeasureText(g, string.IsNullOrEmpty(_title) ? "Ag" : _title, titleFont).Height;
+        int subH = TextRenderer.MeasureText(g, "Ag", subFont).Height;
+        int gap1 = hasKicker ? 2 : 0;
+        int total = kh + gap1 + th + 2 + subH;
+        int ty = Math.Max(Pad, (Height - total) / 2);
+
+        if (hasKicker)
         {
-            int kh = TextRenderer.MeasureText(g, _kicker, kickerFont).Height;
             // Calmer accent for the static eyebrow (bright accent is reserved for selection); tucked to the title.
             TextRenderer.DrawText(g, _kicker, kickerFont,
-                new Rectangle(tx, Pad + 4, rightW, kh), Theme.Blend(Theme.Bg, Theme.Accent, 0.85), TextFormatFlags.Left | TextFormatFlags.Top);
-            ty = Pad + 4 + kh + 2;
+                new Rectangle(tx, ty, rightW, kh), Theme.Blend(Theme.Bg, Theme.Accent, 0.85), TextFormatFlags.Left | TextFormatFlags.Top);
+            ty += kh + gap1;
         }
 
-        int th = TextRenderer.MeasureText(g, string.IsNullOrEmpty(_title) ? "Ag" : _title, titleFont).Height;
         TextRenderer.DrawText(g, _title, titleFont,
             new Rectangle(tx, ty, rightW, th), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         ty += th + 2;
 
-        int subH = TextRenderer.MeasureText(g, "Ag", subFont).Height;
         // "185 songs · 11 hr" → the leading count owns a bold/bright run; the "· 11 hr" tail stays quiet.
         int dot = _subtitle.IndexOf('·');
         if (dot > 0)
         {
             string head = _subtitle.Substring(0, dot).TrimEnd();
             string tail = _subtitle.Substring(dot);
-            using var subBold = Theme.UiFont(10f, FontStyle.Bold);
+            using var subBold = Theme.UiFont(9.5f, FontStyle.Bold);
             const TextFormatFlags np = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding;
             TextRenderer.DrawText(g, head, subBold, new Rectangle(tx, ty, rightW, subH), Theme.TextCol, np);
             int hw = TextRenderer.MeasureText(g, head, subBold, new Size(rightW, subH), np).Width;

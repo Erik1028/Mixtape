@@ -150,7 +150,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var root = _root = new WallpaperPanel { Dock = DockStyle.Fill, CaptionHeight = CaptionH, ResizeBorder = ResizeBorder };
 
         var content = _content = new TableLayoutPanel { Dock = DockStyle.None, ColumnCount = 1, RowCount = 4, BackColor = Theme.Bg, Margin = new Padding(0) };
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 178));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));   // compact content header (art · title · actions)
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, NowPlayingBar.H));   // now-playing bar — always visible (idle state when nothing plays)
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
