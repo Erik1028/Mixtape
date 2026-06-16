@@ -3142,8 +3142,8 @@ internal sealed class MainForm : Form, IMessageFilter
         if (!IsHandleCreated) return;
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }     // DWMWA_USE_IMMERSIVE_DARK_MODE
         try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { } // DWMWA_WINDOW_CORNER_PREFERENCE = ROUND
-        // Tint the 1px DWM window border to the wallpaper so it blends, instead of the default light
-        // hairline that shows as a white line down the edges (most visible against the dark sidebar).
-        try { var c = Theme.WallpaperTop; int border = c.R | (c.G << 8) | (c.B << 16); DwmSetWindowAttribute(Handle, 34, ref border, sizeof(int)); } catch { } // DWMWA_BORDER_COLOR
+        // Remove the 1px DWM window border entirely (DWMWA_COLOR_NONE). Tinting it to the wallpaper top
+        // wasn't enough — that colour is lighter than the darker lower gradient, so a faint line remained.
+        try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { } // DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE
     }
 }
