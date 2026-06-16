@@ -422,46 +422,41 @@ internal sealed class NowPlayingBar : Panel
         glyph(g, r, dim ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle);
     }
 
-    private static Color ModeColor(bool active, bool hover) => active ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
-
-    // Two short barbs back from a tip, pointing along (from → tip).
-    private static void Arrow(Graphics g, Pen pen, PointF tip, PointF from, float len)
+    // Shuffle/repeat glyphs use Windows' designed icon font. The user picked the Segoe MDL2 Assets
+    // rendering (plain "1" on repeat-one); it ships on Win10+ and Win11. Fluent is only a fallback.
+    private static readonly string? ModeFont = ResolveModeFont();
+    private static string? ResolveModeFont()
     {
-        double a = Math.Atan2(tip.Y - from.Y, tip.X - from.X);
-        foreach (double da in new[] { 2.6, -2.6 })
-            g.DrawLine(pen, tip, new PointF((float)(tip.X + Math.Cos(a + da) * len), (float)(tip.Y + Math.Sin(a + da) * len)));
+        foreach (var n in new[] { "Segoe MDL2 Assets", "Segoe Fluent Icons" })
+            try { using var ff = new FontFamily(n); return n; } catch { }
+        return null;
     }
+
+    private static Color ModeColor(bool active, bool hover) => active ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
 
     private void DrawShuffle(Graphics g, Rectangle r, bool active, bool hover)
     {
         if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
-        Color c = ModeColor(active, hover);
-        using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-        float yT = r.Y + r.Height * 0.32f, yB = r.Y + r.Height * 0.68f;
-        float xL = r.X + 3, xBend = r.X + r.Width * 0.46f, xR = r.Right - 5;
-        var p1 = new[] { new PointF(xL, yT), new PointF(xBend, yT), new PointF(xR, yB) };
-        var p2 = new[] { new PointF(xL, yB), new PointF(xBend, yB), new PointF(xR, yT) };
-        g.DrawLines(pen, p1); g.DrawLines(pen, p2);
-        Arrow(g, pen, new PointF(xR, yB), p1[1], 5);
-        Arrow(g, pen, new PointF(xR, yT), p2[1], 5);
+        DrawModeGlyph(g, r, "\uE8B1", ModeColor(active, hover));   // Shuffle
     }
 
     private void DrawRepeat(Graphics g, Rectangle r, RepeatMode mode, bool hover)
     {
-        bool active = mode != RepeatMode.Off;
         if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
-        Color c = ModeColor(active, hover);
-        using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-        var rr = new RectangleF(r.X + 3.5f, r.Y + 6f, r.Width - 7, r.Height - 12);
-        float rad = rr.Height * 0.5f;
-        using (var path = Theme.RoundedRect(rr, rad)) g.DrawPath(pen, path);  // the loop
-        Arrow(g, pen, new PointF(rr.Right - rad, rr.Top), new PointF(rr.Right - rad - 6, rr.Top), 4);   // top edge → right
-        Arrow(g, pen, new PointF(rr.Left + rad, rr.Bottom), new PointF(rr.Left + rad + 6, rr.Bottom), 4); // bottom edge → left
-        if (mode == RepeatMode.One)
-        {
-            using var f = Theme.UiFont(7f, FontStyle.Bold);
-            TextRenderer.DrawText(g, "1", f, r, c, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-        }
+        // RepeatAll glyph (greyed when Off), RepeatOne glyph when One.
+        DrawModeGlyph(g, r, mode == RepeatMode.One ? "\uE8ED" : "\uE8EE", ModeColor(mode != RepeatMode.Off, hover));
+    }
+
+    private static void DrawModeGlyph(Graphics g, RectangleF r, string glyph, Color c)
+    {
+        if (ModeFont is null) return;
+        using var f = new Font(ModeFont, Math.Min(r.Width, r.Height) * 0.5f, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(c);
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        var savedHint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+        g.DrawString(glyph, f, b, r, sf);
+        g.TextRenderingHint = savedHint;
     }
 
     private static void GlyphPrev(Graphics g, Rectangle r, Color c)
