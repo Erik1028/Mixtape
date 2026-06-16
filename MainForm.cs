@@ -19,6 +19,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private int _hotRow = -1;
     private int _dragRow = -1, _dropRow = -1, _dragStartY; // drag-to-reorder a playlist's tracks
     private bool _rowDragging;
+    private readonly List<Track> _navHistory = new(); // tracks navigated away from, so Prev (esp. in shuffle) can step back
 
     private readonly List<IPodDevice> _devices = new();
     private readonly List<Playlist> _shownPlaylists = new();
@@ -199,6 +200,13 @@ internal sealed class MainForm : Form, IMessageFilter
         _nowPlaying.NextRequested += () => PlayRelative(+1);
         _nowPlaying.EqualizerRequested += OpenEqualizer;
         _nowPlaying.ApplyEq(_settings.EqEnabled, _settings.EqGains ?? EqualizerSampleProvider.FlatGains()); // restore saved EQ
+        _nowPlaying.SetModes(_settings.Shuffle, ParseRepeat(_settings.RepeatMode));                          // restore shuffle/repeat
+        _nowPlaying.ModesChanged += () =>
+        {
+            _settings.Shuffle = _nowPlaying.Shuffle;
+            _settings.RepeatMode = _nowPlaying.Repeat.ToString();
+            _settings.Save();
+        };
 
         content.Controls.Add(_header, 0, 0);
         content.Controls.Add(center, 0, 1);
@@ -514,24 +522,80 @@ internal sealed class MainForm : Form, IMessageFilter
         if (wasPlaying) _nowPlaying.Resume(); // pick the song back up where it left off
     }
 
-    /// <summary>Play the audio row N steps from the current one in the visible list, skipping videos.</summary>
+    private int RowIndexOf(Track t)
+    {
+        for (int i = 0; i < _tracks.Rows.Count; i++) if (ReferenceEquals(_tracks.Rows[i].Tag, t)) return i;
+        return -1;
+    }
+
+    /// <summary>Can this row be played now (audio that resolves to an existing file)?</summary>
+    private bool IsPlayableRow(int i, out Track track, out string path)
+    {
+        track = null!; path = "";
+        if (i < 0 || i >= _tracks.Rows.Count || _tracks.Rows[i].Tag is not Track t || MediaType.IsVideo(t.MediaType)) return false;
+        string? p = ResolvePlayPath(t);
+        if (string.IsNullOrEmpty(p) || !File.Exists(p)) return false;
+        track = t; path = p; return true;
+    }
+
+    /// <summary>Advance/retreat in the visible list, honoring shuffle + repeat. Prev steps back through
+    /// navigation history (important in shuffle); videos and missing files are skipped.</summary>
     private void PlayRelative(int dir)
     {
         if (_playingTrack is null || _tracks.Rows.Count == 0) { _nowPlaying.StopAndHide(); _playingTrack = null; return; }
-        int cur = -1;
-        for (int i = 0; i < _tracks.Rows.Count; i++)
-            if (ReferenceEquals(_tracks.Rows[i].Tag, _playingTrack)) { cur = i; break; }
-        if (cur < 0) cur = dir > 0 ? -1 : _tracks.Rows.Count; // not in the list → start from an edge
-        for (int i = cur + dir; i >= 0 && i < _tracks.Rows.Count; i += dir)
+
+        // Prev: replay the most recent still-present track from history before falling back to list order.
+        if (dir < 0)
         {
-            if (_tracks.Rows[i].Tag is Track t && !MediaType.IsVideo(t.MediaType))
+            while (_navHistory.Count > 0)
             {
-                string? p = ResolvePlayPath(t);
-                if (!string.IsNullOrEmpty(p) && File.Exists(p)) { PlayAudio(t, p, i); return; }
+                var prev = _navHistory[^1]; _navHistory.RemoveAt(_navHistory.Count - 1);
+                int ri = RowIndexOf(prev);
+                if (ri >= 0 && IsPlayableRow(ri, out var pt, out var pp)) { PlayAudio(pt, pp, ri); return; }
             }
         }
-        // No neighbour to play — leave the bar showing the last track, paused (NextRequested at end-of-list).
+
+        int cur = RowIndexOf(_playingTrack);
+
+        // Shuffle (forward only): jump to a random other playable row.
+        if (dir > 0 && _nowPlaying.Shuffle)
+        {
+            var pool = new List<int>();
+            for (int i = 0; i < _tracks.Rows.Count; i++) if (i != cur && IsPlayableRow(i, out _, out _)) pool.Add(i);
+            if (pool.Count > 0) { PlayFromNav(cur, pool[Random.Shared.Next(pool.Count)]); return; }
+        }
+
+        // Sequential scan in the requested direction.
+        if (cur < 0) cur = dir > 0 ? -1 : _tracks.Rows.Count;
+        for (int i = cur + dir; i >= 0 && i < _tracks.Rows.Count; i += dir)
+            if (IsPlayableRow(i, out _, out _)) { PlayFromNav(cur, i); return; }
+
+        // Hit an edge: wrap around when Repeat All is on, otherwise rest (paused) on the current track.
+        if (_nowPlaying.Repeat == NowPlayingBar.RepeatMode.All)
+        {
+            int start = dir > 0 ? 0 : _tracks.Rows.Count - 1;
+            for (int i = start; i >= 0 && i < _tracks.Rows.Count; i += dir)
+                if (IsPlayableRow(i, out _, out _)) { PlayFromNav(cur, i); return; }
+        }
     }
+
+    /// <summary>Play row <paramref name="to"/>, pushing the row we left (<paramref name="from"/>) onto nav history.</summary>
+    private void PlayFromNav(int from, int to)
+    {
+        if (from >= 0 && from < _tracks.Rows.Count && _tracks.Rows[from].Tag is Track ft)
+        {
+            _navHistory.Add(ft);
+            if (_navHistory.Count > 200) _navHistory.RemoveAt(0);
+        }
+        if (IsPlayableRow(to, out var t, out var p)) PlayAudio(t, p, to);
+    }
+
+    private static NowPlayingBar.RepeatMode ParseRepeat(string? s) => s switch
+    {
+        "All" => NowPlayingBar.RepeatMode.All,
+        "One" => NowPlayingBar.RepeatMode.One,
+        _ => NowPlayingBar.RepeatMode.Off,
+    };
 
     private void SetNowPlayingVisible(bool on)
     {
@@ -3247,6 +3311,9 @@ internal sealed class MainForm : Form, IMessageFilter
     // Window styles kept so the borderless window still gets Aero Snap, min/max animations and a shadow.
     private const int WS_MINIMIZEBOX = 0x20000, WS_MAXIMIZEBOX = 0x10000, WS_THICKFRAME = 0x40000, WS_SYSMENU = 0x80000, WS_CAPTION = 0x00C00000;
     private const int WM_NCCALCSIZE = 0x0083, WM_NCHITTEST = 0x0084, WM_GETMINMAXINFO = 0x0024;
+    private const int WM_APPCOMMAND = 0x0319; // keyboard/headset media buttons (delivered to the focused window)
+    private const int APPCOMMAND_MEDIA_NEXTTRACK = 11, APPCOMMAND_MEDIA_PREVIOUSTRACK = 12, APPCOMMAND_MEDIA_STOP = 13,
+        APPCOMMAND_MEDIA_PLAY_PAUSE = 14, APPCOMMAND_MEDIA_PLAY = 46, APPCOMMAND_MEDIA_PAUSE = 47;
     private const int WM_DEVICECHANGE = 0x0219, DBT_DEVICEARRIVAL = 0x8000, DBT_DEVICEREMOVECOMPLETE = 0x8004, DBT_DEVNODES_CHANGED = 0x0007;
     private const int HTCLIENT = 1, HTCAPTION = 2, HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
     private const int MONITOR_DEFAULTTONEAREST = 2;
@@ -3270,6 +3337,19 @@ internal sealed class MainForm : Form, IMessageFilter
             Activate();
             BringToFront();
             return;
+        }
+        if (m.Msg == WM_APPCOMMAND)
+        {
+            int cmd = ((int)((long)m.LParam >> 16)) & 0x0FFF; // GET_APPCOMMAND_LPARAM
+            switch (cmd)
+            {
+                case APPCOMMAND_MEDIA_PLAY_PAUSE:
+                case APPCOMMAND_MEDIA_PLAY:
+                case APPCOMMAND_MEDIA_PAUSE: _nowPlaying.MediaPlayPause(); m.Result = (IntPtr)1; return;
+                case APPCOMMAND_MEDIA_NEXTTRACK: PlayRelative(+1); m.Result = (IntPtr)1; return;
+                case APPCOMMAND_MEDIA_PREVIOUSTRACK: PlayRelative(-1); m.Result = (IntPtr)1; return;
+                case APPCOMMAND_MEDIA_STOP: _nowPlaying.Pause(); m.Result = (IntPtr)1; return;
+            }
         }
         if (m.Msg == WM_DEVICECHANGE)
         {

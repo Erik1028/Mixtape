@@ -13,6 +13,11 @@ internal sealed class AppSettings
     public bool Compact { get; set; }          // false = comfortable (52px rows), true = compact (40px)
     public bool ShowArtwork { get; set; } = true;
 
+    // ---- Playback modes (now-playing bar) ----
+    public bool Shuffle { get; set; }
+    /// <summary>Repeat mode: Off | All | One.</summary>
+    public string RepeatMode { get; set; } = "Off";
+
     // ---- Library ----
     /// <summary>Default column to sort by on load: Playlist|Song|Artist|Album|Time.</summary>
     public string DefaultSort { get; set; } = "Playlist";

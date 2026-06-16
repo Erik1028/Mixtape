@@ -17,6 +17,13 @@ internal sealed class NowPlayingBar : Panel
     public event Action? PrevRequested;
     public event Action? NextRequested;
     public event Action? EqualizerRequested;
+    public event Action? ModesChanged;   // user toggled shuffle/repeat — the host persists it
+
+    public enum RepeatMode { Off, All, One }
+    public bool Shuffle => _shuffle;
+    public RepeatMode Repeat => _repeat;
+    /// <summary>Restore the saved shuffle/repeat modes (does not raise <see cref="ModesChanged"/>).</summary>
+    public void SetModes(bool shuffle, RepeatMode repeat) { _shuffle = shuffle; _repeat = repeat; Invalidate(); }
 
     private Track? _track;
     private Bitmap? _cover;
@@ -25,6 +32,9 @@ internal sealed class NowPlayingBar : Panel
     private double _lastVol = 1.0; // last audible level, restored when unmuting from a dragged-to-zero slider
     private bool _muted;
     private bool _eqOn;            // reflected for the EQ icon tint
+    private bool _shuffle;
+    private RepeatMode _repeat = RepeatMode.Off;
+    private string? _path;        // last loaded file path, kept so repeat-one can restart the track
 
     private enum Drag { None, Seek, Volume }
     private Drag _drag = Drag.None;
@@ -75,6 +85,7 @@ internal sealed class NowPlayingBar : Panel
     public void Play(Track track, string filePath, Bitmap? cover)
     {
         _track = track;
+        _path = filePath;
         _cover?.Dispose();
         _cover = cover is null ? null : new Bitmap(cover);
         _engine.CloseMedia();
@@ -99,11 +110,25 @@ internal sealed class NowPlayingBar : Panel
 
     private void OnEnded()
     {
-        // Auto-advance to the next track if the form has one; otherwise rest at the end, paused.
+        // Repeat-one: restart the same file (a clean reload — WaveOut can't simply resume past its end).
+        if (_repeat == RepeatMode.One && _track is not null && _path is not null)
+        {
+            _engine.CloseMedia();
+            _engine.Volume = _muted ? 0 : _volume;
+            _engine.Load(_path);
+            _engine.Play();
+            _playing = true; _scrubFrac = -1;
+            Invalidate();
+            return;
+        }
+        // Otherwise advance (the host applies shuffle / repeat-all); if there's no next it rests, paused.
         _playing = false;
         Invalidate();
         NextRequested?.Invoke();
     }
+
+    /// <summary>Play/pause from a hardware media key or the system transport controls.</summary>
+    public void MediaPlayPause() => TogglePlay();
 
     private void TogglePlay()
     {
@@ -118,6 +143,7 @@ internal sealed class NowPlayingBar : Panel
     {
         public Rectangle Cover; public int TextX, TextW; public bool ShowTitle;
         public Rectangle Prev, Play, Next;
+        public Rectangle Shuffle, Repeat; public bool ShowModes;
         public Rectangle Seek; public bool ShowSeek, ShowTimes;
         public Rectangle Eq; public bool ShowEq;
         public Rectangle Speaker; public bool ShowSpeaker;
@@ -140,16 +166,24 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, (H - 24) / 2, 24, 24); rc = l.Eq.Left - 14; }
         int rightStart = rc;
 
-        // Transport (122px block) centred between the cover and the right cluster, clamped so it never overlaps either.
-        const int half = 61;
-        int cx = Math.Clamp((leftBound + rightStart) / 2, leftBound + half, Math.Max(leftBound + half, rightStart - half));
+        // Transport centred between the cover and the right cluster, clamped so it never overlaps either.
+        // Shuffle/repeat flank prev/next when there's room; below that the block is just prev/play/next.
+        const int half = 61, modeW = 26, modeGap = 12;
+        l.ShowModes = w >= 600;
+        int blockHalf = l.ShowModes ? half + modeGap + modeW : half;
+        int cx = Math.Clamp((leftBound + rightStart) / 2, leftBound + blockHalf, Math.Max(leftBound + blockHalf, rightStart - blockHalf));
         l.Play = new Rectangle(cx - 19, ControlsY, 38, 38);
         l.Prev = new Rectangle(l.Play.Left - 12 - 30, ControlsY + 4, 30, 30);
         l.Next = new Rectangle(l.Play.Right + 12, ControlsY + 4, 30, 30);
+        if (l.ShowModes)
+        {
+            l.Shuffle = new Rectangle(l.Prev.Left - modeGap - modeW, ControlsY + 6, modeW, modeW);
+            l.Repeat = new Rectangle(l.Next.Right + modeGap, ControlsY + 6, modeW, modeW);
+        }
 
         // Title zone, left of the transport — hidden when there isn't enough room.
         l.TextX = l.Cover.Right + 12;
-        l.TextW = l.Prev.Left - 12 - l.TextX;
+        l.TextW = (l.ShowModes ? l.Shuffle.Left : l.Prev.Left) - 12 - l.TextX;
         l.ShowTitle = l.TextW >= 90;
 
         // Seek bar at the bottom, spanning the centre; times at the ends only when wide.
@@ -162,13 +196,15 @@ internal sealed class NowPlayingBar : Panel
     }
 
     // ---- interaction ----
-    private enum Hit { None, Prev, Play, Next, Speaker, Eq }
+    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Shuffle, Repeat }
     private Hit _hover = Hit.None;
 
     private void OnDown(object? s, MouseEventArgs e)
     {
         var l = Layout();
-        // EQ + volume are settings — usable even with nothing loaded.
+        // Shuffle / repeat / EQ / volume are modes & settings — usable even with nothing loaded.
+        if (l.ShowModes && l.Shuffle.Contains(e.Location)) { _shuffle = !_shuffle; ModesChanged?.Invoke(); Invalidate(); return; }
+        if (l.ShowModes && l.Repeat.Contains(e.Location)) { _repeat = (RepeatMode)(((int)_repeat + 1) % 3); ModesChanged?.Invoke(); Invalidate(); return; }
         if (l.ShowEq && l.Eq.Contains(e.Location)) { EqualizerRequested?.Invoke(); return; }
         if (l.ShowSpeaker && l.Speaker.Contains(e.Location))
         {
@@ -193,6 +229,8 @@ internal sealed class NowPlayingBar : Panel
         if (_drag == Drag.Seek && l.ShowSeek) { ScrubTo(l.Seek, e.X); return; }
         var h = l.ShowSpeaker && l.Speaker.Contains(e.Location) ? Hit.Speaker
             : l.ShowEq && l.Eq.Contains(e.Location) ? Hit.Eq
+            : l.ShowModes && l.Shuffle.Contains(e.Location) ? Hit.Shuffle
+            : l.ShowModes && l.Repeat.Contains(e.Location) ? Hit.Repeat
             : _track is null ? Hit.None
             : l.Play.Contains(e.Location) ? Hit.Play
             : l.Prev.Contains(e.Location) ? Hit.Prev
@@ -284,10 +322,12 @@ internal sealed class NowPlayingBar : Panel
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
-        // transport (dimmed + inert when idle)
+        // transport (dimmed + inert when idle); shuffle/repeat are modes — always live
+        if (l.ShowModes) DrawShuffle(g, l.Shuffle, _shuffle, _hover == Hit.Shuffle);
         DrawCircleGlyph(g, l.Prev, _hover == Hit.Prev, GlyphPrev, idle);
         DrawPlayButton(g, l.Play, _hover == Hit.Play, idle);
         DrawCircleGlyph(g, l.Next, _hover == Hit.Next, GlyphNext, idle);
+        if (l.ShowModes) DrawRepeat(g, l.Repeat, _repeat, _hover == Hit.Repeat);
 
         // seek
         if (l.ShowSeek)
@@ -360,6 +400,48 @@ internal sealed class NowPlayingBar : Panel
     {
         if (hover && !dim) { using var hb = new SolidBrush(Theme.RowHover); g.FillEllipse(hb, r); }
         glyph(g, r, dim ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle);
+    }
+
+    private static Color ModeColor(bool active, bool hover) => active ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+
+    // Two short barbs back from a tip, pointing along (from → tip).
+    private static void Arrow(Graphics g, Pen pen, PointF tip, PointF from, float len)
+    {
+        double a = Math.Atan2(tip.Y - from.Y, tip.X - from.X);
+        foreach (double da in new[] { 2.6, -2.6 })
+            g.DrawLine(pen, tip, new PointF((float)(tip.X + Math.Cos(a + da) * len), (float)(tip.Y + Math.Sin(a + da) * len)));
+    }
+
+    private void DrawShuffle(Graphics g, Rectangle r, bool active, bool hover)
+    {
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        Color c = ModeColor(active, hover);
+        using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        float yT = r.Y + r.Height * 0.32f, yB = r.Y + r.Height * 0.68f;
+        float xL = r.X + 3, xBend = r.X + r.Width * 0.46f, xR = r.Right - 5;
+        var p1 = new[] { new PointF(xL, yT), new PointF(xBend, yT), new PointF(xR, yB) };
+        var p2 = new[] { new PointF(xL, yB), new PointF(xBend, yB), new PointF(xR, yT) };
+        g.DrawLines(pen, p1); g.DrawLines(pen, p2);
+        Arrow(g, pen, new PointF(xR, yB), p1[1], 5);
+        Arrow(g, pen, new PointF(xR, yT), p2[1], 5);
+    }
+
+    private void DrawRepeat(Graphics g, Rectangle r, RepeatMode mode, bool hover)
+    {
+        bool active = mode != RepeatMode.Off;
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        Color c = ModeColor(active, hover);
+        using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        var rr = new RectangleF(r.X + 3.5f, r.Y + 6f, r.Width - 7, r.Height - 12);
+        float rad = rr.Height * 0.5f;
+        using (var path = Theme.RoundedRect(rr, rad)) g.DrawPath(pen, path);  // the loop
+        Arrow(g, pen, new PointF(rr.Right - rad, rr.Top), new PointF(rr.Right - rad - 6, rr.Top), 4);   // top edge → right
+        Arrow(g, pen, new PointF(rr.Left + rad, rr.Bottom), new PointF(rr.Left + rad + 6, rr.Bottom), 4); // bottom edge → left
+        if (mode == RepeatMode.One)
+        {
+            using var f = Theme.UiFont(7f, FontStyle.Bold);
+            TextRenderer.DrawText(g, "1", f, r, c, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
     }
 
     private static void GlyphPrev(Graphics g, Rectangle r, Color c)
