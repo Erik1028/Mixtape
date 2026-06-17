@@ -233,7 +233,7 @@ internal sealed class SettingsForm : Form
 
     private void BuildAbout()
     {
-        Row("Mixtape", "Version 0.9.0", null);
+        Row("Mixtape", "Version 0.10.0", null);
         Row("A friendly manager for classic iPods", "Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes.", null);
     }
 
