@@ -23,7 +23,10 @@ internal sealed class ArtworkThumb
     public int VPad, HPad;
     public int FileIndex = 1;    // F<FormatId>_<FileIndex>.ithmb
     public byte[] Pixels = System.Array.Empty<byte>(); // staged RGB565 bytes for a NEW thumb (written to the .ithmb on commit; not part of the DB)
-    public string MhodPath => $":iPod_Control:Artwork:F{FormatId}_{FileIndex}.ithmb";
+    // The firmware wants ONLY the bare filename with a leading colon (it already knows the Artwork
+    // folder). Verified against a real iPod 5G's iTunes ArtworkDB — iTunes writes ":F1029_1.ithmb",
+    // NOT the full ":iPod_Control:Artwork:…" path. The full path can't be resolved → blank thumbnails.
+    public string MhodPath => $":F{FormatId}_{FileIndex}.ithmb";
 }
 
 internal sealed class ArtworkDbModel
@@ -88,8 +91,8 @@ internal static class ArtworkDb
             var item = new ArtworkItem
             {
                 Id = r.U32(p + 0x10),
-                TrackDbid = r.U64(p + 0x18),
-                SourceImageSize = r.U32(p + 0x34),
+                TrackDbid = r.U64(p + 0x14),     // song_id @0x14 (VERIFIED against a real iPod's iTunes ArtworkDB)
+                SourceImageSize = r.U32(p + 0x30),
                 RawMhii = raw,
             };
             uint nMhods = r.U32(p + 0x0C);
@@ -99,7 +102,7 @@ internal static class ArtworkDb
                 if (r.Tag(cp) != "mhod") break;
                 uint mt = r.U32(cp + 0x08);
                 if (mt < 12 || cp + mt > p + tl) break;
-                if (r.U16(cp + 0x0C) == 1) // ARTWORK container → one mhni
+                if (r.U16(cp + 0x0C) is 1 or 2) // thumbnail container → one mhni (iTunes uses 2; older Mixtape wrote 1)
                 {
                     var thumb = ParseMhni(r, cp + (int)r.U32(cp + 0x04), cp + (int)mt);
                     if (thumb is not null) item.Thumbs.Add(thumb);
@@ -182,9 +185,9 @@ internal static class ArtworkDb
         var mhods = it.Thumbs.Select(BuildArtworkMhod).ToList();
         byte[] h = Hdr("mhii", 0x98);
         PutU32(h, 0x0C, (uint)mhods.Count);          // num_children
-        PutU32(h, 0x10, it.Id);                       // artwork id
-        PutU64(h, 0x18, it.TrackDbid);                // song_id = track DBID (the link)
-        PutU32(h, 0x34, it.SourceImageSize);          // source_image_size
+        PutU32(h, 0x10, it.Id);                       // artwork id (image_id)
+        PutU64(h, 0x14, it.TrackDbid);                // song_id @0x14 = track DBID (the link the firmware matches)
+        PutU32(h, 0x30, it.SourceImageSize);          // source_image_size @0x30
         PutU32(h, 0x08, (uint)(h.Length + mhods.Sum(c => c.Length)));
         return Concat(Prepend(h, mhods));
     }
@@ -193,7 +196,10 @@ internal static class ArtworkDb
     {
         byte[] mhni = BuildMhni(t);
         byte[] h = Hdr("mhod", 0x18);
-        PutU16(h, 0x0C, 1);                            // type 1 = ARTWORK container (Photo DB uses 2)
+        // type 2 = the thumbnail container the firmware recognises. VERIFIED byte-for-byte against a real
+        // iPod 5G's iTunes-written ArtworkDB (every mhii child mhod is type 2). We previously wrote type 1,
+        // which the firmware silently ignored → covers were stored but never displayed.
+        PutU16(h, 0x0C, 2);
         PutU32(h, 0x08, (uint)(h.Length + mhni.Length));
         return Concat(h, mhni);
     }

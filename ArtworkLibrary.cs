@@ -26,11 +26,40 @@ internal sealed class ArtworkLibrary : IArtworkSink
     private string DbPath => Path.Combine(ArtworkDir, "ArtworkDB");
 
     private PhotoFormat[] _addFormats = Array.Empty<PhotoFormat>();
+    private bool _formatsFromDevice;   // true when _addFormats were copied from the device's OWN ArtworkDB
     private uint _nextId;
+
+    /// <summary>Bypass the generation capability gate (set by the "rebuild artwork" tool once the device's
+    /// real format has been confirmed). Writing still requires <see cref="SafeToWrite"/> and resolved formats.</summary>
+    public bool Force { get; set; }
+
+    private bool _clean;   // clean-rebuild mode: drop all existing images and rewrite the .ithmb files from scratch
+
+    /// <summary>Begin a clean rebuild: forget every existing image (orphans + any prior writes) so the
+    /// committed ArtworkDB + .ithmb contain ONLY the art staged from here on. Pairs with
+    /// <see cref="RawDb.ClearAllTrackArtwork"/> on the iTunesDB side.</summary>
+    public void StartCleanRebuild()
+    {
+        Model.Items.Clear();
+        Model.MaxId = 0;
+        _nextId = FirstArtworkId;
+        _clean = true;
+    }
 
     private ArtworkLibrary(IPodDevice device, ArtworkDbModel model) { Device = device; Model = model; }
 
-    public bool SupportsArtwork => Device.Profile.SupportsArtwork && SafeToWrite && _addFormats.Length > 0;
+    // We can safely add art when we know valid thumbnail formats AND it's a colour-art device. "Colour-art"
+    // is proven either by the detected generation OR by the device's own existing ArtworkDB (formats copied
+    // from it) — the latter rescues Windows-managed iPods that detect as an Unknown generation. Force skips
+    // the capability check entirely (the format has been confirmed out-of-band).
+    public bool SupportsArtwork => SafeToWrite && _addFormats.Length > 0
+        && (Force || Device.Profile.SupportsArtwork || _formatsFromDevice);
+
+    /// <summary>The thumbnail formats new art would be written in (diagnostics).</summary>
+    public PhotoFormat[] AddFormats => _addFormats;
+
+    /// <summary>True when <see cref="AddFormats"/> were copied from the device's existing ArtworkDB.</summary>
+    public bool FormatsFromDevice => _formatsFromDevice;
 
     public static ArtworkLibrary Load(IPodDevice device)
     {
@@ -56,7 +85,8 @@ internal sealed class ArtworkLibrary : IArtworkSink
             .Select(t => t.FormatId).Distinct()
             .Select(ArtworkFormats.Lookup).Where(f => f is not null).Select(f => f!)
             .GroupBy(f => f.FormatId).Select(g => g.First()).ToArray();
-        _addFormats = fromDevice.Length > 0 ? fromDevice : ArtworkFormats.For(Device.Profile.Generation);
+        _formatsFromDevice = fromDevice.Length > 0;
+        _addFormats = _formatsFromDevice ? fromDevice : ArtworkFormats.For(Device.Profile.Generation);
     }
 
     // ---- IArtworkSink ----
@@ -104,6 +134,26 @@ internal sealed class ArtworkLibrary : IArtworkSink
         var newThumbs = Model.Items.Where(it => it.RawMhii is null).SelectMany(it => it.Thumbs).Where(t => t.Pixels.Length > 0).ToList();
         if (newThumbs.Count == 0) return;
         Directory.CreateDirectory(ArtworkDir);
+
+        if (_clean)
+        {
+            // Clean rebuild: rewrite each format's F<fmt>_1.ithmb from scratch (no orphans, no bloat) and
+            // delete any rolled-over higher-index files. All current items were staged this pass.
+            foreach (var grp in newThumbs.GroupBy(t => t.FormatId))
+            {
+                foreach (string old in Directory.GetFiles(ArtworkDir, $"F{grp.Key}_*.ithmb"))
+                    try { File.Delete(old); } catch { }
+                using var fs = new FileStream(Path.Combine(ArtworkDir, $"F{grp.Key}_1.ithmb"), FileMode.Create, FileAccess.Write, FileShare.Read);
+                long off = 0;
+                foreach (var t in grp) { t.FileIndex = 1; t.Offset = (uint)off; fs.Write(t.Pixels, 0, t.Size); off += t.Size; }
+                fs.Flush(true);
+            }
+            byte[] cdb = ArtworkDb.Build(Model);
+            WriteDbSafely(cdb, Model.Items.Count);
+            var rl = Load(Device);
+            Model = rl.Model; SafeToWrite = rl.SafeToWrite; _addFormats = rl._addFormats; _nextId = rl._nextId; _clean = false;
+            return;
+        }
 
         // 1) Append each NEW thumbnail's pixels to its format's current .ithmb (rolling at 256 MB); set offsets.
         foreach (var grp in newThumbs.GroupBy(t => t.FormatId))

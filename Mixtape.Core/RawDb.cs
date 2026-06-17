@@ -210,6 +210,44 @@ internal sealed class RawDb
         return false;
     }
 
+    /// <summary>Link an EXISTING track to cover art: patch the fixed-width mhit fields in place
+    /// (artwork_count @0x7C, artwork_size @0x80, has_artwork @0xA4, mhii_link @0x160). Used by the
+    /// "rebuild artwork" pass that adds covers to songs already on the iPod without re-copying them.
+    /// Returns false if the track isn't found or its header is too short for these fields.</summary>
+    public bool SetTrackArtwork(uint uniqueId, uint mhiiLink, uint artworkSize)
+    {
+        var tracks = Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks;
+        if (tracks is null) return false;
+        foreach (var h in tracks)
+        {
+            if (h.Length < 0x164 || ReadU32(h, 0x10) != uniqueId) continue;
+            if ((int)ReadU32(h, 0x04) < 0x164) return false; // header too short for the artwork fields
+            PatchU16(h, 0x7C, 1);               // artwork_count
+            PatchU32(h, 0x80, artworkSize);     // artwork_size (sum of thumbnail bytes)
+            h[0xA4] = 1;                          // has_artwork: 1 = yes
+            PatchU32(h, 0x160, mhiiLink);        // mhii_link → ArtworkDB image id
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Clear the cover-art link on EVERY track (has_artwork=2/no, count/size/mhii_link=0) so a
+    /// clean artwork rebuild can re-link only the tracks it actually writes art for.</summary>
+    public void ClearAllTrackArtwork()
+    {
+        var tracks = Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks;
+        if (tracks is null) return;
+        foreach (var h in tracks)
+        {
+            if (h.Length < 0x164) continue;
+            if ((int)ReadU32(h, 0x04) < 0x164) continue;
+            PatchU16(h, 0x7C, 0);     // artwork_count
+            PatchU32(h, 0x80, 0);     // artwork_size
+            h[0xA4] = 2;               // has_artwork: 2 = no
+            PatchU32(h, 0x160, 0);    // mhii_link
+        }
+    }
+
     private static byte[] RebuildTrack(byte[] raw, TrackEdit e)
     {
         int headerLen = (int)ReadU32(raw, 0x04);
