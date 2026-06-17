@@ -60,7 +60,10 @@ internal sealed class AccentPicker : Control
 {
     public event Action<string>? AccentChosen; // preset name or "#RRGGBB"
     private string _current;
-    private const int D = 22, Gap = 8;
+    private int _hover = -1;
+    // D = dot diameter, Gap = space between dots, Pad = top/bottom/left margin that gives the selection
+    // ring (which sits OUTSIDE the dot) room to draw — without it the ring's bottom clipped the control.
+    private const int D = 22, Gap = 9, Pad = 7;
 
     public AccentPicker(string current)
     {
@@ -68,20 +71,26 @@ internal sealed class AccentPicker : Control
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
-        Height = D + 6;   // room for the selection ring + its gap, top and bottom
-        // Width = the painted extent of the last swatch (+ ring room), NOT one extra (D+Gap) stride —
-        // so the right-most swatch lines up with the toggles/segmented controls on other rows.
-        Width = (CountSwatches - 1) * (D + Gap) + D + 6;
+        Height = D + Pad * 2;                                    // full room for the ring, top and bottom
+        Width = (CountSwatches - 1) * (D + Gap) + D + Pad * 2;   // last dot + its ring room lines up on the right edge
         Cursor = Cursors.Hand;
         Click += OnClick;
+        MouseMove += (_, e) => { int h = HitAt(e.X); if (h != _hover) { _hover = h; Invalidate(); } };
+        MouseLeave += (_, _) => { if (_hover != -1) { _hover = -1; Invalidate(); } };
     }
 
     private int CountSwatches => Theme.AccentPresets.Length + 1; // + custom
+    private int SwatchX(int i) => Pad + i * (D + Gap);
+    private int HitAt(int mouseX)
+    {
+        for (int i = 0; i < CountSwatches; i++) { int x = SwatchX(i); if (mouseX >= x - Gap / 2 && mouseX < x + D + Gap / 2) return i; }
+        return -1;
+    }
 
     private void OnClick(object? sender, EventArgs e)
     {
         if (e is not MouseEventArgs me) return;
-        int i = me.X / (D + Gap);
+        int i = HitAt(me.X);
         if (i < 0 || i >= CountSwatches) return;
         if (i < Theme.AccentPresets.Length) { _current = Theme.AccentPresets[i].Name; AccentChosen?.Invoke(_current); Invalidate(); }
         else
@@ -115,27 +124,39 @@ internal sealed class AccentPicker : Control
 
     private void DrawSwatch(Graphics g, int i, Color color, bool selected, bool addButton)
     {
-        int x = i * (D + Gap) + 3, y = 3;
+        int x = SwatchX(i), y = Pad;
         float cx = x + D / 2f, cy = y + D / 2f;
+        bool hover = _hover == i;
+
         if (addButton)
         {
-            // "Add custom colour": an outlined ring with a crisp vector + (a font glyph colour-fringes on dark).
-            using var ring = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.34f), 1.5f);
+            // "Add custom colour": a dashed-feel outlined ring + a crisp vector "+" (a font glyph fringes on dark).
+            float t = hover ? 0.46f : 0.34f;
+            using var ring = new Pen(Theme.Blend(Theme.PanelBg, Color.White, t), 1.5f);
             g.DrawEllipse(ring, x + 0.75f, y + 0.75f, D - 1.5f, D - 1.5f);
-            using var plus = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.62f), 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            using var plus = new Pen(Theme.Blend(Theme.PanelBg, Color.White, hover ? 0.78f : 0.62f), 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
             float r = D * 0.20f;
             g.DrawLine(plus, cx - r, cy, cx + r, cy);
             g.DrawLine(plus, cx, cy - r, cx, cy + r);
             return;
         }
+
         using (var b = new SolidBrush(color)) g.FillEllipse(b, x, y, D, D);
         // A faint dark rim so light swatches don't melt into the panel.
         using (var rim = new Pen(Color.FromArgb(45, 0, 0, 0), 1f)) g.DrawEllipse(rim, x + 0.5f, y + 0.5f, D - 1, D - 1);
+
         if (selected)
         {
-            // A thin, soft-white ring with a clean gap reads as "selected" without the harsh heavy outline.
-            using var pen = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.90f), 1.6f);
-            g.DrawEllipse(pen, x - 2.5f, y - 2.5f, D + 5, D + 5);
+            // Selection ring drawn in the swatch's OWN (brightened) colour with a clean dark gap — it reads
+            // as "selected" and stays in the palette instead of a clashing white outline.
+            using var pen = new Pen(Theme.Blend(color, Color.White, 0.40f), 2f);
+            g.DrawEllipse(pen, x - 3.5f, y - 3.5f, D + 7, D + 7);
+        }
+        else if (hover)
+        {
+            // A whisper ring on hover hints the dot is clickable.
+            using var pen = new Pen(Theme.Blend(color, Color.White, 0.18f), 1.6f);
+            g.DrawEllipse(pen, x - 3f, y - 3f, D + 6, D + 6);
         }
     }
 }
