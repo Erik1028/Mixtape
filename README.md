@@ -1,53 +1,58 @@
-# 🎵 Mixtape
+<div align="center">
 
-A friendly, standalone Windows app for managing **classic click-wheel iPods** — copy music, videos and photos, build playlists, choose cover art, and preview media — all by reading and writing the iPod's `iTunesDB` / Photo Database **directly**. No iTunes, no Apple Devices app, no libgpod.
+<img src="docs/icon.png" width="112" alt="Mixtape logo">
 
-Built because iTunes is effectively gone and Apple's newer apps handle old click-wheel iPods poorly.
+# Mixtape
 
-> 🤖 **Made with AI.** This app was written primarily by an AI assistant (Anthropic's Claude, via Claude Code) working from a human's requests and testing. It's shared in good faith to help fellow iPod owners — please use it with the same care you'd give any community software.
+**Put music back on your classic iPod — no iTunes required.**
 
-> ⚠️ **Mixtape writes to your iPod's database.** It backs up before every change and verifies the result, but this is community software, not Apple's. Read the **Safety** section before writing to a device you care about.
+A friendly Windows app for click‑wheel iPods: copy songs, videos and photos, build playlists,
+pick cover art, and play your library — by reading and writing the iPod's database directly.
 
-## Features
+[**⬇ Download**](https://github.com/fgs8z2n9qh-tech/Mixtape/releases/latest) ·
+[Troubleshooting](TROUBLESHOOTING.md)
 
-- **Browse & manage** your library — songs, albums, artists, playlists
-- **Star ratings & play counts** shown in the song list (sortable, and toggleable in Settings)
-- **Copy music on** (auto-transcodes formats the iPod can't play, when FFmpeg is available)
-- **Copy music off** to your PC
-- **Create / edit / reorder playlists** ("make a mixtape")
-- **Edit tags & star ratings**
-- **Photos & videos** — import (recursively from folders), and preview right in the app
-- **Cover art** — pick from generated covers, or show album art on the iPod's own screen
-- **Built-in player & equalizer** — play songs from the iPod *or* your PC, with a 10-band graphic EQ and a Spotify-style seek bar
-- **Local Music** — point Mixtape at folders on your PC and browse/play them without an iPod plugged in
-- **Drag & drop** songs, videos, photos, or whole folders straight onto the window to add them (or onto Local Music to add PC folders)
-- **No accidental duplicates** — when adding music or video, Mixtape spots items already on the iPod and offers to skip them
-- **Automatic device detection** (plug/unplug auto-refresh) with a per-model iPod illustration and capacity breakdown
-- **Safely Eject** from inside the app, plus selection totals and a low-space warning when adding music
-- Dark, Apple-Music-style UI with smooth animations and a custom window chrome
+</div>
 
-## Supported iPods
+![Browsing albums on an iPod in Mixtape](docs/albums.png)
 
-Click-wheel models that mount as a USB drive on Windows:
+> 🤖 Made primarily with AI (Anthropic's Claude). Shared in good faith for fellow iPod owners.<br>
+> ⚠️ Mixtape writes to your iPod's database. It backs up and verifies every change, but it's
+> community software — keep your own backup and test with one song first.
 
-- iPod 1G–5G, iPod photo, **iPod Classic**
-- **iPod mini** (1G/2G)
-- **iPod nano** 1G–7G
-- iPod shuffle
+## What it does
 
-**Read/browse/export works on all of them.** *Writing* depends on the device's signature scheme:
+- 🎵 **Copy music on & off** — drag songs, videos, photos, or whole folders onto the window.
+  Auto‑converts formats your iPod can't play (with FFmpeg).
+- ▶️ **Built‑in player + 10‑band equalizer** — play straight from the iPod or your PC.
+- 📀 **Browse by album & artist** with real cover art — including a Cover Flow view.
+- 🎚️ **Make mixtapes** — create, rename and reorder playlists.
+- ⭐ **Ratings, play counts, tag editing**, and cover‑art picking.
+- 🔌 **Just works** — plug in and Mixtape finds your iPod, shows its model and free space, and
+  on read‑only models can re‑enable writing automatically.
 
-| Scheme | Devices | Writable? |
-| --- | --- | --- |
-| None | iPod 1G–5G, photo, mini, nano 1G/2G | ✅ yes |
-| hash58 | Classic, nano 3G/4G | ✅ if the device's FireWire GUID can be read (Mixtape can read it over USB) |
-| hash72 / hashAB | nano 5G+, Touch | ❌ read-only (signature not supported) |
+<p align="center">
+  <img src="docs/coverflow.png" width="82%" alt="Cover Flow view in Mixtape">
+</p>
 
-iOS devices (iPod Touch / iPhone) don't mount as a disk and are out of scope.
+## Will it work with my iPod?
 
-## Build & run
+Click‑wheel iPods that show up as a USB drive on Windows: **iPod 1G–5G, photo, Classic, mini, and
+nano 1G–7G.**
 
-Requirements: **.NET 8 SDK** on Windows.
+Browsing and copying music **off** works on all of them. Copying music **on** works on every model
+**except the nano 5G/6G/7G** (their newer signature isn't supported yet). iPod Touch / iPhone don't
+mount as a disk and aren't supported.
+
+## Download
+
+Grab **`Mixtape.exe`** from the [**latest release**](https://github.com/fgs8z2n9qh-tech/Mixtape/releases/latest)
+— one file, nothing to install. The first time, Windows SmartScreen may warn: **More info → Run anyway**.
+
+Optional: install [FFmpeg](https://ffmpeg.org/) (or point to it in Settings) for audio/video transcoding.
+
+<details>
+<summary>Build it yourself (.NET 8 SDK on Windows)</summary>
 
 ```sh
 git clone https://github.com/fgs8z2n9qh-tech/Mixtape.git
@@ -55,7 +60,7 @@ cd Mixtape
 dotnet build -c Release
 ```
 
-Run the built exe (`bin\Release\net8.0-windows\Mixtape.exe`), or publish a single self-contained file that needs no .NET install:
+Run `bin\Release\net8.0-windows\Mixtape.exe`, or publish a single self‑contained file:
 
 ```sh
 dotnet publish -c Release -r win-x64 --self-contained true ^
@@ -63,34 +68,21 @@ dotnet publish -c Release -r win-x64 --self-contained true ^
   -p:DebugType=none -o publish
 ```
 
-> **Note:** `IncludeNativeLibrariesForSelfExtract=true` is required — it bundles the WPF/native
-> support libraries (`wpfgfx_cor3.dll`, etc.) *inside* the exe. Without it, the exe is published
-> alongside loose `.dll` files and will fail when those aren't next to it. The build is left
-> **uncompressed** on purpose (larger file, but it starts faster and is rock-solid).
+`IncludeNativeLibrariesForSelfExtract=true` is required — it bundles the WPF/native support
+libraries inside the exe so it runs from anywhere.
 
-Optional: install [FFmpeg](https://ffmpeg.org/) (or point to it in Settings) to enable audio/video transcoding.
+</details>
 
 ## Safety
 
-- Before any write, Mixtape makes a rolling backup (`iTunesDB.bak`) **and** a one-time pristine backup (`iTunesDB.original`), then re-reads and verifies the new database; it rolls back on mismatch.
-- For **hash58** devices it runs a known-answer signature check first and stays **read-only** if its signing doesn't match the device — so a signing bug can't corrupt your library.
-- Restore is available from the device page if anything looks wrong.
-- Still: **back up your iPod's contents yourself before writing**, and test with one song first on a device you care about. hash58 writing has had limited real-world testing.
+Before every change Mixtape makes a rolling backup (`iTunesDB.bak`) and a one‑time pristine backup
+(`iTunesDB.original`), then re‑reads and verifies the new database and rolls back on any mismatch.
+On **hash58** iPods it refuses to write unless its signature provably matches the device, so a bug
+can't corrupt your library. **Restore** is on the device page. Still — back up your iPod yourself and
+test with one song first; hash58 writing has had limited real‑world testing.
 
-## Troubleshooting
+## Credits & license
 
-Hit a snag? See **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — fixes for the common ones: the app won't open (SmartScreen), the iPod isn't detected, **"Add music" is greyed out**, an iPod showing "0 songs" after a write, video/FFmpeg, photos, and more. When in doubt, use **Save report…** on the device page and open an issue.
-
-## Credits
-
-- The hash58 signature tables/algorithm are derived from the open-source [**libgpod**](http://www.gtkpod.org/libgpod/) and **ipod-sharp** projects — credit to their authors for the reverse-engineering.
-- Audio tags via [**TagLib#**](https://github.com/mono/taglib-sharp).
-- Database formats documented by the libgpod project and the iPod community.
-
-## Status
-
-Hobby project. Reading is solid and widely tested; writing is safe-by-design but newer signature schemes (hash58 on some devices) have had limited hardware testing. Issues and PRs welcome.
-
-## License
-
-MIT — see [LICENSE](LICENSE). Note that the hash58 portions derive from libgpod (LGPL); keep the attribution above.
+hash58 signature tables/algorithm derived from [libgpod](http://www.gtkpod.org/libgpod/) and
+ipod‑sharp (LGPL — keep that attribution); audio tags via [TagLib#](https://github.com/mono/taglib-sharp).
+MIT licensed — see [LICENSE](LICENSE). Hobby project; issues and PRs welcome.
