@@ -12,6 +12,7 @@ internal sealed class HeaderPanel : Panel
 {
     public readonly ThemedButton AddButton = new() { Text = "Add music", Width = 132, Primary = true, Pill = true, Glyph = "+", BlockedReason = "No iPod is connected." };
     public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, Danger = true, BlockedReason = "No iPod is connected." };
+    public readonly ThemedButton CoverButton = new() { Text = "Cover Flow", Width = 120, Pill = true };
 
     /// <summary>Raised when the artwork tile is clicked (only when <see cref="ArtClickable"/>) — used to pick a cover.</summary>
     public event Action? ArtClicked;
@@ -54,6 +55,7 @@ internal sealed class HeaderPanel : Panel
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         Controls.Add(AddButton);
         Controls.Add(DeleteButton);
+        Controls.Add(CoverButton);
 
         MouseMove += (_, e) =>
         {
@@ -129,19 +131,22 @@ internal sealed class HeaderPanel : Panel
     private int ArtSize => Math.Max(64, Height - Pad * 2);
     private int TextX => Pad + ArtSize + 18;
 
-    protected override void OnResize(EventArgs e)
+    protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutButtons(); }
+
+    /// <summary>Pack the visible action buttons against the right edge — Cover Flow | Add music | Delete —
+    /// skipping any that are hidden for the current view. Called on resize and before each paint so a
+    /// visibility change (per view) is reflected without needing a resize.</summary>
+    public void LayoutButtons()
     {
-        base.OnResize(e);
-        // Buttons live on the right, vertically centred (compact horizontal header) — Add music | Delete.
-        int by = (Height - AddButton.Height) / 2;
-        int rx = Width - Pad - DeleteButton.Width;
-        DeleteButton.Location = new Point(rx, by);
-        AddButton.Location = new Point(rx - 10 - AddButton.Width, by);
+        int by = (Height - AddButton.Height) / 2, x = Width - Pad;
+        foreach (var b in new[] { DeleteButton, AddButton, CoverButton })
+            if (b.Visible) { x -= b.Width; b.Location = new Point(x, by); x -= 10; }
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        LayoutButtons(); // keep button positions current (visibility changes per view without a resize)
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.Bg);
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
@@ -170,8 +175,10 @@ internal sealed class HeaderPanel : Panel
         }
 
         int tx = TextX;
-        // Leave room for the right-aligned action buttons so the title never runs under them.
-        int rightLimit = AddButton.Visible ? AddButton.Left - 16 : Width - Pad;
+        // Leave room for the right-aligned action buttons so the title never runs under them (use the
+        // leftmost visible button — Cover Flow when shown, else Add, else Delete).
+        int rightLimit = Width - Pad;
+        foreach (var b in new[] { CoverButton, AddButton, DeleteButton }) if (b.Visible) { rightLimit = b.Left - 16; break; }
         int rightW = Math.Max(120, rightLimit - tx);
         using var kickerFont = Theme.UiFont(8.5f, FontStyle.Bold);
         using var titleFont = Theme.DisplayFont(21f, FontStyle.Bold);

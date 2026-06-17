@@ -42,6 +42,32 @@ internal static class Program
         // view = songs (default) | videos | photos | settings.
         if (args.Length >= 3 && args[0] == "--render") { RunRender(args[1], args[2], args.Length >= 4 ? args[3] : "songs"); return; }
 
+        // Design-review the context menu without a device: build a representative right-click menu,
+        // show it off-screen, highlight a row, and capture the (rounded) popup window. Usage:
+        //   Mixtape.exe --menupreview <out.png>
+        if (args.Length >= 2 && args[0] == "--menupreview") { RunMenuPreview(args[1]); return; }
+
+        // Full cover-art chain diagnostic for a CONNECTED iPod: device detection → artwork capability →
+        // existing ArtworkDB + .ithmb files → iTunesDB track flags → cross-check the track↔art links.
+        // Pinpoints exactly where art sync breaks. Usage: Mixtape.exe --artworkdiag <iPod root, e.g. E:\>
+        if (args.Length >= 2 && args[0] == "--artworkdiag") { RunArtworkDiag(args[1]); return; }
+
+        // Render Now-Playing-bar layout OPTIONS (stacked, labelled) to a PNG for the user to choose.
+        if (args.Length >= 2 && args[0] == "--npopts") { RunNowPlayingOptions(args[1]); return; }
+
+        // Decode raw .ithmb slots to PNGs so we can eyeball whether the stored pixel format (RGB565-LE,
+        // rotation) matches what we'd write. Usage: Mixtape.exe --ithmbslot <file.ithmb> <w> <h> <i0> <count> <outDir>
+        if (args.Length >= 7 && args[0] == "--ithmbslot") { RunIthmbSlot(args[1], int.Parse(args[2]), int.Parse(args[3]), int.Parse(args[4]), int.Parse(args[5]), args[6]); return; }
+
+        // Walk the ArtworkDB and print every mhii's child-mhod TYPES + mhni fields, so we can see exactly
+        // how iTunes structures cover art vs how we write it. Usage: Mixtape.exe --artmhiidump <root> <count>
+        if (args.Length >= 4 && args[0] == "--artmhiidump") { RunArtMhiiDump(args[1], int.Parse(args[2]), int.Parse(args[3])); return; }
+
+        // Write cover art for songs ALREADY on the iPod (no re-copy): read each track's embedded art,
+        // encode the device's thumbnail formats, link the mhit, and save. Optional 3rd arg limits how
+        // many tracks to process (for a small first test). Usage: Mixtape.exe --rebuildart <root> [maxCount]
+        if (args.Length >= 2 && args[0] == "--rebuildart") { RunRebuildArt(args[1], args.Length >= 3 ? int.Parse(args[2]) : int.MaxValue); return; }
+
         // Create N synthetic colourful photos and run the real PhotoLibrary add+save pipeline on a
         // device root. Offline integration test for the photo write path. Usage: --photodemo <root> [n]
         if (args.Length >= 2 && args[0] == "--photodemo") { RunPhotoDemo(args[1], args.Length >= 3 && int.TryParse(args[2], out int n) ? n : 8); return; }
@@ -803,6 +829,21 @@ internal static class Program
             return;
         }
 
+        // The detached mini player renders on its own with a synthetic track + cover.
+        if (view == "miniplayer")
+        {
+            using var mp = new MiniPlayerForm { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            mp.Show();
+            var t = new Track { Title = "A Moment Apart", Artist = "ODESZA", Album = "A Moment Apart", MediaType = 1, LengthMs = 234000 };
+            mp.SetTrack(t, CoverArt.Generate(45, 300));
+            mp.SetProgress(playing: true, posSec: 78, durSec: 234, volume: 0.72, muted: false);
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using var mbmp = new Bitmap(mp.ClientSize.Width, mp.ClientSize.Height);
+            mp.DrawToBitmap(mbmp, new Rectangle(0, 0, mp.ClientSize.Width, mp.ClientSize.Height));
+            mbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            return;
+        }
+
         // The sidebar with playlist cover icons (verifies the rounded crisp mini-cover rendering).
         if (view == "sidebaricon")
         {
@@ -820,6 +861,27 @@ internal static class Program
             using var sbm = new Bitmap(f.Width, f.Height);
             f.DrawToBitmap(sbm, new Rectangle(0, 0, f.Width, f.Height));
             sbm.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            return;
+        }
+
+        // Cover Flow renders on its own with synthetic album covers.
+        if (view == "coverflow")
+        {
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(960, 600), BackColor = Theme.Bg };
+            var cf = new CoverFlowView { Dock = DockStyle.Fill };
+            f.Controls.Add(cf);
+            f.Show();
+            var items = new List<CoverFlowView.Item>();
+            string[] titles = { "A Moment Apart", "Starboy", "SOUR", "Brightest Lights", "Settle", "Discovery", "Currents", "In Return", "Wasteland", "Random Access", "Nectar", "Voyage" };
+            string[] artists = { "ODESZA", "The Weeknd", "Olivia Rodrigo", "Lane 8", "Disclosure", "Daft Punk", "Tame Impala", "ODESZA", "Brent Faiyaz", "Daft Punk", "Joji", "ABBA" };
+            for (int i = 0; i < titles.Length; i++)
+                items.Add(new CoverFlowView.Item(CoverArt.Generate(i * 7 + 3, 300), titles[i], artists[i], i));
+            cf.SetItems(items, titles.Length / 2);
+            cf.PlayingTag = items[titles.Length / 2].Tag; // so the "Now Playing" chip shows in the preview
+            for (int i = 0; i < 8; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using var cbmp2 = new Bitmap(f.Width, f.Height);
+            f.DrawToBitmap(cbmp2, new Rectangle(0, 0, f.Width, f.Height));
+            cbmp2.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
             return;
         }
 
@@ -883,6 +945,539 @@ internal static class Program
             bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
         }
         form.Close();
+    }
+
+    /// <summary>Add cover art to songs already on the iPod, in place, without re-copying them.</summary>
+    private static void RunRebuildArt(string root, int maxCount)
+    {
+        var log = new StringBuilder();
+        void L(string s = "") { log.AppendLine(s); Console.WriteLine(s); }
+        try
+        {
+            var dev = DeviceDetector.Build(root);
+            if (dev is null) { L("No iPod at " + root); return; }
+            L($"Device: {dev.DisplayName}  ({dev.Profile.Generation})  CanWrite={dev.Profile.CanWrite}");
+            if (!dev.Profile.CanWrite) { L("Device is read-only — aborting."); return; }
+
+            var lib = IpodLibrary.Load(dev);
+            var art = ArtworkLibrary.Load(dev);
+            art.Force = true;                 // we've confirmed the format out-of-band
+            lib.Artwork = art;
+            L($"Artwork: SupportsArtwork={art.SupportsArtwork} SafeToWrite={art.SafeToWrite} formats=[{string.Join(",", art.AddFormats.Select(f => f.FormatId))}] fromDevice={art.FormatsFromDevice}");
+            if (!art.SupportsArtwork) { L("Artwork sink not writable — aborting."); return; }
+
+            // Clean rebuild: drop all existing images (orphans + earlier broken writes) and re-link from zero.
+            art.StartCleanRebuild();
+            lib.Raw.ClearAllTrackArtwork();
+
+            int added = 0, noFile = 0, noArt = 0, linkFail = 0;
+            foreach (var t in lib.View.Tracks)
+            {
+                if (added >= maxCount) break;
+                string? path = t.ResolveFilePath(root);
+                if (path is null || !File.Exists(path)) { noFile++; continue; }
+                var staged = art.Stage(t.Dbid, path);
+                if (staged is null) { noArt++; continue; }
+                if (!lib.Raw.SetTrackArtwork(t.UniqueId, staged.Value.MhiiId, staged.Value.Size)) { linkFail++; continue; }
+                added++;
+            }
+            L($"Staged art for {added} track(s).  noFile={noFile} noEmbeddedArt={noArt} linkFail={linkFail} (of {lib.View.Tracks.Count} tracks)");
+            if (added == 0) { L("Nothing to write."); return; }
+
+            L("Saving (signs iTunesDB + commits ArtworkDB, with backups)…");
+            lib.Save();
+            L("Done. iTunesDB + ArtworkDB written safely.");
+        }
+        catch (Exception ex) { L("REBUILD ERROR: " + ex); }
+        finally { try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-rebuildart.txt"), log.ToString()); } catch { } }
+    }
+
+    /// <summary>Dump the raw mhii/mhod/mhni structure iTunes used, so we can match it byte-for-byte.</summary>
+    private static void RunArtMhiiDump(string root, int start, int count)
+    {
+        string dbPath = File.Exists(root) ? root : Path.Combine(root, "iPod_Control", "Artwork", "ArtworkDB");
+        byte[] d = File.ReadAllBytes(dbPath);
+        var sb = new StringBuilder();
+        uint U32(int o) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o, 4));
+        ushort U16(int o) => System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(o, 2));
+        ulong U64(int o) => System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(d.AsSpan(o, 8));
+        string Tag(int o) => System.Text.Encoding.ASCII.GetString(d, o, 4);
+
+        // mhfd → first mhsd → mhli → mhii*
+        uint mhfdLen = U32(0x04);
+        int off = (int)mhfdLen;
+        sb.AppendLine($"mhfd header_len={mhfdLen} datasets={U32(0x14)} next_id={U32(0x1C)}");
+        // find the type-1 mhsd
+        int datasets = (int)U32(0x14);
+        int mhliOff = -1;
+        for (int i = 0; i < datasets && off + 16 <= d.Length; i++)
+        {
+            string t = Tag(off); uint hl = U32(off + 0x04), tl = U32(off + 0x08); uint type = U32(off + 0x0C);
+            sb.AppendLine($"mhsd @0x{off:X} type={type} header_len={hl} total_len={tl}");
+            if (type == 1) { mhliOff = off + (int)hl; }
+            off += (int)tl;
+        }
+        if (mhliOff < 0 || Tag(mhliOff) != "mhli") { sb.AppendLine("no mhli"); File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-artmhiidump.txt"), sb.ToString()); Console.WriteLine(sb.ToString()); return; }
+        uint mhliHl = U32(mhliOff + 0x04), mhiiCount = U32(mhliOff + 0x08);
+        sb.AppendLine($"mhli header_len={mhliHl} count={mhiiCount}");
+        int p = mhliOff + (int)mhliHl;
+        // skip to the start index
+        for (int n = 0; n < start && n < mhiiCount && Tag(p) == "mhii"; n++) p += (int)U32(p + 0x08);
+        for (int n = start; n < start + count && n < mhiiCount; n++)
+        {
+            if (Tag(p) != "mhii") { sb.AppendLine($"[{n}] not mhii @0x{p:X}"); break; }
+            uint mhl = U32(p + 0x04), tl = U32(p + 0x08), nch = U32(p + 0x0C), id = U32(p + 0x10);
+            sb.AppendLine($"[{n}] mhii @0x{p:X} header_len={mhl} total_len={tl} num_children={nch} id={id}");
+            sb.AppendLine($"      dbid@0x14=0x{U64(p + 0x14):X16}  dbid@0x18=0x{U64(p + 0x18):X16}  u32@0x30={U32(p + 0x30)}  u32@0x34={U32(p + 0x34)}");
+            sb.Append("      hex 0x00-0x3F: ");
+            for (int b = 0; b < 0x40 && p + b < d.Length; b++) sb.Append(d[p + b].ToString("X2")).Append(b % 4 == 3 ? " " : "");
+            sb.AppendLine();
+            int cp = p + (int)mhl;
+            for (uint c = 0; c < nch && cp + 12 <= p + (int)tl; c++)
+            {
+                string ct = Tag(cp); uint chl = U32(cp + 0x04), ctl = U32(cp + 0x08); ushort mt = U16(cp + 0x0C);
+                sb.AppendLine($"     child @0x{cp:X} '{ct}' header_len={chl} total_len={ctl} type@0x0C={mt}");
+                // does it contain an mhni?
+                int q = cp + (int)chl;
+                if (q + 4 <= cp + (int)ctl && Tag(q) == "mhni")
+                {
+                    uint nhl = U32(q + 0x04), ntl = U32(q + 0x08), nnc = U32(q + 0x0C);
+                    uint corr = U32(q + 0x10); uint imgOff = U32(q + 0x14); uint imgSize = U32(q + 0x18);
+                    ushort vpad = U16(q + 0x1C), hpad = U16(q + 0x1E), hgt = U16(q + 0x20), wid = U16(q + 0x22);
+                    sb.AppendLine($"        mhni header_len={nhl} total_len={ntl} num_children={nnc} corr_id={corr} ithmb_off={imgOff} image_size={imgSize} pad(v={vpad},h={hpad}) dims={wid}x{hgt}");
+                    // walk the mhni's child mhod (the .ithmb filename string)
+                    int fp = q + (int)nhl;
+                    if (fp + 0x18 <= q + (int)ntl && Tag(fp) == "mhod")
+                    {
+                        ushort ftype = U16(fp + 0x0C); uint fstrlen = U32(fp + 0x18); byte enc = d[fp + 0x1C];
+                        int s0 = fp + 0x24; int slen = (int)Math.Min(fstrlen, (uint)(q + (int)ntl - s0));
+                        string str = enc == 2 ? System.Text.Encoding.Unicode.GetString(d, s0, slen) : System.Text.Encoding.UTF8.GetString(d, s0, slen);
+                        sb.AppendLine($"        filename-mhod type@0x0C={ftype} enc(0x1C)={enc}(1=utf8,2=utf16) strlen={fstrlen} total_len={U32(fp + 0x08)} str='{str}'");
+                    }
+                    else sb.AppendLine("        (mhni has NO child filename mhod)");
+                }
+                cp += (int)ctl;
+            }
+            p += (int)tl;
+        }
+        string outp = Path.Combine(AppContext.BaseDirectory, "ipod-artmhiidump.txt");
+        File.WriteAllText(outp, sb.ToString());
+        Console.WriteLine(sb.ToString());
+    }
+
+    /// <summary>Decode <paramref name="count"/> RGB565-LE slots from an .ithmb starting at slot <paramref name="i0"/>
+    /// and save each as a PNG, so the stored pixel format/rotation can be eyeballed.</summary>
+    private static void RunIthmbSlot(string file, int w, int h, int i0, int count, string outDir)
+    {
+        Directory.CreateDirectory(outDir);
+        byte[] all = File.ReadAllBytes(file);
+        int slot = w * h * 2;
+        for (int k = 0; k < count; k++)
+        {
+            int idx = i0 + k;
+            int off = idx * slot;
+            if (off + slot > all.Length) { Console.WriteLine($"slot {idx}: past EOF"); break; }
+            var px = new byte[slot];
+            Buffer.BlockCopy(all, off, px, 0, slot);
+            using var bmp = Ithmb.Decode(px, w, h);
+            if (bmp is null) { Console.WriteLine($"slot {idx}: decode failed"); continue; }
+            string outp = Path.Combine(outDir, $"slot_{idx:000}.png");
+            bmp.Save(outp, System.Drawing.Imaging.ImageFormat.Png);
+            Console.WriteLine($"slot {idx}: {outp}");
+        }
+    }
+
+    private static readonly string? Mdl2 = ResolveMdl2();
+    private static string? ResolveMdl2()
+    {
+        foreach (var n in new[] { "Segoe MDL2 Assets", "Segoe Fluent Icons" })
+            try { using var ff = new FontFamily(n); return n; } catch { }
+        return null;
+    }
+
+    /// <summary>Draw Now-Playing-bar layout options stacked into one PNG so the user can pick a design.</summary>
+    private static void RunNowPlayingOptions(string outPng)
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        var s = AppSettings.Load();
+        try { Theme.SetThemeVariant(s.ThemeVariant); } catch { }
+        Theme.SetAccent(s.Accent);
+
+        int W = 940, barH = 88, label = 30, gap = 26, pad = 18, n = 3;
+        string[] labels =
+        {
+            "A — Centred transport, scrubber below it  (Spotify-style; info left, volume right)",
+            "B — Centred transport, full-width progress line along the bottom",
+            "C — Fully centred: title, transport and scrubber all centred",
+        };
+        using var bmp = new Bitmap(W + pad * 2, pad + n * (label + barH + gap));
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.Clear(Theme.Bg);
+        int y = pad;
+        for (int i = 0; i < n; i++)
+        {
+            using (var lf = Theme.UiFont(10f, FontStyle.Bold))
+                TextRenderer.DrawText(g, labels[i], lf, new Rectangle(pad, y, W, label), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            y += label;
+            DrawBarMock(g, pad, y, W, barH, i);
+            y += barH + gap;
+        }
+        bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static void DrawBarMock(Graphics g, int x, int y, int w, int h, int style)
+    {
+        // backdrop + top seam (matches the real bar)
+        using (var bg = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(x, y, w, h), Theme.Blend(Theme.SidebarBg, Color.White, 0.03), Theme.Blend(Theme.SidebarBg, Color.Black, 0.12), 90f))
+            g.FillRectangle(bg, x, y, w, h);
+        using (var seam = new Pen(Theme.Border)) g.DrawLine(seam, x, y, x + w, y);
+
+        float cx = x + w / 2f;
+        int cz = 56;
+        var cr = new Rectangle(x + 16, y + (h - cz) / 2, cz, cz);
+
+        // local draw helpers ---------------------------------------------------
+        void Tile(Rectangle r)
+        {
+            int rad = (int)Math.Round(r.Width * Theme.TileFrac);
+            using (var ph = new System.Drawing.Drawing2D.LinearGradientBrush(r, Theme.Blend(Theme.SidebarBg, Color.White, 0.10), Theme.Blend(Theme.SidebarBg, Color.Black, 0.06), Theme.ArtAngle))
+            using (var pp = Theme.RoundedRect(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), rad)) g.FillPath(ph, pp);
+            Theme.DrawNote(g, r, Color.FromArgb(110, 255, 255, 255));
+            using var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10));
+            using var bpp = Theme.RoundedRect(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), rad); g.DrawPath(bp, bpp);
+        }
+        void Play(float c, float cy, float rad)
+        {
+            using (var b = new SolidBrush(Theme.Accent)) g.FillEllipse(b, c - rad, cy - rad, rad * 2, rad * 2);
+            using var fg = new SolidBrush(Theme.OnAccent);
+            float t = rad * 0.34f;
+            g.FillPolygon(fg, new[] { new PointF(c - t + 1.5f, cy - t), new PointF(c - t + 1.5f, cy + t), new PointF(c + t + 1.5f, cy) });
+        }
+        void Step(float c, float cy, bool next)
+        {
+            using var b = new SolidBrush(Theme.Subtle);
+            float sQ = 5f; int d = next ? 1 : -1;
+            g.FillPolygon(b, new[] { new PointF(c - d, cy - sQ), new PointF(c - d, cy + sQ), new PointF(c + d * sQ - d, cy) });
+            g.FillRectangle(b, next ? c + sQ - 0.7f : c - sQ - 1.5f, cy - sQ, 2.2f, sQ * 2);
+        }
+        void Mode(float c, float cy, string glyph, bool active)
+        {
+            if (Mdl2 is null) return;
+            using var f = new Font(Mdl2, 13f, FontStyle.Regular, GraphicsUnit.Pixel);
+            using var b = new SolidBrush(active ? Theme.Accent : Theme.Subtle);
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            var hint = g.TextRenderingHint; g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            string gl = string.IsNullOrEmpty(glyph) ? (c < cx ? "" : "") : glyph; // left=shuffle, right=repeat
+            g.DrawString(gl, f, b, new RectangleF(c - 13, cy - 13, 26, 26), sf);
+            g.TextRenderingHint = hint;
+        }
+        void Slider(float sx, float sy, float sw, float frac, bool knob)
+        {
+            using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1)))
+            using (var tp = Theme.RoundedRect(new RectangleF(sx, sy, sw, 5), 2.5f)) g.FillPath(tb, tp);
+            float fw = sw * Math.Clamp(frac, 0, 1);
+            using (var fb = new SolidBrush(Theme.Accent))
+            using (var fp = Theme.RoundedRect(new RectangleF(sx, sy, Math.Max(2, fw), 5), 2.5f)) g.FillPath(fb, fp);
+            if (knob) { using var kb = new SolidBrush(Color.White); g.FillEllipse(kb, sx + fw - 5, sy + 2.5f - 5, 10, 10); }
+        }
+        void Time(string t, float rx, float cy, bool right)
+        {
+            using var f = Theme.UiFont(8f);
+            TextRenderer.DrawText(g, t, f, new Rectangle((int)rx, (int)cy - 9, 42, 18), Theme.Faint, (right ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter);
+        }
+        void Eq(float ex, float cy)
+        {
+            using var pen = new Pen(Theme.Subtle, 2f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+            using var dot = new SolidBrush(Theme.Subtle);
+            float[] xs = { ex, ex + 6, ex + 12 }; float[] kn = { cy - 1, cy - 5, cy + 1 };
+            for (int i = 0; i < 3; i++) { g.DrawLine(pen, xs[i], cy - 9, xs[i], cy + 9); g.FillEllipse(dot, xs[i] - 2.6f, kn[i] - 2.6f, 5.2f, 5.2f); }
+        }
+        void Speaker(float sx, float cy)
+        {
+            using var b = new SolidBrush(Theme.Subtle);
+            using var p = new Pen(Theme.Subtle, 1.6f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+            g.FillPolygon(b, new[] { new PointF(sx, cy - 3), new PointF(sx + 5, cy - 3), new PointF(sx + 10, cy - 7), new PointF(sx + 10, cy + 7), new PointF(sx + 5, cy + 3), new PointF(sx, cy + 3) });
+            g.DrawArc(p, sx + 9, cy - 5, 8, 10, -55, 110);
+            g.DrawArc(p, sx + 9, cy - 8, 12, 16, -50, 100);
+        }
+        void Title(int tx, int ty, int tw, bool centre)
+        {
+            var fl = (centre ? TextFormatFlags.HorizontalCenter : TextFormatFlags.Left) | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis;
+            using (var tf = Theme.UiFont(10.5f, FontStyle.Bold)) TextRenderer.DrawText(g, "3korty", tf, new Rectangle(tx, ty, tw, 20), Theme.TextCol, fl | TextFormatFlags.VerticalCenter);
+            using (var sf = Theme.UiFont(8.75f)) TextRenderer.DrawText(g, "Azahriah  •  memento", sf, new Rectangle(tx, ty + 20, tw, 16), Theme.Subtle, fl);
+        }
+
+        // transport cluster, centred on cx -------------------------------------
+        void Transport(float ty)
+        {
+            Play(cx, ty, 20);
+            Step(cx - 50, ty, false); Step(cx + 50, ty, true);
+            Mode(cx - 92, ty, "", false); Mode(cx + 92, ty, "", false);
+        }
+
+        // right cluster (EQ • speaker • volume) --------------------------------
+        void RightCluster(float cy)
+        {
+            float rx = x + w - 20;
+            Slider(rx - 92, cy - 2, 92, 0.7f, false); rx -= 92 + 14;
+            Speaker(rx - 20, cy); rx -= 20 + 16;
+            Eq(rx - 18, cy);
+        }
+
+        Tile(cr);
+        switch (style)
+        {
+            case 0: // A — centred transport, scrubber centred below
+                Title(cr.Right + 12, y + 18, (int)(cx - 92 - 26) - (cr.Right + 12) - 12, false);
+                Transport(y + 30);
+                {
+                    float sw = 420; float sx = cx - sw / 2;
+                    Slider(sx, y + 60, sw, 0.36f, true);
+                    Time("1:12", sx - 46, y + 62, true); Time("3:48", sx + sw + 6, y + 62, false);
+                }
+                RightCluster(y + 30);
+                break;
+
+            case 1: // B — centred transport, full-width progress line at the very bottom
+                Title(cr.Right + 12, y + (h - 36) / 2, (int)(cx - 92 - 26) - (cr.Right + 12) - 12, false);
+                Transport(y + h / 2f - 3);
+                RightCluster(y + h / 2f - 3);
+                // full-width progress line
+                using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1))) g.FillRectangle(tb, x, y + h - 3, w, 3);
+                using (var fb = new SolidBrush(Theme.Accent)) g.FillRectangle(fb, x, y + h - 3, w * 0.36f, 3);
+                break;
+
+            default: // C — fully centred (single-line title above, transport, scrubber centred below)
+                using (var tf = Theme.UiFont(10f, FontStyle.Bold))
+                    TextRenderer.DrawText(g, "3korty   •   Azahriah", tf, new Rectangle((int)(cx - 220), y + 8, 440, 16), Theme.TextCol,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                Transport(y + 46);
+                { float sw = 360; Slider(cx - sw / 2, y + h - 13, sw, 0.36f, true); }
+                RightCluster(y + 24);
+                break;
+        }
+    }
+
+    /// <summary>Print the entire cover-art chain for a connected iPod and flag where it breaks.</summary>
+    private static void RunArtworkDiag(string root)
+    {
+        string outp = Path.Combine(AppContext.BaseDirectory, "ipod-artworkdiag.txt");
+        var log = new StringBuilder();
+        void L(string s = "") => log.AppendLine(s);
+
+        try
+        {
+            L("=== Mixtape cover-art diagnostic ===");
+            L("root: " + root);
+            L();
+
+            var dev = DeviceDetector.Build(root);
+            if (dev is null) { L("No iPod_Control found at this path — is the iPod mounted there?"); File.WriteAllText(outp, log.ToString()); Console.WriteLine(log.ToString()); return; }
+            var p = dev.Profile;
+
+            L("--- 1. Device detection ---");
+            L("Model:        " + (p.ModelName ?? "(unknown)"));
+            L("ModelNumber:  " + (p.ModelNumber ?? "(none)"));
+            L("Generation:   " + p.Generation + (p.IdentifiedBy is { } by ? $"  [identified by {by}]" : "  [NOT identified]"));
+            L("Signature:    " + p.Scheme);
+            L("CanWrite:     " + p.CanWrite + (p.WriteBlockReason.Length > 0 ? "  (" + p.WriteBlockReason + ")" : ""));
+            L("FireWireGUID: " + (string.IsNullOrEmpty(p.FirewireGuid) ? "(none)" : "present"));
+            L("SupportsPhotos:  " + p.SupportsPhotos);
+            L("SupportsVideo:   " + p.SupportsVideo);
+            L("SupportsArtwork: " + p.SupportsArtwork + (p.SupportsArtwork ? "" : "   <-- if false, NO cover art is ever written"));
+            L();
+
+            L("--- 2. Formats this generation would write ---");
+            var genFmts = ArtworkFormats.For(p.Generation);
+            L("ArtworkFormats.For(" + p.Generation + "): " + (genFmts.Length == 0 ? "(EMPTY — unknown/unsupported generation)" : string.Join(", ", genFmts.Select(f => $"F{f.FormatId} {f.Width}x{f.Height}"))));
+
+            var sink = ArtworkLibrary.Load(dev);
+            L("ArtworkLibrary.SafeToWrite:    " + sink.SafeToWrite);
+            L("ArtworkLibrary.SupportsArtwork: " + sink.SupportsArtwork + (sink.SupportsArtwork ? "" : "   <-- the actual gate AddMediaFile checks"));
+            L("ArtworkLibrary will add in:    " + (sink.AddFormats.Length == 0 ? "(NOTHING — no formats resolved)" : string.Join(", ", sink.AddFormats.Select(f => $"F{f.FormatId} {f.Width}x{f.Height}"))));
+            L();
+
+            L("--- 3. Existing Artwork folder ---");
+            string artDir = Path.Combine(root, "iPod_Control", "Artwork");
+            L("path: " + artDir + (Directory.Exists(artDir) ? "" : "   (MISSING)"));
+            string dbPath = Path.Combine(artDir, "ArtworkDB");
+            ArtworkDbModel? model = null;
+            if (Directory.Exists(artDir))
+            {
+                foreach (var f in Directory.GetFiles(artDir))
+                    L($"  {Path.GetFileName(f),-24} {new FileInfo(f).Length,12:n0} bytes");
+                if (File.Exists(dbPath))
+                {
+                    try
+                    {
+                        model = ArtworkDb.Parse(File.ReadAllBytes(dbPath));
+                        L($"ArtworkDB parsed: {model.Items.Count} image(s), maxId={model.MaxId}" + (model.Warnings.Count > 0 ? "  WARNINGS: " + string.Join(" | ", model.Warnings) : ""));
+                        var byFmt = model.Items.SelectMany(it => it.Thumbs).GroupBy(t => t.FormatId).OrderBy(g => g.Key);
+                        foreach (var g in byFmt) L($"  format F{g.Key}: {g.Count()} thumb(s), sizes {string.Join("/", g.Select(t => t.Size).Distinct())}");
+                    }
+                    catch (Exception ex) { L("ArtworkDB parse FAILED: " + ex.Message); }
+                }
+                else L("ArtworkDB: (none yet)");
+            }
+            L();
+
+            L("--- 4. iTunesDB track flags ---");
+            byte[] dbBytes = File.ReadAllBytes(dev.ITunesDbPath);
+            var raw = RawDb.Parse(dbBytes);
+            var mhits = raw.Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks ?? new List<byte[]>();
+            int withArt = 0, withLink = 0;
+            var trackDbids = new HashSet<ulong>();
+            var artFlaggedDbids = new List<ulong>();
+            foreach (var mhit in mhits)
+            {
+                if (mhit.Length < 0x164) continue;
+                ulong dbid = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(mhit.AsSpan(0x70, 8));
+                byte hasArt = mhit[0xA4];
+                uint mhii = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x160, 4));
+                trackDbids.Add(dbid);
+                if (hasArt == 1) { withArt++; artFlaggedDbids.Add(dbid); }
+                if (mhii != 0) withLink++;
+            }
+            L($"tracks: {mhits.Count}   has_artwork=1: {withArt}   mhii_link!=0: {withLink}");
+            // Name the tracks that currently carry artwork (so they can be checked on the iPod screen).
+            try
+            {
+                var flaggedIds = new HashSet<uint>();
+                foreach (var mhit in mhits)
+                    if (mhit.Length > 0xA4 && mhit[0xA4] == 1)
+                        flaggedIds.Add(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x10, 4)));
+                var view = IpodLibrary.Load(dev).View;
+                foreach (var t in view.Tracks)
+                    if (flaggedIds.Contains(t.UniqueId))
+                        L($"   has art → {t.Artist} — {t.Title}");
+            }
+            catch { }
+            L();
+
+            L("--- 5. Cross-check links (the smoking gun) ---");
+            if (model is null) L("No ArtworkDB to cross-check.");
+            else
+            {
+                int artMatched = 0, artOrphan = 0;
+                foreach (var it in model.Items)
+                    if (trackDbids.Contains(it.TrackDbid)) artMatched++; else artOrphan++;
+                L($"ArtworkDB images whose TrackDbid matches a real track: {artMatched}");
+                L($"ArtworkDB images with NO matching track (orphans):       {artOrphan}");
+                var artDbidSet = model.Items.Select(it => it.TrackDbid).ToHashSet();
+                int flaggedWithArt = artFlaggedDbids.Count(d => artDbidSet.Contains(d));
+                L($"Tracks flagged has_artwork=1 that HAVE a matching image:  {flaggedWithArt} / {withArt}");
+                if (withArt > 0 && flaggedWithArt < withArt) L("  <-- some flagged tracks have no image in the ArtworkDB (link broken or art not written)");
+                if (withArt == 0) L("  <-- NO track is flagged has_artwork: art was never written on copy (capability gate or old build)");
+            }
+
+            File.WriteAllText(outp, log.ToString());
+            Console.WriteLine(log.ToString());
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine().AppendLine("DIAG ERROR: " + ex);
+            File.WriteAllText(outp, log.ToString());
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rc);
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    /// <summary>Render the themed context menu to a PNG so its look can be reviewed without a device.</summary>
+    private static void RunMenuPreview(string outPng)
+    {
+        try { RunMenuPreviewCore(outPng); }
+        catch (Exception ex) { File.WriteAllText(Path.ChangeExtension(outPng, ".err.txt"), ex.ToString()); }
+    }
+
+    private static void RunMenuPreviewCore(string outPng)
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+
+        var settings = AppSettings.Load();
+        Theme.SetThemeVariant(settings.ThemeVariant); // match the live background (e.g. Forest)
+        Theme.SetAccent(settings.Accent);             // and the accent so the hover pill colour is accurate
+
+        using var host = new Form
+        {
+            StartPosition = FormStartPosition.Manual,
+            Location = new Point(-3000, -3000),
+            Size = new Size(420, 320),
+            FormBorderStyle = FormBorderStyle.None,
+            BackColor = Theme.Bg,
+        };
+        host.Show();
+        Application.DoEvents();
+
+        // Mirror the song-row right-click menu from the screenshot (incl. a submenu).
+        var m = ThemedMenu.New();
+        m.Items.Add(new ToolStripMenuItem("Play"));
+        m.Items.Add(new ToolStripMenuItem("Copy to PC…   (1)"));
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add(new ToolStripMenuItem("Edit info…"));
+        m.Items.Add(new ToolStripSeparator());
+        var addTo = new ToolStripMenuItem("Add to playlist");
+        addTo.DropDownItems.Add(new ToolStripMenuItem("Summer 2024"));
+        addTo.DropDownItems.Add(new ToolStripMenuItem("Workout"));
+        addTo.DropDownItems.Add(new ToolStripSeparator());
+        addTo.DropDownItems.Add(new ToolStripMenuItem("New playlist…"));
+        m.Items.Add(addTo);
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add(new ToolStripMenuItem("Delete from iPod   (1)"));
+
+        m.Show(host, new Point(30, 30));
+        // Capture the FIRST-PAINT state faithfully (minimal pumping, no forced re-layout) — the way the
+        // live app shows it. Then open the submenu so it's captured too.
+        Application.DoEvents(); Thread.Sleep(40); Application.DoEvents();
+        addTo.ShowDropDown();
+        Application.DoEvents(); Thread.Sleep(40); Application.DoEvents();
+
+        var sub = addTo.DropDown;
+        GetWindowRect(m.Handle, out var mr);
+        GetWindowRect(sub.Handle, out var sr);
+        int baseX = Math.Min(mr.Left, sr.Left), baseY = Math.Min(mr.Top, sr.Top);
+        int totalW = Math.Max(mr.Right, sr.Right) - baseX, totalH = Math.Max(mr.Bottom, sr.Bottom) - baseY;
+
+        using var outb = new Bitmap(totalW + 48, totalH + 48);
+        using (var g = Graphics.FromImage(outb))
+        {
+            g.Clear(Theme.Bg);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            DrawPopup(g, m.Handle, mr.Left - baseX + 24, mr.Top - baseY + 24);
+            DrawPopup(g, sub.Handle, sr.Left - baseX + 24, sr.Top - baseY + 24);
+        }
+        outb.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+        m.Close();
+        host.Close();
+
+        // Capture one popup window via PrintWindow and paint it (rounded-clipped so the corner pixels
+        // outside the region don't show as black) onto the composite at (dx,dy).
+        static void DrawPopup(Graphics g, IntPtr hwnd, int dx, int dy)
+        {
+            GetWindowRect(hwnd, out var rc);
+            int w = Math.Max(1, rc.Right - rc.Left), h = Math.Max(1, rc.Bottom - rc.Top);
+            using var shot = new Bitmap(w, h);
+            using (var sg = Graphics.FromImage(shot))
+            {
+                IntPtr hdc = sg.GetHdc();
+                PrintWindow(hwnd, hdc, 2); // PW_RENDERFULLCONTENT
+                sg.ReleaseHdc(hdc);
+            }
+            var state = g.Save();
+            using var clip = Theme.RoundedRect(new RectangleF(dx, dy, w, h), MenuStyle.Radius);
+            g.SetClip(clip);
+            g.DrawImage(shot, dx, dy);
+            g.Restore(state);
+        }
     }
 
     private static void RunPhotoDemo(string root, int count)

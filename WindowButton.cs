@@ -9,7 +9,7 @@ namespace iPodCommander;
 /// </summary>
 internal sealed class WindowButton : Control
 {
-    public enum Kind { Minimize, Maximize, Close }
+    public enum Kind { Minimize, Maximize, Close, MiniPlayer }
 
     public Kind Which { get; init; }
     private bool _maximized;
@@ -82,6 +82,13 @@ internal sealed class WindowButton : Control
             case Kind.Close:
                 g.DrawLine(pen, cx - s, cy - s, cx + s, cy + s);
                 g.DrawLine(pen, cx + s, cy - s, cx - s, cy + s);
+                break;
+            case Kind.MiniPlayer: // picture-in-picture: a window with a smaller filled window in the corner — "mini player"
+                var outer = new RectangleF(cx - s - 1, cy - s, (s + 1) * 2, s * 2);
+                using (var op = Theme.RoundedRect(outer, 2f)) g.DrawPath(pen, op);
+                float iw = outer.Width * 0.5f, ih = outer.Height * 0.54f;
+                var inner = new RectangleF(outer.Right - iw - 1.4f, outer.Bottom - ih - 1.4f, iw, ih);
+                using (var ib = new SolidBrush(stroke)) using (var ip = Theme.RoundedRect(inner, 1.6f)) g.FillPath(ib, ip);
                 break;
         }
     }

@@ -36,6 +36,10 @@ internal sealed class NowPlayingBar : Panel
     private RepeatMode _repeat = RepeatMode.Off;
     private string? _path;        // last loaded file path, kept so repeat-one can restart the track
     private SmtcController? _smtc; // Windows media flyout + global media keys (created lazily once the window exists)
+    private double _eqPhase;       // animated "now playing" equaliser bars overlaid on the cover
+    private Tween? _eqAnim;
+    private int _eqTick;
+    private static readonly Rectangle CoverRect = new(16, (H - 56) / 2, 56, 56);
 
     private enum Drag { None, Seek, Volume }
     private Drag _drag = Drag.None;
@@ -53,7 +57,7 @@ internal sealed class NowPlayingBar : Panel
         Height = H;
 
         _engine.Opened += () => Invalidate();
-        _engine.PositionTick += () => { if (_playing && _drag != Drag.Seek) Invalidate(); }; // don't repaint when rested/paused
+        _engine.PositionTick += () => { if (_playing && _drag != Drag.Seek) Invalidate(); Tick?.Invoke(); }; // don't repaint when rested/paused (but always notify the mini player)
         _engine.Ended += OnEnded;
         _engine.Failed += msg =>
         {
@@ -73,14 +77,58 @@ internal sealed class NowPlayingBar : Panel
 
     public bool IsActive => _track is not null;
 
+    // ---- mini-player facade ----
+    // A detached MiniPlayerForm mirrors and drives THIS engine (there is only ever one audio engine).
+    // It reads the state below and forwards its controls back here; Changed/Tick tell it when to repaint.
+    public event Action? Changed; // metadata / play-state / volume changed
+    public event Action? Tick;    // playback position advanced (engine tick, ~5 Hz)
+
+    public Track? NowTrack => _track;
+    public bool Playing => _playing;
+    public bool Muted => _muted;
+    public double VolumeLevel => _muted ? 0 : _volume;
+    public double PositionSeconds => _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
+    public double DurationSeconds { get { double d = _engine.Duration.TotalSeconds; return double.IsNaN(d) || d < 0 ? 0 : d; } }
+    /// <summary>A private copy of the current cover (caller owns it), or null.</summary>
+    public Bitmap? CloneCover() => _cover is null ? null : new Bitmap(_cover);
+
+    /// <summary>Play/pause from the mini player (same as the bar's own play button).</summary>
+    public void TogglePlayback() => TogglePlay();
+
+    /// <summary>Seek to a 0..1 fraction of the track (mini-player seek bar).</summary>
+    public void SeekFraction(double f)
+    {
+        if (_engine.IsOpen) _engine.Position = TimeSpan.FromSeconds(Math.Clamp(f, 0, 1) * _engine.Duration.TotalSeconds);
+        Invalidate(); Changed?.Invoke();
+    }
+
+    /// <summary>Set the audible volume 0..1 (mini-player volume slider); 0 mutes.</summary>
+    public void SetVolumeLevel(double v)
+    {
+        _volume = Math.Clamp(v, 0, 1);
+        if (_volume > 0.001) _lastVol = _volume;
+        _muted = _volume <= 0.001;
+        _engine.Volume = _muted ? 0 : _volume;
+        Invalidate(); Changed?.Invoke();
+    }
+
+    /// <summary>Toggle mute (mini-player speaker icon), restoring the last audible level.</summary>
+    public void ToggleMute()
+    {
+        _muted = !_muted;
+        if (!_muted && _volume <= 0.001) _volume = _lastVol > 0.001 ? _lastVol : 0.5;
+        _engine.Volume = _muted ? 0 : _volume;
+        Invalidate(); Changed?.Invoke();
+    }
+
     /// <summary>Apply equalizer settings to the audio engine (live + on the next track).</summary>
     public void ApplyEq(bool enabled, float[] gains) { _eqOn = enabled; _engine.SetEqEnabled(enabled); _engine.SetEqGains(gains); Invalidate(); }
 
     /// <summary>Pause playback (e.g. when a video preview opens) without clearing the bar. Returns true if it was playing.</summary>
-    public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); Invalidate(); return true; }
+    public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); Invalidate(); Changed?.Invoke(); return true; }
 
     /// <summary>Resume after an external pause (e.g. when the video preview closes).</summary>
-    public void Resume() { if (_track is not null && !_playing) { _engine.Play(); _playing = true; _smtc?.Playing(); Invalidate(); } }
+    public void Resume() { if (_track is not null && !_playing) { _engine.Play(); _playing = true; _smtc?.Playing(); StartEq(); Invalidate(); Changed?.Invoke(); } }
 
     /// <summary>Load and play a track's file. <paramref name="cover"/> may be null (a gradient is used).</summary>
     public void Play(Track track, string filePath, Bitmap? cover)
@@ -98,7 +146,9 @@ internal sealed class NowPlayingBar : Panel
         EnsureSmtc();
         _smtc?.SetMetadata(track.DisplayTitle, track.Artist, track.Album, _cover);
         _smtc?.Playing();
+        StartEq();
         Invalidate();
+        Changed?.Invoke();
     }
 
     /// <summary>Stop playback and return the bar to its idle state (it stays visible).</summary>
@@ -111,7 +161,9 @@ internal sealed class NowPlayingBar : Panel
         _playing = false;
         _scrubFrac = -1;
         _smtc?.Stopped();
+        StopEq();
         Invalidate();
+        Changed?.Invoke();
     }
 
     // Create the system-media-controls bridge once the hosting window exists (skipped in headless renders).
@@ -138,12 +190,15 @@ internal sealed class NowPlayingBar : Panel
             _playing = true; _scrubFrac = -1;
             _smtc?.Playing();
             Invalidate();
+            Changed?.Invoke();
             return;
         }
         // Otherwise advance (the host applies shuffle / repeat-all); if there's no next it rests, paused.
         _playing = false;
         _smtc?.Paused();   // Play() will flip back to Playing if a next track starts
+        StopEq();          // (Play() restarts it if a next track begins)
         Invalidate();
+        Changed?.Invoke();
         NextRequested?.Invoke();
     }
 
@@ -153,10 +208,20 @@ internal sealed class NowPlayingBar : Panel
     private void TogglePlay()
     {
         if (_track is null) return;
-        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); }
-        else { _engine.Play(); _playing = true; _smtc?.Playing(); }
+        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); }
+        else { _engine.Play(); _playing = true; _smtc?.Playing(); StartEq(); }
         Invalidate();
+        Changed?.Invoke();
     }
+
+    // The animated equaliser bars (on the cover, while playing). A looping tween advances a phase and
+    // repaints ONLY the cover region (throttled) so it costs almost nothing and stops the moment playback does.
+    private void StartEq()
+    {
+        if (_eqAnim is { IsRunning: true } || !Anim.MotionEnabled) { Invalidate(CoverRect); return; }
+        _eqAnim = Anim.Run(1_000_000_000, _ => { _eqPhase += 0.22; if ((++_eqTick & 1) == 0) Invalidate(CoverRect); }, null, Easings.Linear);
+    }
+    private void StopEq() { _eqAnim?.Cancel(); _eqAnim = null; Invalidate(CoverRect); }
 
     // ---- responsive layout (one source of truth for paint + hit-testing) ----
     private struct Lo
@@ -186,12 +251,12 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, (H - 24) / 2, 24, 24); rc = l.Eq.Left - 14; }
         int rightStart = rc;
 
-        // Transport centred between the cover and the right cluster, clamped so it never overlaps either.
-        // Shuffle/repeat flank prev/next when there's room; below that the block is just prev/play/next.
+        // Transport centred on the WINDOW centre (not just between cover and cluster), clamped so it never
+        // collides with the left info or the right cluster. Shuffle/repeat flank prev/play/next when wide.
         const int half = 61, modeW = 26, modeGap = 12;
         l.ShowModes = w >= 600;
         int blockHalf = l.ShowModes ? half + modeGap + modeW : half;
-        int cx = Math.Clamp((leftBound + rightStart) / 2, leftBound + blockHalf, Math.Max(leftBound + blockHalf, rightStart - blockHalf));
+        int cx = Math.Clamp(w / 2, leftBound + blockHalf, Math.Max(leftBound + blockHalf, rightStart - blockHalf));
         l.Play = new Rectangle(cx - 19, ControlsY, 38, 38);
         l.Prev = new Rectangle(l.Play.Left - 12 - 30, ControlsY + 4, 30, 30);
         l.Next = new Rectangle(l.Play.Right + 12, ControlsY + 4, 30, 30);
@@ -201,17 +266,17 @@ internal sealed class NowPlayingBar : Panel
             l.Repeat = new Rectangle(l.Next.Right + modeGap, ControlsY + 6, modeW, modeW);
         }
 
-        // Title zone, left of the transport — hidden when there isn't enough room.
+        // Title zone on the left (cover → just before the transport block).
         l.TextX = l.Cover.Right + 12;
-        l.TextW = (l.ShowModes ? l.Shuffle.Left : l.Prev.Left) - 12 - l.TextX;
+        l.TextW = (l.ShowModes ? l.Shuffle.Left : l.Prev.Left) - 14 - l.TextX;
         l.ShowTitle = l.TextW >= 90;
 
-        // Seek bar at the bottom, spanning the centre; times at the ends only when wide.
-        l.ShowSeek = w >= 460 && rightStart - leftBound >= 150;
+        // Seek bar CENTRED beneath the transport (fixed max width, centred on cx); times at its ends when wide.
+        l.ShowSeek = w >= 460;
         l.ShowTimes = w >= 740;
-        int sL = leftBound + (l.ShowTimes ? 44 : 4);
-        int sR = rightStart - (l.ShowTimes ? 44 : 4);
-        l.Seek = new Rectangle(sL, SeekY, Math.Max(60, sR - sL), 5);
+        int tm = l.ShowTimes ? 50 : 8;
+        int seekHalf = Math.Max(40, Math.Min(230, Math.Min(cx - leftBound - tm, rightStart - cx - tm)));
+        l.Seek = new Rectangle(cx - seekHalf, SeekY, seekHalf * 2, 5);
         return l;
     }
 
@@ -231,7 +296,7 @@ internal sealed class NowPlayingBar : Panel
             _muted = !_muted;
             if (!_muted && _volume <= 0.001) _volume = _lastVol > 0.001 ? _lastVol : 0.5;
             _engine.Volume = _muted ? 0 : _volume;
-            Invalidate(); return;
+            Invalidate(); Changed?.Invoke(); return;
         }
         if (l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; SetVolumeFromX(l.Vol, e.X); return; }
 
@@ -261,11 +326,13 @@ internal sealed class NowPlayingBar : Panel
 
     private void OnUp(object? s, MouseEventArgs e)
     {
+        bool wasDragging = _drag != Drag.None;
         if (_drag == Drag.Seek && _scrubFrac >= 0 && _engine.IsOpen)
             _engine.Position = TimeSpan.FromSeconds(_scrubFrac * _engine.Duration.TotalSeconds);
         _scrubFrac = -1;
         _drag = Drag.None;
         Invalidate();
+        if (wasDragging) Changed?.Invoke();
     }
 
     private void ScrubTo(Rectangle seek, int x)
@@ -281,6 +348,7 @@ internal sealed class NowPlayingBar : Panel
         _muted = _volume <= 0.001;
         _engine.Volume = _volume;
         Invalidate();
+        Changed?.Invoke();
     }
 
     private static Rectangle Inflate(Rectangle r, int dx, int dy) { var c = r; c.Inflate(dx, dy); return c; }
@@ -325,6 +393,7 @@ internal sealed class NowPlayingBar : Panel
         }
         if (idle) Theme.DrawNote(g, cr, Color.FromArgb(110, 255, 255, 255));   // crisp, optically-centred eighth note
         using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(crF, cvr); g.DrawPath(bp, cp2); }
+        if (!idle && _playing) DrawEqBars(g, cr);   // animated "now playing" equaliser, bottom-right of the cover
 
         // title / artist (hidden when the window is too narrow)
         if (l.ShowTitle)
@@ -391,6 +460,35 @@ internal sealed class NowPlayingBar : Panel
             float kx = t.X + fw, ky = t.Y + t.Height / 2f;
             using var kb = new SolidBrush(Color.White);
             g.FillEllipse(kb, kx - 5, ky - 5, 10, 10);
+        }
+    }
+
+    /// <summary>Four little accent equaliser bars bouncing in the cover's bottom-right corner — the
+    /// universally-recognised "this is playing" cue. Driven by <see cref="_eqPhase"/>; a soft scrim keeps
+    /// them legible over any artwork.</summary>
+    private void DrawEqBars(Graphics g, Rectangle cover)
+    {
+        const int n = 4, bw = 3, gap = 2, maxH = 16;
+        int totalW = n * bw + (n - 1) * gap;
+        float baseY = cover.Bottom - 7;
+        float x0 = cover.Right - 7 - totalW;
+        // soft scrim so the bars read on light covers
+        using (var scrim = new System.Drawing.Drawing2D.LinearGradientBrush(
+            new RectangleF(cover.Left, cover.Bottom - 24, cover.Width, 24), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f))
+        {
+            var save = g.Clip;
+            using (var clip = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac))
+                g.SetClip(clip, CombineMode.Intersect);
+            g.FillRectangle(scrim, cover.Left, cover.Bottom - 24, cover.Width, 24);
+            g.Clip = save;
+        }
+        using var b = new SolidBrush(Theme.AccentBright);
+        double[] off = { 0.0, 1.7, 3.3, 5.0 }, spd = { 1.0, 1.35, 0.85, 1.15 };
+        for (int i = 0; i < n; i++)
+        {
+            double v = 0.30 + 0.70 * (0.5 + 0.5 * Math.Sin(_eqPhase * spd[i] + off[i]));
+            float bh = (float)(maxH * v);
+            g.FillRectangle(b, x0 + i * (bw + gap), baseY - bh, bw, bh);
         }
     }
 
@@ -518,7 +616,7 @@ internal sealed class NowPlayingBar : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); }
+        if (disposing) { _eqAnim?.Cancel(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); }
         base.Dispose(disposing);
     }
 }

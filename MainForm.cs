@@ -62,6 +62,9 @@ internal sealed class MainForm : Form, IMessageFilter
     private Track? _playingTrack; // the track in the now-playing bar (for prev/next within the visible list)
     private readonly BrowseGridView _browseView = new() { Dock = DockStyle.Fill, Visible = false };
     private Func<Track, bool>? _browseFilter; // when set, the song grid is drilled into one album/artist
+    private CoverFlowView? _coverFlow;        // immersive album browser overlay (lazily created)
+    private Bitmap? _cfPlaceholder;           // shared "loading" cover shown until real art streams in
+    private int _cfGen;                       // bumps to cancel a previous Cover-Flow art-load pass
     private string _browseTitle = "", _browseKicker = "ALBUM";
     private int _browseArtGen; // cancels stale background cover loads for the album/artist grid
     private const int SidebarIconPx = 36; // render playlist icons at 2× then downscale crisply into the 18px tile
@@ -96,6 +99,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _sidebar.PlaylistAreaRightClicked += OnPlaylistAreaRightClick;
         _header.AddButton.Click += (_, _) => OnAddClicked();
         _header.DeleteButton.Click += (_, _) => OnDeleteClicked();
+        _header.CoverButton.Click += (_, _) => OpenCoverFlow();
         _header.AddButton.BlockedClicked += _ => ShowActionBlockedHelp();
         _header.DeleteButton.BlockedClicked += _ => ShowActionBlockedHelp();
         _header.ArtClicked += OnHeaderArtClicked;
@@ -140,9 +144,12 @@ internal sealed class MainForm : Form, IMessageFilter
     private const int CardRadius = Theme.RadShell; // rounded card corners
     private const int CaptionH = 36;   // the custom title-bar strip height
     private const int ResizeBorder = 6;
+    private readonly WindowButton _btnMini = new() { Which = WindowButton.Kind.MiniPlayer };
     private readonly WindowButton _btnMin = new() { Which = WindowButton.Kind.Minimize };
     private readonly WindowButton _btnMax = new() { Which = WindowButton.Kind.Maximize };
     private readonly WindowButton _btnClose = new() { Which = WindowButton.Kind.Close };
+    private MiniPlayerForm? _mini;            // iTunes-style detached mini player (lazily created)
+    private Track? _miniTrack;                // last track pushed to the mini (avoids re-cloning cover each tick)
 
     private void BuildLayout()
     {
@@ -207,13 +214,18 @@ internal sealed class MainForm : Form, IMessageFilter
         content.Controls.Add(center, 0, 1);
         content.Controls.Add(_nowPlaying, 0, 2);   // now-playing bar is the bottom row
 
+        _nowPlaying.Changed += PushMiniState;   // keep the detached mini player in sync (metadata / play-state / volume)
+        _nowPlaying.Tick += PushMiniProgress;   // …and its seek bar (engine position ticks)
+
         _sidebar.Dock = DockStyle.None;
         root.Controls.Add(_sidebar);
         root.Controls.Add(content);
+        root.Controls.Add(_btnMini);
         root.Controls.Add(_btnMin);
         root.Controls.Add(_btnMax);
         root.Controls.Add(_btnClose);
 
+        _btnMini.Click += (_, _) => OpenMiniPlayer();
         _btnMin.Click += (_, _) => WindowState = FormWindowState.Minimized;
         _btnMax.Click += (_, _) => WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
         _btnClose.Click += (_, _) => Close();
@@ -248,12 +260,14 @@ internal sealed class MainForm : Form, IMessageFilter
         _content.Bounds = new Rectangle(cx, top, Math.Max(1, w - cx - Gap), Math.Max(1, bottom - top));
         Theme.RoundRegion(_sidebar, CardRadius);
         Theme.RoundRegion(_content, CardRadius);
+        if (_coverFlow is { Visible: true }) { LayoutCoverFlow(); _coverFlow.BringToFront(); }
 
         const int bw = 46, bh = CaptionH;
         _btnClose.Bounds = new Rectangle(w - bw, 0, bw, bh);
         _btnMax.Bounds = new Rectangle(w - bw * 2, 0, bw, bh);
         _btnMin.Bounds = new Rectangle(w - bw * 3, 0, bw, bh);
-        _btnMin.BringToFront(); _btnMax.BringToFront(); _btnClose.BringToFront();
+        _btnMini.Bounds = new Rectangle(w - bw * 4, 0, bw, bh);
+        _btnMini.BringToFront(); _btnMin.BringToFront(); _btnMax.BringToFront(); _btnClose.BringToFront();
         _btnMax.Maximized = WindowState == FormWindowState.Maximized;
     }
 
@@ -507,6 +521,7 @@ internal sealed class MainForm : Form, IMessageFilter
         SetNowPlayingVisible(true); // expand the row first so the hosted media engine is realized before playing
         _nowPlaying.Play(t, path, cover);
         cover?.Dispose(); // the bar took its own copy
+        if (_coverFlow is not null && MediaType.IsAudio(t.MediaType)) _coverFlow.PlayingTag = AlbumKey(t); // mark it in Cover Flow
     }
 
     private void OpenVideoPreview(Track t, string path)
@@ -1230,6 +1245,204 @@ internal sealed class MainForm : Form, IMessageFilter
         });
     }
 
+    // ---- Cover Flow ----
+
+    /// <summary>Open the immersive Cover-Flow album browser over the content area. Covers stream in over a
+    /// placeholder so it opens instantly even on a big library.</summary>
+    // ---- mini player (iTunes-style detached transport) ----
+
+    /// <summary>Open the mini player and hide the full window — the single audio engine keeps running, the
+    /// mini just mirrors and drives it. Reopening surfaces the existing window in its last position.</summary>
+    private void OpenMiniPlayer()
+    {
+        if (_mini is null)
+        {
+            _mini = new MiniPlayerForm(); // independent (no Owner) so it keeps its own taskbar button while the big window is hidden
+            _mini.PrevRequested += () => PlayRelative(-1);
+            _mini.NextRequested += () => PlayRelative(+1);
+            _mini.PlayPauseRequested += () => _nowPlaying.TogglePlayback();
+            _mini.SeekRequested += f => _nowPlaying.SeekFraction(f);
+            _mini.VolumeRequested += v => _nowPlaying.SetVolumeLevel(v);
+            _mini.MuteRequested += () => _nowPlaying.ToggleMute();
+            _mini.ExpandRequested += RestoreFromMini;
+        }
+
+        // First open: float it near the full window's top-left (it's draggable + remembers its spot after).
+        if (_mini.Location == Point.Empty)
+        {
+            var wa = Screen.FromControl(this).WorkingArea;
+            int x = Math.Clamp(Location.X + 40, wa.Left + 8, wa.Right - _mini.Width - 8);
+            int y = Math.Clamp(Location.Y + 80, wa.Top + 8, wa.Bottom - _mini.Height - 8);
+            _mini.Location = new Point(x, y);
+        }
+
+        // Seed it with the current state before showing.
+        _miniTrack = _nowPlaying.NowTrack;
+        _mini.SetTrack(_miniTrack, _nowPlaying.CloneCover());
+        _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted);
+
+        _mini.Show();
+        _mini.Activate();
+        Hide(); // turn off the big window
+    }
+
+    /// <summary>Return from the mini player to the full window.</summary>
+    private void RestoreFromMini()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+        _mini?.Hide();
+    }
+
+    // Keep the mini player in lock-step with the bar. State pushes carry the cover only when the track
+    // changes (PushMiniState); progress ticks are cheap (PushMiniProgress).
+    private void PushMiniState()
+    {
+        if (_mini is not { Visible: true }) return;
+        if (!ReferenceEquals(_nowPlaying.NowTrack, _miniTrack))
+        {
+            _miniTrack = _nowPlaying.NowTrack;
+            _mini.SetTrack(_miniTrack, _nowPlaying.CloneCover());
+        }
+        _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted);
+    }
+
+    private void PushMiniProgress()
+    {
+        if (_mini is not { Visible: true }) return;
+        _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        // Real app close: force the mini shut (its UserClosing guard only blocks user-initiated closes).
+        if (_mini is not null) { _mini.Dispose(); _mini = null; }
+        base.OnFormClosed(e);
+    }
+
+    private void OpenCoverFlow()
+    {
+        if (_db is null || _root is null || _content is null) return;
+        var audio = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        if (audio.Count == 0) return;
+
+        if (_coverFlow is null)
+        {
+            _coverFlow = new CoverFlowView { Visible = false };
+            _coverFlow.CloseRequested += CloseCoverFlow;
+            _coverFlow.Activated += OnCoverFlowActivated;
+            _root.Controls.Add(_coverFlow);
+        }
+        _cfPlaceholder ??= MakeCoverPlaceholder();
+
+        var items = new List<CoverFlowView.Item>();
+        var reps = new List<(int idx, Track rep)>();
+        int idx = 0;
+        foreach (var grp in audio.GroupBy(AlbumKey).OrderBy(g => DisplayAlbum(g.First()), StringComparer.OrdinalIgnoreCase))
+        {
+            var rep = grp.First();
+            int n = grp.Count();
+            string sub = $"{DisplayAlbumArtist(rep)}   ·   {n} song{(n == 1 ? "" : "s")}";
+            items.Add(new CoverFlowView.Item(_cfPlaceholder, DisplayAlbum(rep), sub, grp.Key));
+            reps.Add((idx++, rep));
+        }
+
+        int start = 0; // centre on the album currently drilled into, if any
+        if (_browseFilter is not null && audio.FirstOrDefault(_browseFilter) is { } cur)
+        {
+            string ck = AlbumKey(cur);
+            int f = items.FindIndex(it => (string?)it.Tag == ck);
+            if (f >= 0) start = f;
+        }
+
+        _coverFlow.SetItems(items, start);
+        _coverFlow.Visible = true;
+        LayoutCoverFlow();
+        _coverFlow.BringToFront();
+        _coverFlow.Focus();
+        _coverFlow.AnimateIn();   // zoom + fade-in
+
+        int gen = ++_cfGen;
+        string? mount = _device?.MountRoot;
+        Task.Run(() =>
+        {
+            foreach (var (i, rep) in reps)
+            {
+                if (_cfGen != gen) return;
+                string? path = rep.LocalPath ?? (mount is not null ? rep.ResolveFilePath(mount) : null);
+                Bitmap? art = null;
+                try { art = ArtworkService.Load("cf:" + ArtworkService.KeyFor(rep), path, 300); } catch { }
+                if (art is not null) { int ii = i; TryBeginInvoke(() => { if (_cfGen == gen && _coverFlow is { Visible: true }) _coverFlow.SetCover(ii, art); }); }
+            }
+        });
+    }
+
+    /// <summary>Size Cover Flow over the content card but leave the Now-Playing bar strip visible at the
+    /// bottom; round only the top corners so it meets the bar flush (within the card's rounded frame).</summary>
+    private void LayoutCoverFlow()
+    {
+        if (_coverFlow is null || _content is null) return;
+        var a = _content.Bounds;
+        a.Height = Math.Max(1, a.Height - NowPlayingBar.H);
+        _coverFlow.Bounds = a;
+
+        int w = a.Width, h = a.Height, r = CardRadius;
+        if (w <= r * 2 || h <= r) { _coverFlow.Region = null; return; }
+        using var p = new System.Drawing.Drawing2D.GraphicsPath();
+        p.AddArc(0, 0, r * 2, r * 2, 180, 90);
+        p.AddArc(w - r * 2, 0, r * 2, r * 2, 270, 90);
+        p.AddLine(w, h, 0, h);     // square bottom edge — sits against the Now-Playing bar
+        p.CloseFigure();
+        _coverFlow.Region = new Region(p);
+    }
+
+    private void CloseCoverFlow()
+    {
+        _cfGen++; // cancel any in-flight cover load
+        if (_coverFlow is null) return;
+        var cf = _coverFlow;
+        cf.AnimateOut(() => { cf.Visible = false; try { _tracks.Focus(); } catch { } }); // fade/zoom out, then hide
+    }
+
+    /// <summary>Activate a cover (centre click / Enter): play that album and start its first song WITHOUT
+    /// closing Cover Flow — it stays open as a visual player, with the real Now-Playing bar at the bottom.
+    /// The underlying grid is switched to the album first so the bar's next/prev step through it.</summary>
+    private void OnCoverFlowActivated(CoverFlowView.Item it)
+    {
+        if (_db is null || it.Tag is not string key) return;
+        NavigateToAlbum(key);
+        if (_tracks.Rows.Count > 0) ActivateTrackRow(0);
+    }
+
+    /// <summary>Point the song grid at one album (no view transition — used while Cover Flow is on top).</summary>
+    private void NavigateToAlbum(string key)
+    {
+        if (_db is null) return;
+        ClearSearch();
+        _viewKind = SidebarRowKind.Albums;
+        _browseFilter = t => AlbumKey(t) == key;
+        var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
+        _browseTitle = first is not null ? DisplayAlbum(first) : "Album";
+        _browseKicker = "ALBUM";
+        ShowCurrent();
+    }
+
+    /// <summary>A neutral "loading" cover (dark panel + faint note) shown until real art streams in.</summary>
+    private static Bitmap MakeCoverPlaceholder()
+    {
+        const int s = 256;
+        var bmp = new Bitmap(s, s);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var br = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, s, s),
+            Theme.Blend(Theme.PanelBg, Color.White, 0.07), Theme.Blend(Theme.PanelBg, Color.Black, 0.18), 60f))
+            g.FillRectangle(br, 0, 0, s, s);
+        Theme.DrawNote(g, new RectangleF(s * 0.32f, s * 0.32f, s * 0.36f, s * 0.36f), Color.FromArgb(55, 255, 255, 255));
+        return bmp;
+    }
+
     private void ShowPhotos()
     {
         SetCenter();
@@ -1278,6 +1491,12 @@ internal sealed class MainForm : Form, IMessageFilter
     /// isn't allowed the button stays clickable-but-greyed (BlockedReason), so clicking it explains why.</summary>
     private void SetActionButtons()
     {
+        // Cover Flow is available wherever an audio library is on screen (not the device/photos/videos pages).
+        _header.CoverButton.Visible = _db is not null
+            && _db.Tracks.Any(t => MediaType.IsAudio(t.MediaType))
+            && _viewKind is SidebarRowKind.AllSongs or SidebarRowKind.Albums or SidebarRowKind.Artists
+                or SidebarRowKind.Playlist or SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist;
+
         if (_viewKind == SidebarRowKind.LocalPlaylist)   // a local playlist: add/remove songs via right-click, no header buttons
         {
             _header.AddButton.Visible = false; _header.DeleteButton.Visible = false;
@@ -1624,6 +1843,12 @@ internal sealed class MainForm : Form, IMessageFilter
         var reportBtn = new ThemedButton { Text = "Save report…", Pill = true, Width = 130, Height = 30 };
         reportBtn.Click += (_, _) => SaveDeviceReport(dev);
         options.AddRow("Device report", "Save a diagnostic file (model, signature, why it's read-only) to send for support.", reportBtn, 56);
+        if (dev.Profile.SupportsArtwork)
+        {
+            var artBtn = new ThemedButton { Text = "Rebuild artwork", Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
+            artBtn.Click += (_, _) => RebuildArtwork(dev);
+            options.AddRow("Album artwork", "Write cover art onto every song already on the iPod (from each file's embedded cover). Handy after copying songs from an older version.", artBtn, 64);
+        }
         options.Finish(); Add(options);
 
         _deviceScrollPanel.Top = 0;        // start at the top
@@ -1648,6 +1873,64 @@ internal sealed class MainForm : Form, IMessageFilter
         _deviceScroll.Bounds = new Rectangle(vw - sb, 0, sb, vh);
         if (needBar) _deviceScroll.BringToFront();
         _deviceScroll.Invalidate();
+    }
+
+    /// <summary>Write cover art onto every track already on the iPod (clean rebuild of the ArtworkDB from
+    /// each file's embedded cover). Runs off the UI thread; reloads the device afterwards.</summary>
+    private async void RebuildArtwork(IPodDevice dev)
+    {
+        if (!dev.Profile.CanWrite) return;
+        if (MessageBox.Show(this,
+            "This writes album art onto every song already on the iPod, reading the cover embedded in each music file.\n\n" +
+            "Songs whose files have no embedded cover are left without art. Mixtape backs up the database first. Continue?",
+            "Rebuild artwork", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+
+        SetStatus("Rebuilding artwork…");
+        UseWaitCursor = true;
+        (int added, int noFile, int noArt, string? error) result;
+        try
+        {
+            result = await System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var lib = IpodLibrary.Load(dev);
+                    var art = ArtworkLibrary.Load(dev);
+                    art.Force = true;
+                    lib.Artwork = art;
+                    if (!art.SupportsArtwork) return (0, 0, 0, "This iPod's artwork database can't be written safely.");
+                    art.StartCleanRebuild();
+                    lib.Raw.ClearAllTrackArtwork();
+                    int added = 0, noFile = 0, noArt = 0;
+                    foreach (var t in lib.View.Tracks)
+                    {
+                        string? path = t.ResolveFilePath(dev.MountRoot);
+                        if (path is null || !File.Exists(path)) { noFile++; continue; }
+                        var staged = art.Stage(t.Dbid, path);
+                        if (staged is null) { noArt++; continue; }
+                        if (lib.Raw.SetTrackArtwork(t.UniqueId, staged.Value.MhiiId, staged.Value.Size)) added++;
+                    }
+                    if (added > 0) lib.Save();
+                    return (added, noFile, noArt, (string?)null);
+                }
+                catch (Exception ex) { return (0, 0, 0, (string?)ex.Message); }
+            });
+        }
+        finally { UseWaitCursor = false; }
+
+        if (result.error is { } err)
+        {
+            SetStatus("Rebuild artwork failed.");
+            MessageBox.Show(this, "Couldn't rebuild artwork:\n\n" + err, "Rebuild artwork", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        SetStatus($"Artwork rebuilt for {result.added} song(s).");
+        if (ReferenceEquals(_device, dev)) LoadDevice(dev); // refresh from the rewritten database
+        MessageBox.Show(this,
+            $"Wrote cover art for {result.added} song(s)." +
+            (result.noArt > 0 ? $"\n{result.noArt} song(s) had no embedded cover in the file." : "") +
+            "\n\nEject the iPod, then check the Now Playing screen.",
+            "Rebuild artwork", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     /// <summary>
@@ -2497,8 +2780,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (addTo.DropDownItems.Count > 0) addTo.DropDownItems.Add(new ToolStripSeparator());
         var nu = new ToolStripMenuItem("New playlist…"); nu.Click += (_, _) => CreateLocalPlaylist(paths);
         addTo.DropDownItems.Add(nu);
-        addTo.DropDown.BackColor = Theme.PanelBg; addTo.DropDown.Renderer = new DarkMenuRenderer();
-        m.Items.Add(addTo);
+        m.Items.Add(addTo); // the submenu is themed automatically by RoundContextMenu
 
         if (_viewKind == SidebarRowKind.LocalPlaylist && _currentLocalPlaylist is { } cur)
         {
@@ -3033,9 +3315,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var newWith = new ToolStripMenuItem("New playlist…");
         newWith.Click += (_, _) => CreatePlaylistWithTracks(ids);
         addTo.DropDownItems.Add(newWith);
-        addTo.DropDown.BackColor = Theme.PanelBg;
-        addTo.DropDown.Renderer = new DarkMenuRenderer();
-        m.Items.Add(addTo);
+        m.Items.Add(addTo); // the submenu is themed automatically by RoundContextMenu
         m.Items.Add(new ToolStripSeparator());
 
         bool inUserPlaylist = _db is not null && _current is not null && !ReferenceEquals(_current, _db.Master) && !_current.IsPodcast;
