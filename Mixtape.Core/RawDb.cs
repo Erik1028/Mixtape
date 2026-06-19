@@ -365,7 +365,10 @@ internal sealed class RawDb
         ulong pid = RandomNonZeroPid();
         foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
         {
-            var template = ds.Playlists!.FirstOrDefault(p => !IsMaster(p));
+            // Clone a PLAIN user playlist's header shape — never a smart/special one (Recently Added, Top 25,
+            // On-The-Go…). Their type-50/51 SPL mhods would otherwise be copied in and the iPod would treat the
+            // new playlist as smart, auto-filtering away the songs the user adds. None plain → minimal header.
+            var template = ds.Playlists!.FirstOrDefault(p => !IsMaster(p) && !HasSplMhods(p));
             byte[] prefix = template is not null ? (byte[])template.Prefix.Clone() : BuildMinimalMhypPrefix();
             if (prefix.Length > 0x14) prefix[0x14] = 0;             // not the master playlist
             if (prefix.Length >= 0x2C) { prefix[0x2A] = 0; prefix[0x2B] = 0; } // not a podcast playlist (clear the flag the template may carry)
@@ -458,6 +461,28 @@ internal sealed class RawDb
     }
 
     private static bool IsMaster(RawPlaylist pl) => pl.Prefix.Length > 0x14 && pl.Prefix[0x14] != 0;
+
+    /// <summary>True if this playlist carries smart-playlist preference (mhod type 50) or rule (type 51)
+    /// mhods — i.e. it's a smart/special list whose header must not be cloned into a plain user playlist.</summary>
+    private static bool HasSplMhods(RawPlaylist pl)
+    {
+        byte[] prefix = pl.Prefix;
+        if (prefix.Length < 0x10) return false;
+        int headerLen = (int)ReadU32(prefix, 0x04);
+        if (headerLen < 16 || headerLen > prefix.Length) return false;
+        uint mhodCount = ReadU32(prefix, 0x0C);
+        int p = headerLen;
+        for (uint i = 0; i < mhodCount; i++)
+        {
+            if (p + 16 > prefix.Length) break;
+            uint total = ReadU32(prefix, p + 0x08);
+            if (total < 12 || p + (long)total > prefix.Length) break;
+            uint type = ReadU32(prefix, p + 0x0C);
+            if (type is 50 or 51) return true;
+            p += (int)total;
+        }
+        return false;
+    }
 
     private static byte[] CloneMhip(byte[] template, uint trackId)
     {

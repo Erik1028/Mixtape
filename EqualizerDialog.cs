@@ -1,5 +1,4 @@
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 
 namespace iPodCommander;
 
@@ -35,7 +34,8 @@ internal sealed class EqBandsControl : Control
 
     private int Cols => EqualizerSampleProvider.BandCount;
     private int ColW => Math.Max(1, Width / Cols);
-    private int BandAt(int x) { int i = x / ColW; return i >= 0 && i < Cols ? i : -1; }
+    private int X0 => (Width - ColW * Cols) / 2;   // centre the band group (the integer-division remainder was all dumped on the right)
+    private int BandAt(int x) { int rel = x - X0; if (rel < 0) return -1; int i = rel / ColW; return i >= 0 && i < Cols ? i : -1; }
     private Rectangle TrackArea => new(0, 12, Width, Math.Max(20, Height - 12 - 22));
 
     private void SetFromY(int band, int y)
@@ -57,7 +57,7 @@ internal sealed class EqBandsControl : Control
         using (var cp = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.12f))) g.DrawLine(cp, 6, midY, Width - 6, midY); // 0 dB line
         for (int i = 0; i < Cols; i++)
         {
-            int cx = i * w + w / 2;
+            int cx = X0 + i * w + w / 2;
             using (var tp = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.10f), 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 g.DrawLine(tp, cx, ta.Top, cx, ta.Bottom);
             float frac = (_gains[i] / Range + 1f) / 2f;
@@ -65,15 +65,16 @@ internal sealed class EqBandsControl : Control
             using (var fp = new Pen(Theme.Accent, 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 g.DrawLine(fp, cx, midY, cx, ky);
             using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, cx - 6, ky - 6, 12, 12);
-            TextRenderer.DrawText(g, Labels[i], Theme.UiFont(7.5f), new Rectangle(i * w, Height - 20, w, 18), Theme.Subtle,
+            TextRenderer.DrawText(g, Labels[i], Theme.UiFont(7.5f), new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
         }
     }
 }
 
-/// <summary>Equalizer window: an on/off switch, preset buttons, and the 10-band editor. Changes apply
-/// live through the supplied callback (which updates the player and persists the settings).</summary>
-internal sealed class EqualizerDialog : Form
+/// <summary>Equalizer dropdown: an on/off switch, preset buttons, and the 10-band editor. Drops from the
+/// EQ button and dismisses on click-away. Changes apply live through the supplied callback (which updates
+/// the player and persists the settings).</summary>
+internal sealed class EqualizerDialog : FlyoutForm
 {
     private static readonly (string Name, float[] Gains)[] Presets =
     {
@@ -94,23 +95,20 @@ internal sealed class EqualizerDialog : Form
     {
         _onChange = onChange;
         Text = "Equalizer";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        StartPosition = FormStartPosition.CenterParent;
-        MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-        ClientSize = new Size(480, 330);
-        BackColor = Theme.Bg; ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);
+        ClientSize = new Size(404, 286);
+        ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);   // borderless/anchored chrome comes from FlyoutForm
 
-        Controls.Add(new Label { Text = "Equalizer", Font = Theme.DisplayFont(15f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Bounds = new Rectangle(22, 18, 240, 28), TextAlign = ContentAlignment.MiddleLeft });
+        Controls.Add(new Label { Text = "Equalizer", Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Bounds = new Rectangle(18, 14, 220, 24), TextAlign = ContentAlignment.MiddleLeft });
 
-        _toggle = new ToggleSwitch { Checked = enabled, Location = new Point(ClientSize.Width - 22 - 46, 20) };
+        _toggle = new ToggleSwitch { Checked = enabled, Location = new Point(ClientSize.Width - 18 - 46, 15) };
         _toggle.CheckedChanged += Push;
         Controls.Add(_toggle);
 
-        _presets = new SegmentedControl { Options = Array.ConvertAll(Presets, p => p.Name), Width = ClientSize.Width - 44, Height = 30, Location = new Point(22, 58), SelectedIndex = MatchPreset(gains) };
+        _presets = new SegmentedControl { Options = Array.ConvertAll(Presets, p => p.Name), Width = ClientSize.Width - 36, Height = 28, Location = new Point(18, 48), SelectedIndex = MatchPreset(gains) };
         _presets.SelectedChanged += () => { _bands.SetGains(Presets[_presets.SelectedIndex].Gains); Push(); };
         Controls.Add(_presets);
 
-        _bands = new EqBandsControl(gains) { Bounds = new Rectangle(22, 102, ClientSize.Width - 44, ClientSize.Height - 102 - 18) };
+        _bands = new EqBandsControl(gains) { Bounds = new Rectangle(18, 86, ClientSize.Width - 36, ClientSize.Height - 86 - 14) };
         _bands.GainsChanged += _ => Push();
         Controls.Add(_bands);
     }
@@ -127,12 +125,5 @@ internal sealed class EqualizerDialog : Form
             if (same) return i;
         }
         return 0;
-    }
-
-    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
-    protected override void OnHandleCreated(EventArgs e)
-    {
-        base.OnHandleCreated(e);
-        try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
     }
 }

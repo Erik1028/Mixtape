@@ -75,21 +75,25 @@ internal static class Theme
     }
     public static Color OnAccent { get; private set; } = Color.FromArgb(8, 14, 13);
 
+    /// <summary>A legible foreground (near-black or near-white) for content drawn ON an arbitrary fill colour —
+    /// so e.g. a white pictogram doesn't vanish on a light accent tile.</summary>
+    public static Color OnColor(Color c) =>
+        (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) > 145 ? Color.FromArgb(20, 22, 26) : Color.FromArgb(244, 255, 255, 255);
+
+    // Enumerate installed fonts ONCE (the collection scan is the slow part) and reuse the name set —
+    // declared before the family fields below so it's initialized first.
+    private static readonly HashSet<string> InstalledFamilies = LoadInstalledFamilies();
+    private static HashSet<string> LoadInstalledFamilies()
+    {
+        try { using var ic = new System.Drawing.Text.InstalledFontCollection(); return ic.Families.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase); }
+        catch { return new HashSet<string>(); }
+    }
+    private static string? FirstInstalled(params string[] names) => Array.Find(names, InstalledFamilies.Contains);
+
     private static readonly string TextFamily = FirstInstalled("Segoe UI Variable Text") ?? "Segoe UI";
     private static readonly string? TextSemibold = FirstInstalled("Segoe UI Variable Text Semibold");
     private static readonly string DisplayFamily = FirstInstalled("Segoe UI Variable Display") ?? "Segoe UI";
     private static readonly string? DisplaySemibold = FirstInstalled("Segoe UI Variable Display Semib");
-
-    private static string? FirstInstalled(params string[] names)
-    {
-        try
-        {
-            using var installed = new System.Drawing.Text.InstalledFontCollection();
-            var have = installed.Families.Select(f => f.Name).ToHashSet();
-            return names.FirstOrDefault(have.Contains);
-        }
-        catch { return null; }
-    }
 
     public static Font UiFont(float size, FontStyle style = FontStyle.Regular) =>
         style.HasFlag(FontStyle.Bold) && TextSemibold != null
@@ -113,61 +117,35 @@ internal static class Theme
         return path;
     }
 
-    // Windows' designed icon font, resolved once. Segoe Fluent Icons (Win11) draws a clean beamed
-    // double-note at U+E8D6; Segoe MDL2 Assets (Win10) is the fallback. Null only if neither exists.
-    private static readonly string? IconFont = ResolveIconFont();
-    private static string? ResolveIconFont()
-    {
-        foreach (var name in new[] { "Segoe Fluent Icons", "Segoe MDL2 Assets" })
-            try { using var ff = new FontFamily(name); return name; } catch { }
-        return null;
-    }
-
     /// <summary>The placeholder music mark for the idle player cover and generated album art: a clean
-    /// beamed double-note from Windows' icon font, centred in <paramref name="r"/>. Falls back to a
-    /// hand-drawn vector note if the icon font is unavailable (so it can never render as a tofu box).</summary>
+    /// beamed pair of eighth notes (\u266B) \u2014 two round heads on one baseline, two stems, and a straight top
+    /// beam \u2014 drawn as a vector (centred in <paramref name="r"/>) so the shape is identical everywhere.</summary>
     public static void DrawNote(Graphics g, RectangleF r, Color c)
-    {
-        if (IconFont is null) { DrawNoteVector(g, r, c); return; }
-        var savedHint = g.TextRenderingHint;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
-        using var f = new Font(IconFont, Math.Min(r.Width, r.Height) * 0.5f, FontStyle.Regular, GraphicsUnit.Pixel);
-        using var b = new SolidBrush(c);
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString("\uE8D6", f, b, r, sf);
-        g.TextRenderingHint = savedHint;
-    }
-
-    /// <summary>Fallback beamed double-note, perfectly symmetric so it reads dead-centre: two parallel
-    /// stems joined by a top beam, with a tilted oval head under each.</summary>
-    private static void DrawNoteVector(Graphics g, RectangleF r, Color c)
     {
         var savedSmooth = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         float s = Math.Min(r.Width, r.Height);
-        float cx = r.X + r.Width / 2f;
-        float cy = r.Y + r.Height / 2f;
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
         using var b = new SolidBrush(c);
 
-        float stemW = s * 0.05f;
-        float xL = cx - s * 0.16f, xR = cx + s * 0.16f;     // two stems, symmetric about the centre
-        float stemTop = cy - s * 0.32f;
-        float headCY = cy + s * 0.20f;
-        float headRx = s * 0.13f, headRy = s * 0.10f;
+        float hr = 0.13f * s;                  // round note-head radius
+        float sw = 0.075f * s;                 // stem width
+        float hy = cy + 0.16f * s;             // both heads on the same baseline
+        float lhx = cx - 0.16f * s, rhx = cx + 0.16f * s;
+        float stemTop = cy - 0.26f * s;
+        float lsx = lhx + hr - sw, rsx = rhx + hr - sw;             // stems on each head's right edge
 
-        g.FillRectangle(b, xL - stemW / 2f, stemTop, stemW, headCY - stemTop);   // stems
-        g.FillRectangle(b, xR - stemW / 2f, stemTop, stemW, headCY - stemTop);
-
-        using (var beam = RoundedRect(new RectangleF(xL - stemW / 2f, stemTop, (xR - xL) + stemW, s * 0.12f), s * 0.03f))
-            g.FillPath(b, beam);                                                 // beam joining the stem tops
-
-        foreach (float hx in new[] { xL, xR })                                   // tilted oval heads
+        // Build the whole note as ONE winding path and fill it a single time, so overlaps don't double-
+        // paint (a semi-transparent colour would otherwise darken the seams between stems/beam/heads).
+        using (var path = new GraphicsPath { FillMode = FillMode.Winding })
         {
-            var st = g.Save();
-            g.TranslateTransform(hx, headCY);
-            g.RotateTransform(-18f);
-            g.FillEllipse(b, -headRx, -headRy, headRx * 2, headRy * 2);
-            g.Restore(st);
+            path.AddRectangle(new RectangleF(lsx, stemTop, sw, hy - stemTop));   // stems
+            path.AddRectangle(new RectangleF(rsx, stemTop, sw, hy - stemTop));
+            using (var beam = RoundedRect(new RectangleF(lsx, stemTop, (rsx + sw) - lsx, 0.12f * s), 0.03f * s))
+                path.AddPath(beam, false);                                       // straight beam across the stem tops
+            path.AddEllipse(lhx - hr, hy - hr, hr * 2, hr * 2);                  // round heads on one line
+            path.AddEllipse(rhx - hr, hy - hr, hr * 2, hr * 2);
+            g.FillPath(b, path);
         }
         g.SmoothingMode = savedSmooth;
     }
@@ -176,7 +154,7 @@ internal static class Theme
     public const int RadControl = 8;       // non-pill buttons, selection/hover pills, segmented outer track, hover chips
     public const int RadChipInset = 6;     // pills nested inside the segmented track only (= RadControl - 2)
     public const int RadCard = 14;         // inner content cards (CardPanel: Settings + device ABOUT/BACKUPS/OPTIONS)
-    public const int RadShell = 16;        // top-level floating sidebar/content shells
+    public const int RadShell = 10;        // top-level floating sidebar/content shells — kept close to the OS window's ~8px corner so the inner cards don't look rounder than the window framing them
     public const float TileFrac = 0.12f;   // cover-tile radius as a fraction of size (round(TileFrac*size))
     public const int RadTileSmall = 4;     // the tiny 18px sidebar mini-cover only
     public const float ArtAngle = 60f;     // single light direction for all diagonally-lit generated art
@@ -248,15 +226,16 @@ internal static class Theme
         Glow(g, r, r.Right - r.Width * 0.35f, r.Bottom - r.Height * 0.10f, Math.Max(r.Width, r.Height) * 0.85f, Color.FromArgb(40, HsvToColor((AccentHue() + 55) % 360, 0.55, 0.72)));
     }
 
-    /// <summary>A soft drop shadow behind a floating card (painted on the wallpaper before the card draws).</summary>
+    /// <summary>A soft drop shadow behind a floating card (painted on the wallpaper before the card draws).
+    /// Kept subtle + tight so it hugs the rounded corner rather than reading as a halo behind it.</summary>
     public static void PaintCardShadow(Graphics g, Rectangle card, int radius)
     {
         if (card.Width <= 0 || card.Height <= 0) return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        for (int i = 7; i >= 1; i--)
+        for (int i = 5; i >= 1; i--)
         {
-            using var p = RoundedRect(new RectangleF(card.X - i, card.Y - i + 4, card.Width + 2 * i, card.Height + 2 * i), radius + i);
-            using var b = new SolidBrush(Color.FromArgb(7, 0, 0, 0));
+            using var p = RoundedRect(new RectangleF(card.X - i, card.Y - i + 3, card.Width + 2 * i, card.Height + 2 * i), radius + i);
+            using var b = new SolidBrush(Color.FromArgb(6, 0, 0, 0));
             g.FillPath(b, p);
         }
     }
@@ -293,6 +272,49 @@ internal static class Theme
         var old = c.Region;
         c.Region = new Region(RoundedRect(new RectangleF(0, 0, c.Width, c.Height), radius));
         old?.Dispose();
+    }
+
+    /// <summary>Paint ANTI-ALIASED rounded corners on a card by repainting its corner "wedges" (the bit outside
+    /// the rounded rect) with the wallpaper bitmap that sits behind it — which already has the card shadows baked
+    /// in, so the wedge is pixel-identical to the gap around the card (no seam, no square shadow edge). Unlike a
+    /// control <see cref="Region"/>, whose clip can only stair-step, this gives a smooth curve. Call at the END of
+    /// the card's own OnPaint, for whichever corners sit on the card's outer edge. No-op outside the shell.</summary>
+    public static void CarveCardCorners(Graphics g, Control card, float radius, bool tl, bool tr, bool br, bool bl)
+    {
+        // Sum offsets up to the wallpaper root (robust whether or not the window is shown — PointToScreen can
+        // misreport during a headless render).
+        Point off = Point.Empty;
+        Control? p = card;
+        while (p is not null && p is not WallpaperPanel) { off.X += p.Left; off.Y += p.Top; p = p.Parent; }
+        if (p is not WallpaperPanel root || root.Wallpaper is not { } wall) return;
+        var r = new RectangleF(0, 0, card.ClientSize.Width, card.ClientSize.Height);
+        var savedSmooth = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var brush = new TextureBrush(wall) { WrapMode = WrapMode.Clamp })
+        {
+            brush.TranslateTransform(-off.X, -off.Y);   // map the texture so card-local (x,y) samples wall(x+off,y+off)
+            if (tl) FillCornerWedge(g, brush, r, radius, 0);
+            if (tr) FillCornerWedge(g, brush, r, radius, 1);
+            if (br) FillCornerWedge(g, brush, r, radius, 2);
+            if (bl) FillCornerWedge(g, brush, r, radius, 3);
+        }
+        g.SmoothingMode = savedSmooth;
+    }
+
+    // One AA corner wedge (0=TL,1=TR,2=BR,3=BL): area between the square corner point and the quarter-circle arc.
+    private static void FillCornerWedge(Graphics g, Brush brush, RectangleF r, float radius, int corner)
+    {
+        float d = radius * 2;
+        using var p = new GraphicsPath();
+        switch (corner)
+        {
+            case 0: p.AddLine(r.X, r.Y, r.X + radius, r.Y);                   p.AddArc(r.X, r.Y, d, d, 270, -90); break;                    // top-left
+            case 1: p.AddLine(r.Right, r.Y, r.Right, r.Y + radius);           p.AddArc(r.Right - d, r.Y, d, d, 0, -90); break;              // top-right
+            case 2: p.AddLine(r.Right, r.Bottom, r.Right - radius, r.Bottom); p.AddArc(r.Right - d, r.Bottom - d, d, d, 90, -90); break;   // bottom-right
+            case 3: p.AddLine(r.X, r.Bottom, r.X, r.Bottom - radius);         p.AddArc(r.X, r.Bottom - d, d, d, 180, -90); break;          // bottom-left
+        }
+        p.CloseFigure();
+        g.FillPath(brush, p);
     }
 
     private static readonly Dictionary<(int, int), Bitmap> ArtCache = new();

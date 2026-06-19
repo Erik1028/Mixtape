@@ -23,6 +23,7 @@ internal sealed class CoverFlowView : Control
     private int _target;       // index we're coasting to
     private Tween? _tw;
     private readonly Dictionary<long, Bitmap> _sprites = new();    // baked cover+reflection per (index, side, angle-bucket)
+    private int _bakedCoverH = -1;                                  // base size the current sprites were baked at (rebake on resize)
     private const int Buckets = 12;                                 // angle steps for the cross-centre rotation (smoother)
     private Bitmap? _bg;                                            // cached backdrop, re-rendered on resize only
     private float _intro = 1f;                                      // open/close zoom+fade (1 = fully shown)
@@ -38,9 +39,19 @@ internal sealed class CoverFlowView : Control
     private object? _playingTag;
     private Rectangle _npChip;
     private bool _npChipHover;
+    // Songs / Albums / Artists segmented toggle (top-centre) — the host rebuilds the deck on change.
+    public enum BrowseMode { Songs, Albums, Artists }
+    private BrowseMode _mode = BrowseMode.Albums;
+    private static readonly string[] ModeLabels = { "Songs", "Albums", "Artists" };
+    private readonly Rectangle[] _modeRects = { Rectangle.Empty, Rectangle.Empty, Rectangle.Empty };
+    private int _modeHover = -1;
 
     public event Action<Item>? Activated;
     public event Action? CloseRequested;
+    public event Action<BrowseMode>? ModeChanged;
+
+    /// <summary>Which kind of cover the deck shows. Set by the host; the toggle reflects it.</summary>
+    public BrowseMode Mode { get => _mode; set { if (_mode == value) return; _mode = value; Invalidate(); } }
 
     /// <summary>The Tag of the album currently playing (set by the host); marks its cover + enables the chip.</summary>
     public object? PlayingTag { get => _playingTag; set { if (Equals(_playingTag, value)) return; _playingTag = value; Invalidate(); } }
@@ -152,6 +163,8 @@ internal sealed class CoverFlowView : Control
         base.OnMouseDown(e);
         Focus();
         if (_closeRect.Contains(e.Location)) { CloseRequested?.Invoke(); return; }
+        for (int i = 0; i < 3; i++)
+            if (_modeRects[i].Contains(e.Location)) { if ((int)_mode != i) { _mode = (BrowseMode)i; Invalidate(); ModeChanged?.Invoke(_mode); } return; }
         if (_playingTag is not null && _npChip.Contains(e.Location)) { JumpToPlaying(); return; }
         _mouseDown = true; _dragging = false; _downX = e.X; _downPos = _pos;
     }
@@ -174,7 +187,9 @@ internal sealed class CoverFlowView : Control
         if (ch != _closeHover) { _closeHover = ch; Invalidate(_closeRect); }
         bool nh = _playingTag is not null && _npChip.Contains(e.Location);
         if (nh != _npChipHover) { _npChipHover = nh; Invalidate(_npChip); }
-        Cursor = (ch || nh || HitTest(e.Location) >= 0) ? Cursors.Hand : Cursors.Default;
+        int mh = -1; for (int i = 0; i < 3; i++) if (_modeRects[i].Contains(e.Location)) { mh = i; break; }
+        if (mh != _modeHover) { _modeHover = mh; Invalidate(); }
+        Cursor = (ch || nh || mh >= 0 || HitTest(e.Location) >= 0) ? Cursors.Hand : Cursors.Default;
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -236,11 +251,16 @@ internal sealed class CoverFlowView : Control
         g.SmoothingMode = SmoothingMode.None;
 
         int H = Height;
-        float introScale = 0.84f + 0.16f * Math.Clamp(_intro, 0f, 1f); // open/close zoom
-        int coverH = (int)(Math.Clamp((int)(H * 0.46f), 120, 300) * introScale);
+        // Sprites bake at this BASE size (depends only on window height). The open/close zoom is applied as a
+        // runtime scaled blit — NOT by baking a smaller sprite — so covers actually zoom in (they used to pop in
+        // at 84% and stay there). A base-size change (window resize) rebakes the cache so covers re-fit.
+        int baseH = Math.Clamp((int)(H * 0.46f), 120, 300);
+        if (baseH != _bakedCoverH) { ClearCaches(); _bakedCoverH = baseH; }
+        float introScale = 0.84f + 0.16f * Math.Clamp(_intro, 0f, 1f); // open/close zoom (applied as a scaled blit below)
+        int coverH = (int)(baseH * introScale);
         int coverW = coverH;
         float cx = Width / 2f, centreY = H * 0.42f;
-        float Dv = coverW * 1.85f;                                  // viewer distance (perspective strength)
+        float Dv = baseH * 1.85f;                                   // viewer distance in BAKE space (Dv/baseW == Dv/coverW → perspective identical at any zoom)
         float maxAngle = (float)(MaxAngleDeg * Math.PI / 180);
         // The centre cover is flat and "popped" forward; side covers begin just past it (small gap) and
         // recede as an overlapping fan. side1 = first side cover's centre; sideStep = spacing between them.
@@ -257,7 +277,7 @@ internal sealed class CoverFlowView : Control
         var order = Enumerable.Range(lo, hi - lo + 1).OrderByDescending(i => Math.Abs(i - _pos)).ToList();
 
         foreach (int i in order)
-            DrawCover(g, i, cx, centreY, coverW, coverH, Dv, maxAngle, side1, sideStep);
+            DrawCover(g, i, cx, centreY, coverW, coverH, baseH, Dv, maxAngle, side1, sideStep, introScale);
 
         // Edge vignette: darken the far side covers toward the screen edges for depth (drawn over them),
         // toned to the theme so it stays in-hue with the backdrop.
@@ -275,7 +295,42 @@ internal sealed class CoverFlowView : Control
 
         DrawCentreText(g, centreY, coverH);
         DrawNowPlayingChip(g);
+        DrawModeSwitch(g);
         DrawCloseButton(g);
+    }
+
+    /// <summary>A Songs / Albums / Artists segmented toggle centred at the top — clicking a segment raises
+    /// <see cref="ModeChanged"/> so the host rebuilds the deck.</summary>
+    private void DrawModeSwitch(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var f = Theme.UiFont(9f, FontStyle.Bold);
+        const int padX = 17, h = 30;
+        int[] w = new int[3]; int total = 0;
+        for (int i = 0; i < 3; i++) { w[i] = TextRenderer.MeasureText(g, ModeLabels[i], f).Width + padX * 2; total += w[i]; }
+        int x = (Width - total) / 2, y = 14;
+
+        using (var b = new SolidBrush(Color.FromArgb((int)(40 * _intro), Color.White)))
+        using (var cp = Theme.RoundedRect(new Rectangle(x, y, total, h), h / 2f)) g.FillPath(b, cp);
+
+        int cxx = x;
+        for (int i = 0; i < 3; i++)
+        {
+            var seg = new Rectangle(cxx, y, w[i], h);
+            _modeRects[i] = seg;
+            bool active = (int)_mode == i;
+            var inner = Rectangle.Inflate(seg, -3, -3);
+            if (active)
+                using (var ab = new SolidBrush(Color.FromArgb((int)(235 * _intro), Theme.Accent)))
+                using (var ap = Theme.RoundedRect(inner, inner.Height / 2f)) g.FillPath(ab, ap);
+            else if (_modeHover == i)
+                using (var hb = new SolidBrush(Color.FromArgb((int)(45 * _intro), Color.White)))
+                using (var hp = Theme.RoundedRect(inner, inner.Height / 2f)) g.FillPath(hb, hp);
+            Color tcol = active ? Theme.OnAccent : Color.White;
+            TextRenderer.DrawText(g, ModeLabels[i], f, seg, Color.FromArgb((int)((active ? 255 : 205) * _intro), tcol),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            cxx += w[i];
+        }
     }
 
     /// <summary>A "Now Playing" pill (top-left) shown when an album in the deck is the one playing; click it
@@ -306,7 +361,7 @@ internal sealed class CoverFlowView : Control
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
-    private void DrawCover(Graphics g, int i, float cx, float centreY, int coverW, int coverH, float Dv, float maxAngle, float side1, float sideStep)
+    private void DrawCover(Graphics g, int i, float cx, float centreY, int coverW, int coverH, int baseH, float Dv, float maxAngle, float side1, float sideStep, float scale)
     {
         float d = i - _pos;
         float a = Math.Abs(d);
@@ -317,10 +372,20 @@ internal sealed class CoverFlowView : Control
         float o = a <= 1f ? d * side1 : s * (side1 + (a - 1f) * sideStep);
         float Xc = cx + o;
 
-        Bitmap sprite = GetSprite(i, s, bucket, coverW, coverH, Dv, maxAngle);
-        float left = Xc - sprite.Width / 2f, top = centreY - coverH / 2f;
-        _hit.Add((i, new RectangleF(left, top, sprite.Width, coverH)));
-        g.DrawImageUnscaled(sprite, (int)Math.Round(left), (int)Math.Round(top)); // 1:1 blit — warp+reflection baked in
+        // Sprite is baked once at the full BASE size; the open/close zoom is a uniform scaled blit so the cache
+        // never holds a per-zoom-frame size (which made covers pop in small and never grow / mis-size on resize).
+        Bitmap sprite = GetSprite(i, s, bucket, baseH, baseH, Dv, maxAngle);
+        float dw = sprite.Width * scale, dh = sprite.Height * scale;
+        float left = Xc - dw / 2f, top = centreY - coverH / 2f;
+        _hit.Add((i, new RectangleF(left, top, dw, coverH)));
+        if (scale >= 0.999f)
+            g.DrawImageUnscaled(sprite, (int)Math.Round(left), (int)Math.Round(top)); // resting: 1:1, no resample
+        else
+        {
+            var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.DrawImage(sprite, left, top, dw, dh);                                    // open/close zoom frames: smooth scale
+            g.InterpolationMode = im;
+        }
     }
 
     /// <summary>A cover baked (once) into a sprite of cover + faded reflection at a quantised angle — cached

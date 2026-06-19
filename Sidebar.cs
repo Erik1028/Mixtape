@@ -93,6 +93,10 @@ internal sealed class Sidebar : Panel
         MouseWheel += (_, e) => ClampScroll(_scroll - Math.Sign(e.Delta) * 40);
     }
 
+    /// <summary>Scroll the rail by a raw wheel delta. The host routes the wheel here (the rail is a
+    /// non-focusable Panel, so it never receives WM_MOUSEWHEEL itself).</summary>
+    public void ScrollByWheel(int delta) => ClampScroll(_scroll - Math.Sign(delta) * 40);
+
     /// <summary>Clamp the scroll offset to [0, content − visible] so the list can't scroll past its end into empty space.</summary>
     private void ClampScroll(int value)
     {
@@ -329,7 +333,7 @@ internal sealed class Sidebar : Panel
                     using (var tb = new SolidBrush(row.Tile))
                     using (var tp = Theme.RoundedRect(tile, Theme.RadTileSmall))
                         g.FillPath(tb, tp);
-                    DrawRowGlyph(g, tile, row.Kind, Color.FromArgb(244, 255, 255, 255));
+                    DrawRowGlyph(g, tile, row.Kind, Theme.OnColor(row.Tile));   // contrast with the tile (white vanishes on a light accent)
                 }
 
                 // A device row gets an ⏏ eject button on the right (iTunes-style); reserve space for it.
@@ -362,5 +366,7 @@ internal sealed class Sidebar : Panel
         using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, Pad, Height - FooterH, Width - Pad, Height - FooterH);
         // (No right-edge seam — the sidebar's darker background already separates it from the content;
         //  a hard vertical line there read as an out-of-place divider.)
+
+        Theme.CarveCardCorners(g, this, Theme.RadShell, true, true, true, true);   // smooth (AA) rounded card corners
     }
 }

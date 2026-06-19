@@ -16,7 +16,9 @@ internal sealed class NowPlayingBar : Panel
 
     public event Action? PrevRequested;
     public event Action? NextRequested;
-    public event Action? EqualizerRequested;
+    public event Action<Rectangle>? EqualizerRequested;   // arg = the button's screen rect (flyout anchor)
+    public event Action<Rectangle>? ProRequested;         // opened the Pro-features hub
+    public event Action<Rectangle>? QueueRequested;       // opened the Up Next queue popover (arg = button screen rect)
     public event Action? ModesChanged;   // user toggled shuffle/repeat — the host persists it
 
     public enum RepeatMode { Off, All, One }
@@ -27,11 +29,24 @@ internal sealed class NowPlayingBar : Panel
 
     private Track? _track;
     private Bitmap? _cover;
+    private Bitmap? _backdrop;     // a tiny, heavily-downsampled snapshot of the list above — stretched = a frosted blur
     private bool _playing;
     private double _volume = 1.0;
     private double _lastVol = 1.0; // last audible level, restored when unmuting from a dragged-to-zero slider
     private bool _muted;
     private bool _eqOn;            // reflected for the EQ icon tint
+    private bool _proOn;           // any Pro feature on → tints the Pro icon
+    private int _queueCount;       // Up Next size → tints the queue icon when non-empty
+    private bool _gaplessOn, _crossOn, _normalizeOn, _monoOn;  // Pro playback features
+    private double _crossSecs = 6; // crossfade length
+    private int _sleepMin;         // sleep timer: minutes remaining target (0 = off)
+    private int _sleepRemainingSec;
+    private System.Windows.Forms.Timer? _sleepTimer;
+    private Tween? _sleepFade;
+    private bool _prefetched;      // the next track has been queued for this track's boundary
+    private Track? _pendingTrack;  // the prefetched next track (flips in at the gapless boundary)
+    private string? _pendingPath;
+    private Bitmap? _pendingCover;
     private bool _shuffle;
     private RepeatMode _repeat = RepeatMode.Off;
     private string? _path;        // last loaded file path, kept so repeat-one can restart the track
@@ -39,6 +54,7 @@ internal sealed class NowPlayingBar : Panel
     private double _eqPhase;       // animated "now playing" equaliser bars overlaid on the cover
     private Tween? _eqAnim;
     private int _eqTick;
+    private readonly float[] _coverViz = new float[4], _coverTmp = new float[4];   // real-audio cover bars
     private static readonly Rectangle CoverRect = new(16, (H - 56) / 2, 56, 56);
 
     private enum Drag { None, Seek, Volume }
@@ -57,8 +73,9 @@ internal sealed class NowPlayingBar : Panel
         Height = H;
 
         _engine.Opened += () => Invalidate();
-        _engine.PositionTick += () => { if (_playing && _drag != Drag.Seek) Invalidate(); Tick?.Invoke(); }; // don't repaint when rested/paused (but always notify the mini player)
+        _engine.PositionTick += () => { MaybePrefetch(); if (_playing && _drag != Drag.Seek) Invalidate(); Tick?.Invoke(); }; // don't repaint when rested/paused (but always notify the mini player)
         _engine.Ended += OnEnded;
+        _engine.TrackSwitched += OnGaplessAdvanced;   // the gapless head crossed a boundary internally
         _engine.Failed += msg =>
         {
             if (_track is null) return; // a late failure delivered after StopAndHide (e.g. an iPod switch) — ignore
@@ -83,6 +100,14 @@ internal sealed class NowPlayingBar : Panel
     public event Action? Changed; // metadata / play-state / volume changed
     public event Action? Tick;    // playback position advanced (engine tick, ~5 Hz)
 
+    // ---- gapless / crossfade prefetch ----
+    /// <summary>Host supplies the next track (+ path + small cover) to pre-decode for gapless/crossfade,
+    /// honoring shuffle/repeat, WITHOUT playing it. Null = nothing to queue.</summary>
+    public Func<(Track track, string path, Bitmap? cover)?>? NextTrackProvider;
+    /// <summary>Raised when gapless/crossfade has advanced to the queued track (so the host updates the
+    /// current-track pointer, nav history, and Cover-Flow highlight).</summary>
+    public event Action<Track>? AdvancedToNext;
+
     public Track? NowTrack => _track;
     public bool Playing => _playing;
     public bool Muted => _muted;
@@ -92,13 +117,30 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>A private copy of the current cover (caller owns it), or null.</summary>
     public Bitmap? CloneCover() => _cover is null ? null : new Bitmap(_cover);
 
+    /// <summary>A SHARP, high-res square cover for the mini-player hero (the small grid thumbnail held by the
+    /// bar would look blurry blown up). Reads the playing file's embedded art at <paramref name="size"/>, falling
+    /// back to a crisp generated tile, then to the small thumbnail. Caller owns the returned bitmap.</summary>
+    public Bitmap? LoadHeroCover(int size)
+    {
+        if (_track is null) return _cover is null ? null : new Bitmap(_cover);
+        if (!string.IsNullOrEmpty(_path) && ArtworkService.LoadSquare(ArtworkService.KeyFor(_track), _path, size) is { } hi)
+            return new Bitmap(hi);
+        return Theme.MakeArt(size, (int)(_track.Dbid & 0xffff));   // no embedded art → full-size generated tile
+    }
+
     /// <summary>Play/pause from the mini player (same as the bar's own play button).</summary>
     public void TogglePlayback() => TogglePlay();
+
+    /// <summary>Toggle shuffle from the mini player (mirrors the bar's own shuffle control).</summary>
+    public void ToggleShuffle() { _shuffle = !_shuffle; ModesChanged?.Invoke(); Invalidate(); Changed?.Invoke(); }
+
+    /// <summary>Cycle repeat Off → All → One from the mini player.</summary>
+    public void CycleRepeat() { _repeat = (RepeatMode)(((int)_repeat + 1) % 3); if (_repeat == RepeatMode.One) ClearPending(); ModesChanged?.Invoke(); Invalidate(); Changed?.Invoke(); }
 
     /// <summary>Seek to a 0..1 fraction of the track (mini-player seek bar).</summary>
     public void SeekFraction(double f)
     {
-        if (_engine.IsOpen) _engine.Position = TimeSpan.FromSeconds(Math.Clamp(f, 0, 1) * _engine.Duration.TotalSeconds);
+        if (_engine.IsOpen) { _engine.Position = TimeSpan.FromSeconds(Math.Clamp(f, 0, 1) * _engine.Duration.TotalSeconds); InvalidatePrefetch(); }
         Invalidate(); Changed?.Invoke();
     }
 
@@ -124,6 +166,66 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Apply equalizer settings to the audio engine (live + on the next track).</summary>
     public void ApplyEq(bool enabled, float[] gains) { _eqOn = enabled; _engine.SetEqEnabled(enabled); _engine.SetEqGains(gains); Invalidate(); }
 
+    /// <summary>Apply Pro-playback settings: gapless, crossfade (+ length), volume normalization, mono.
+    /// Crossfade length + normalization + mono apply live; turning gapless/crossfade on or off takes effect on
+    /// the next track.</summary>
+    public void ApplyPro(bool gapless, double crossSecs, bool crossOn, bool normalize, bool mono)
+    {
+        _gaplessOn = gapless; _crossSecs = crossSecs; _crossOn = crossOn; _normalizeOn = normalize; _monoOn = mono;
+        _proOn = gapless || crossOn || normalize || mono || _sleepMin > 0;
+        _engine.SetNormalizationEnabled(normalize);
+        _engine.SetCrossfade(crossOn, crossSecs);
+        _engine.SetMono(mono);
+        if (!gapless && !crossOn) ClearPending();   // no seamless advance anymore → stop staging a next
+        Invalidate();
+    }
+
+    /// <summary>Current sleep-timer setting in minutes (0 = off). Read by the Pro-features dialog.</summary>
+    public int SleepMinutes => _sleepMin;
+
+    /// <summary>Arm/cancel the sleep timer: after <paramref name="minutes"/> it fades the audio out and pauses.
+    /// 0 cancels and restores full volume. Session-only (not persisted).</summary>
+    public void SetSleepMinutes(int minutes)
+    {
+        _sleepFade?.Cancel(); _sleepFade = null;
+        _engine.SetSleepGain(1f);                 // cancel any in-progress fade
+        _sleepTimer?.Stop();
+        _sleepMin = Math.Max(0, minutes);
+        _proOn = _gaplessOn || _crossOn || _normalizeOn || _monoOn || _sleepMin > 0;
+        if (_sleepMin == 0) { Invalidate(); return; }
+        _sleepRemainingSec = _sleepMin * 60;
+        _sleepTimer ??= MakeSleepTimer();
+        _sleepTimer.Start();
+        Invalidate();
+    }
+
+    private System.Windows.Forms.Timer MakeSleepTimer()
+    {
+        var t = new System.Windows.Forms.Timer { Interval = 1000 };
+        t.Tick += (_, _) =>
+        {
+            if (_sleepRemainingSec <= 0) { t.Stop(); return; }
+            if (--_sleepRemainingSec <= 0) { t.Stop(); BeginSleepFade(); }
+        };
+        return t;
+    }
+
+    private void BeginSleepFade()
+    {
+        if (!Anim.MotionEnabled) { _engine.SetSleepGain(0f); FinishSleep(); return; }
+        _sleepFade = Anim.Run(5000, v => _engine.SetSleepGain(1f - (float)v), FinishSleep, Easings.Linear);   // 5 s fade
+    }
+
+    private void FinishSleep()
+    {
+        _sleepFade = null;
+        _sleepMin = 0;
+        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); }
+        _engine.SetSleepGain(1f);                 // restore for the next play
+        _proOn = _gaplessOn || _crossOn || _normalizeOn || _monoOn;
+        Invalidate(); Changed?.Invoke();
+    }
+
     /// <summary>Pause playback (e.g. when a video preview opens) without clearing the bar. Returns true if it was playing.</summary>
     public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); Invalidate(); Changed?.Invoke(); return true; }
 
@@ -137,10 +239,18 @@ internal sealed class NowPlayingBar : Panel
         _path = filePath;
         _cover?.Dispose();
         _cover = cover is null ? null : new Bitmap(cover);
-        _engine.CloseMedia();
+        ClearPending();
         _engine.Volume = _muted ? 0 : _volume;
-        _engine.Load(filePath);
-        _engine.Play();
+        if (_gaplessOn || _crossOn)
+        {
+            _engine.StartGapless(filePath, _crossOn, _crossSecs, _normalizeOn);   // persistent chain; starts playback itself
+        }
+        else
+        {
+            _engine.CloseMedia();
+            _engine.Load(filePath);
+            _engine.Play();
+        }
         _playing = true;
         _scrubFrac = -1;
         EnsureSmtc();
@@ -155,6 +265,7 @@ internal sealed class NowPlayingBar : Panel
     public void StopAndHide()
     {
         _engine.CloseMedia();
+        ClearPending();
         _track = null;
         _path = null;
         _cover?.Dispose(); _cover = null;
@@ -183,6 +294,7 @@ internal sealed class NowPlayingBar : Panel
         // Repeat-one: restart the same file (a clean reload — WaveOut can't simply resume past its end).
         if (_repeat == RepeatMode.One && _track is not null && _path is not null)
         {
+            ClearPending();   // drop any staged next (its reader is freed by CloseMedia anyway)
             _engine.CloseMedia();
             _engine.Volume = _muted ? 0 : _volume;
             _engine.Load(_path);
@@ -219,9 +331,83 @@ internal sealed class NowPlayingBar : Panel
     private void StartEq()
     {
         if (_eqAnim is { IsRunning: true } || !Anim.MotionEnabled) { Invalidate(CoverRect); return; }
-        _eqAnim = Anim.Run(1_000_000_000, _ => { _eqPhase += 0.22; if ((++_eqTick & 1) == 0) Invalidate(CoverRect); }, null, Easings.Linear);
+        _eqAnim = Anim.Run(1_000_000_000, _ => { _eqPhase += 0.22; UpdateCoverViz(); if ((++_eqTick & 1) == 0) Invalidate(CoverRect); }, null, Easings.Linear);
     }
     private void StopEq() { _eqAnim?.Cancel(); _eqAnim = null; Invalidate(CoverRect); }
+
+    // Ease the cover bars toward the live spectrum (fast attack, slow decay) — falls to a gentle baseline in quiet passages.
+    private void UpdateCoverViz()
+    {
+        bool live = _playing && _engine.Visualizer.Read(_coverTmp);
+        for (int i = 0; i < _coverViz.Length; i++)
+        {
+            float target = live ? _coverTmp[i] : 0f;
+            _coverViz[i] += (target - _coverViz[i]) * (target > _coverViz[i] ? 0.5f : 0.16f);
+        }
+    }
+
+    /// <summary>Spectrum for the mini-player strip (0..1 per band); false when nothing is audible/playing.</summary>
+    public bool ReadSpectrum(float[] bands) => _playing && _engine.Visualizer.Read(bands);
+
+    /// <summary>Drop any already-committed gapless prefetch so the next tick re-evaluates "what's next"
+    /// (call after the Up Next queue changes, e.g. a late "Play next").</summary>
+    public void InvalidatePrefetch() { if (_engine.GaplessActive) ClearPending(); }
+
+    /// <summary>Set the frosted-glass backdrop — a tiny snapshot of the content above the bar (the host captures
+    /// it on scroll/list change). It's stretched across the bar and dimmed, so the list shows through as a blur.
+    /// TAKES OWNERSHIP of the bitmap.</summary>
+    public void SetBackdrop(Bitmap? tiny)
+    {
+        var old = _backdrop; _backdrop = tiny; old?.Dispose();
+        Invalidate();
+    }
+
+    private void ClearPending()
+    {
+        _prefetched = false;
+        _pendingTrack = null; _pendingPath = null;
+        _pendingCover?.Dispose(); _pendingCover = null;
+        _engine.ClearNext();
+    }
+
+    // On a position tick: when close to the end of the current track in gapless/crossfade mode, ask the host
+    // for the next track and pre-decode it so the boundary is seamless. Runs once per track.
+    private void MaybePrefetch()
+    {
+        if (!_engine.GaplessActive || _prefetched || _repeat == RepeatMode.One) return;
+        double dur = _engine.Duration.TotalSeconds, pos = _engine.Position.TotalSeconds;
+        if (dur <= 0) return;
+        double lead = Math.Max(_crossOn ? _crossSecs + 2.0 : 1.5, 1.5);   // leave time for the decode before the boundary
+        if (dur - pos > lead) return;
+        var nx = NextTrackProvider?.Invoke();
+        if (nx is null) return;                   // nothing to queue yet (e.g. list refreshing) — retry next tick
+        try { _engine.EnqueueNext(nx.Value.path); }
+        catch { nx.Value.cover?.Dispose(); return; }   // a corrupt next file — don't latch, don't crash the UI tick
+        _prefetched = true;                       // latch only AFTER a successful enqueue
+        _pendingTrack = nx.Value.track; _pendingPath = nx.Value.path;
+        _pendingCover?.Dispose(); _pendingCover = nx.Value.cover;
+    }
+
+    // The gapless head crossed into the queued track (marshaled to the UI thread by AudioPlayer): flip the
+    // now-playing metadata/cover exactly once, then let the host update its pointer + highlight.
+    private void OnGaplessAdvanced(string path)
+    {
+        if (_pendingTrack is null) { _prefetched = false; return; }   // unstaged switch — resync so prefetch can recover
+        _track = _pendingTrack;
+        _path = _pendingPath ?? path;
+        _cover?.Dispose();
+        _cover = _pendingCover;                    // take ownership of the prefetched cover
+        _pendingTrack = null; _pendingPath = null; _pendingCover = null;
+        _prefetched = false;                       // prefetch the following track on the next tick
+        _playing = true;
+        EnsureSmtc();
+        _smtc?.SetMetadata(_track.DisplayTitle, _track.Artist, _track.Album, _cover);
+        _smtc?.Playing();
+        StartEq();
+        Invalidate();
+        Changed?.Invoke();
+        AdvancedToNext?.Invoke(_track);
+    }
 
     // ---- responsive layout (one source of truth for paint + hit-testing) ----
     private struct Lo
@@ -231,6 +417,8 @@ internal sealed class NowPlayingBar : Panel
         public Rectangle Shuffle, Repeat; public bool ShowModes;
         public Rectangle Seek; public bool ShowSeek, ShowTimes;
         public Rectangle Eq; public bool ShowEq;
+        public Rectangle Pro; public bool ShowPro;
+        public Rectangle Queue; public bool ShowQueue;
         public Rectangle Speaker; public bool ShowSpeaker;
         public Rectangle Vol; public bool ShowVol;
     }
@@ -242,14 +430,32 @@ internal sealed class NowPlayingBar : Panel
         int leftBound = l.Cover.Right + 8;
 
         // Right cluster, built from the right edge inward; widgets appear only when there's room.
-        l.ShowVol = w >= 660;
+        // Two rows: the volume slider with its speaker (mute) icon paired on top, the control icons
+        // (eq · pro · queue) in a row beneath. Stacking frees horizontal space, so the icons appear
+        // earlier as the window narrows.
+        l.ShowVol = w >= 520;
         l.ShowSpeaker = w >= 470;
-        l.ShowEq = w >= 540;
+        l.ShowEq = w >= 520;
+        l.ShowPro = w >= 560;
+        l.ShowQueue = w >= 600;
+        int volY = 26, iconY = l.ShowVol ? 47 : (H - 24) / 2;   // icons drop below the slider; centre them if no slider
+
+        // Top row: the volume slider hard against the right pad, with the speaker (mute) icon just to its
+        // left so the two read as one volume control (the conventional pairing).
+        if (l.ShowVol) l.Vol = new Rectangle(w - RightPad - 92, volY, 92, 4);
+        if (l.ShowSpeaker && l.ShowVol)
+            l.Speaker = new Rectangle(l.Vol.Left - 8 - 20, volY - 9, 20, 22);   // centred on the slider, to its left
+
+        // Bottom row, built right → left: queue · pro · eq — plus the speaker here only when the window is
+        // too narrow for the slider (so the mute toggle stays reachable).
         int rc = w - RightPad;
-        if (l.ShowVol) { l.Vol = new Rectangle(rc - 92, H / 2 - 2, 92, 4); rc = l.Vol.Left - 12; }
-        if (l.ShowSpeaker) { l.Speaker = new Rectangle(rc - 20, (H - 22) / 2, 20, 22); rc = l.Speaker.Left - 14; }
-        if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, (H - 24) / 2, 24, 24); rc = l.Eq.Left - 14; }
-        int rightStart = rc;
+        if (l.ShowSpeaker && !l.ShowVol) { l.Speaker = new Rectangle(rc - 20, iconY + 1, 20, 22); rc = l.Speaker.Left - 14; }
+        if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Eq.Left - 14; }
+        if (l.ShowPro) { l.Pro = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Pro.Left - 14; }
+        if (l.ShowQueue) { l.Queue = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Queue.Left - 14; }
+        // Keep the centred transport clear of BOTH rows' left-most widget.
+        int topLeft = l.ShowVol ? (l.ShowSpeaker ? l.Speaker.Left : l.Vol.Left) - 12 : int.MaxValue;
+        int rightStart = Math.Min(rc, topLeft);
 
         // Transport centred on the WINDOW centre (not just between cover and cluster), clamped so it never
         // collides with the left info or the right cluster. Shuffle/repeat flank prev/play/next when wide.
@@ -281,7 +487,7 @@ internal sealed class NowPlayingBar : Panel
     }
 
     // ---- interaction ----
-    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Shuffle, Repeat }
+    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Shuffle, Repeat }
     private Hit _hover = Hit.None;
 
     private void OnDown(object? s, MouseEventArgs e)
@@ -289,8 +495,10 @@ internal sealed class NowPlayingBar : Panel
         var l = Layout();
         // Shuffle / repeat / EQ / volume are modes & settings — usable even with nothing loaded.
         if (l.ShowModes && l.Shuffle.Contains(e.Location)) { _shuffle = !_shuffle; ModesChanged?.Invoke(); Invalidate(); return; }
-        if (l.ShowModes && l.Repeat.Contains(e.Location)) { _repeat = (RepeatMode)(((int)_repeat + 1) % 3); ModesChanged?.Invoke(); Invalidate(); return; }
-        if (l.ShowEq && l.Eq.Contains(e.Location)) { EqualizerRequested?.Invoke(); return; }
+        if (l.ShowModes && l.Repeat.Contains(e.Location)) { _repeat = (RepeatMode)(((int)_repeat + 1) % 3); if (_repeat == RepeatMode.One) ClearPending(); ModesChanged?.Invoke(); Invalidate(); return; }
+        if (l.ShowEq && l.Eq.Contains(e.Location)) { EqualizerRequested?.Invoke(RectangleToScreen(l.Eq)); return; }
+        if (l.ShowPro && l.Pro.Contains(e.Location)) { ProRequested?.Invoke(RectangleToScreen(l.Pro)); return; }
+        if (l.ShowQueue && l.Queue.Contains(e.Location)) { QueueRequested?.Invoke(RectangleToScreen(l.Queue)); return; }
         if (l.ShowSpeaker && l.Speaker.Contains(e.Location))
         {
             _muted = !_muted;
@@ -314,6 +522,8 @@ internal sealed class NowPlayingBar : Panel
         if (_drag == Drag.Seek && l.ShowSeek) { ScrubTo(l.Seek, e.X); return; }
         var h = l.ShowSpeaker && l.Speaker.Contains(e.Location) ? Hit.Speaker
             : l.ShowEq && l.Eq.Contains(e.Location) ? Hit.Eq
+            : l.ShowPro && l.Pro.Contains(e.Location) ? Hit.Pro
+            : l.ShowQueue && l.Queue.Contains(e.Location) ? Hit.Queue
             : l.ShowModes && l.Shuffle.Contains(e.Location) ? Hit.Shuffle
             : l.ShowModes && l.Repeat.Contains(e.Location) ? Hit.Repeat
             : _track is null ? Hit.None
@@ -328,7 +538,10 @@ internal sealed class NowPlayingBar : Panel
     {
         bool wasDragging = _drag != Drag.None;
         if (_drag == Drag.Seek && _scrubFrac >= 0 && _engine.IsOpen)
+        {
             _engine.Position = TimeSpan.FromSeconds(_scrubFrac * _engine.Duration.TotalSeconds);
+            InvalidatePrefetch();   // a seek can drop the crossfade's pre-decoded next voice; re-stage it so the next boundary stays seamless
+        }
         _scrubFrac = -1;
         _drag = Drag.None;
         Invalidate();
@@ -358,7 +571,21 @@ internal sealed class NowPlayingBar : Panel
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, H),
+        if (_backdrop is not null)
+        {
+            // Frosted glass: stretch the tiny snapshot of the list (a smooth blur), then a dark translucent
+            // tint + a soft top sheen so the controls stay legible and the list reads as colour behind glass.
+            var pom = g.PixelOffsetMode; g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.DrawImage(_backdrop, new Rectangle(0, 0, Width, H));
+            g.PixelOffsetMode = pom; g.InterpolationMode = InterpolationMode.Default;
+            // a translucent tint keeps the bar on-theme while the list colour bleeds through; a soft top sheen
+            // + the bright top edge sell the pane-of-glass look.
+            using (var tint = new SolidBrush(Color.FromArgb(150, Theme.SidebarBg))) g.FillRectangle(tint, 0, 0, Width, H);
+            using (var sheen = new LinearGradientBrush(new Rectangle(0, 0, Width, H), Color.FromArgb(32, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
+                g.FillRectangle(sheen, 0, 0, Width, H * 2 / 3);
+        }
+        else using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, H),
             Theme.Blend(Theme.SidebarBg, Color.White, 0.03), Theme.Blend(Theme.SidebarBg, Color.Black, 0.12), 90f))
         {
             bg.InterpolationColors = new ColorBlend
@@ -368,7 +595,8 @@ internal sealed class NowPlayingBar : Panel
             };
             g.FillRectangle(bg, 0, 0, Width, H);
         }
-        using (var seam = new Pen(Theme.Border)) g.DrawLine(seam, 0, 0, Width, 0);
+        // a bright top edge sells the "pane of glass" elevation over the list
+        using (var seam = new Pen(Color.FromArgb(_backdrop is not null ? 40 : 255, _backdrop is not null ? Color.White : Theme.Border))) g.DrawLine(seam, 0, 0, Width, 0);
 
         var l = Layout();
         bool idle = _track is null;
@@ -378,8 +606,10 @@ internal sealed class NowPlayingBar : Panel
         // cover (soft shadow + rounded, clipped art or an idle placeholder). Fill + stroke share a
         // half-pixel-inset rect so every corner antialiases identically (no soft bottom-right edge).
         var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
-        using (var shp = Theme.RoundedRect(new RectangleF(cr.X + 1, cr.Y + 2, cr.Width, cr.Height), cvr))
-        using (var sh = new SolidBrush(Color.FromArgb(55, 0, 0, 0))) g.FillPath(sh, shp);
+        // Soft drop shadow: aligned left/right with the tile and offset only DOWNWARD, so it reads as an even
+        // shadow under the whole tile rather than a darker squared notch poking out of the bottom-right corner.
+        using (var shp = Theme.RoundedRect(new RectangleF(cr.X, cr.Y + 2, cr.Width, cr.Height), cvr))
+        using (var sh = new SolidBrush(Color.FromArgb(50, 0, 0, 0))) g.FillPath(sh, shp);
         using (var cp = Theme.RoundedRect(crF, cvr))
         {
             var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
@@ -433,10 +663,14 @@ internal sealed class NowPlayingBar : Panel
             }
         }
 
-        // equalizer + volume (always interactive when shown)
+        // queue + pro features + equalizer + volume (always interactive when shown)
+        if (l.ShowQueue) DrawQueueGlyph(g, l.Queue, _hover == Hit.Queue);
+        if (l.ShowPro) DrawProGlyph(g, l.Pro, _hover == Hit.Pro);
         if (l.ShowEq) DrawEqGlyph(g, l.Eq, _hover == Hit.Eq);
         if (l.ShowSpeaker) DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
-        if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, false);
+        if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true);   // knob, matching the seek bar (consistency + a grab target)
+
+        Theme.CarveCardCorners(g, this, Theme.RadShell, false, false, true, true);   // content card's BOTTOM corners
     }
 
     private static string Fmt(double sec)
@@ -486,8 +720,9 @@ internal sealed class NowPlayingBar : Panel
         double[] off = { 0.0, 1.7, 3.3, 5.0 }, spd = { 1.0, 1.35, 0.85, 1.15 };
         for (int i = 0; i < n; i++)
         {
-            double v = 0.30 + 0.70 * (0.5 + 0.5 * Math.Sin(_eqPhase * spd[i] + off[i]));
-            float bh = (float)(maxH * v);
+            double idle = 0.18 + 0.14 * (0.5 + 0.5 * Math.Sin(_eqPhase * spd[i] + off[i]));  // gentle baseline so it stays alive
+            double v = Math.Max(idle, _coverViz[i]);                                          // …but rises with the actual music
+            float bh = (float)(maxH * Math.Clamp(v, 0.12, 1.0));
             g.FillRectangle(b, x0 + i * (bw + gap), baseY - bh, bw, bh);
         }
     }
@@ -614,9 +849,44 @@ internal sealed class NowPlayingBar : Panel
         }
     }
 
+    // Pro features icon: a magic wand — a diagonal shaft with a sparkle star at the tip plus a small companion
+    // spark — accent-tinted when any Pro feature is on. Distinct from the EQ bars and the speaker.
+    private void DrawProGlyph(Graphics g, Rectangle r, bool hover)
+    {
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        Color c = _proOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+        float tipX = r.X + 15.5f, tipY = r.Y + 8f;     // sparkle star at the wand's tip (upper-right)
+        using (var pen = new Pen(c, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(pen, r.X + 6.5f, r.Bottom - 6.5f, tipX - 2.2f, tipY + 2.2f);   // shaft: lower-left → just below the tip
+        using (var b = new SolidBrush(c)) g.FillPolygon(b, Sparkle(tipX, tipY, 4.6f, 1.5f));
+        using (var b2 = new SolidBrush(Color.FromArgb(170, c))) g.FillPolygon(b2, Sparkle(r.X + 8.5f, r.Y + 6.5f, 2.4f, 0.8f));
+    }
+
+    /// <summary>Reflect the Up Next size so the queue icon tints accent when there are queued tracks.</summary>
+    public void SetQueueCount(int n) { if (_queueCount == n) return; _queueCount = n; Invalidate(); }
+
+    // Up Next icon: a small "list" (three lines, the last shorter) — accent-tinted when the queue is non-empty.
+    private void DrawQueueGlyph(Graphics g, Rectangle r, bool hover)
+    {
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        Color c = _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+        using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        float x = r.X + 6, x2 = r.Right - 6;
+        g.DrawLine(pen, x, r.Y + 8, x2, r.Y + 8);
+        g.DrawLine(pen, x, r.Y + 12, x2, r.Y + 12);
+        g.DrawLine(pen, x, r.Y + 16, x2 - 6, r.Y + 16);
+    }
+
+    // A concave 4-point star (outer radius o, inner radius i) centred at (cx,cy).
+    private static PointF[] Sparkle(float cx, float cy, float o, float i) => new[]
+    {
+        new PointF(cx, cy - o), new PointF(cx + i, cy - i), new PointF(cx + o, cy), new PointF(cx + i, cy + i),
+        new PointF(cx, cy + o), new PointF(cx - i, cy + i), new PointF(cx - o, cy), new PointF(cx - i, cy - i),
+    };
+
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _eqAnim?.Cancel(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); }
+        if (disposing) { _eqAnim?.Cancel(); _sleepFade?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _pendingCover?.Dispose(); _backdrop?.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -10,8 +10,8 @@ namespace iPodCommander;
 internal sealed class ThinScrollBar : Control
 {
     private DataGridView? _grid;
-    private Panel? _viewport;       // panel mode: the clipping viewport
-    private Panel? _content;        // panel mode: the (taller) content panel, scrolled via its Top
+    private Control? _viewport;     // panel mode: the clipping viewport
+    private Control? _content;      // panel mode: the (taller) content, scrolled via its Top
     private bool _dragging;
     private bool _hover;
     private int _dragStartY;
@@ -38,12 +38,16 @@ internal sealed class ThinScrollBar : Control
 
     /// <summary>Drive a manually-scrolled content panel (pixel-based): <paramref name="content"/> is taller
     /// than <paramref name="viewport"/> and scrolled by setting its Top. No native scrollbar exists.</summary>
-    public void AttachScrollPanel(Panel viewport, Panel content)
+    public void AttachScrollPanel(Control viewport, Control content)
     {
         _viewport = viewport; _content = content;
         viewport.ClientSizeChanged += (_, _) => Invalidate();
         content.SizeChanged += (_, _) => Invalidate();
+        content.LocationChanged += (_, _) => Invalidate();   // follow Top changes (wheel / animated scroll)
     }
+
+    /// <summary>Scroll from a mouse-wheel notch (panel mode) — ~60px per notch, eased.</summary>
+    public void ScrollByWheel(int wheelDelta) => AnimateScrollBy(-Math.Sign(wheelDelta) * 60);
 
     private bool PanelMode => _viewport is not null && _content is not null;
 
@@ -57,7 +61,13 @@ internal sealed class ThinScrollBar : Control
     {
         int max = Math.Max(0, Total - Visible);
         v = Math.Min(max, Math.Max(0, v));
-        if (PanelMode) _content!.Top = -v;
+        if (PanelMode)
+        {
+            // Drive the SmoothGrid through its own seam-free move (and stop any wheel animation first, so the
+            // user dragging the thumb never fights an in-flight eased scroll). Plain panels just move their Top.
+            if (_content is SmoothGrid sg) { sg.CancelAnim(); sg.SetScrollTop(-v); }
+            else _content!.Top = -v;
+        }
         else if (_grid is not null) { try { _grid.FirstDisplayedScrollingRowIndex = v; } catch { } }
         Invalidate();
     }

@@ -6,7 +6,7 @@ namespace iPodCommander;
 /// (title + subtitle + control). Each control writes straight to <see cref="AppSettings"/>, saves,
 /// and calls back so the main window re-applies the change immediately.
 /// </summary>
-internal sealed class SettingsForm : Form
+internal sealed class SettingsForm : Form, IMessageFilter
 {
     private readonly AppSettings _s;
     private readonly IPodDevice? _device;
@@ -14,7 +14,9 @@ internal sealed class SettingsForm : Form
     private readonly Action _reloadDevice;
 
     private readonly SettingsNav _nav;
-    private readonly Panel _pane;
+    private readonly Panel _pane;        // clipping viewport
+    private readonly Panel _paneBody;    // the (taller) content panel, scrolled by its Top
+    private readonly ThinScrollBar _paneScroll;
 
     private int _homeTop;       // resting Top, captured on first show (anchor for the open/close slide)
     private bool _closingAnim;  // true once the dismiss animation has begun
@@ -24,7 +26,7 @@ internal sealed class SettingsForm : Form
     private const int CardW = 608;                      // card width (fills the pane to a matching right gutter)
     private const int PaneW = CardW + SideMargin * 2;   // content pane width
     private const int ContentLeft = SideMargin;         // card column left edge
-    private const int MinHeight = 380, MaxHeight = 900; // size-to-content clamp (tall enough for the dense Library page → no scrollbar)
+    private const int PageHeight = 380; // every category uses this one compact height; dense pages (Library) scroll via the themed ThinScrollBar instead of growing the window
 
     private static readonly string[] Categories = { "Appearance", "Library", "Video", "Photos", "Safety", "This iPod", "About" };
 
@@ -41,11 +43,18 @@ internal sealed class SettingsForm : Form
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
 
-        _pane = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Bg, Padding = new Padding(0, 0, 0, 18) };
+        _pane = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };   // clipping viewport
+        _paneBody = new Panel { BackColor = Theme.Bg, Location = new Point(0, 0), Width = PaneW };
+        _paneScroll = new ThinScrollBar();
+        _pane.Controls.Add(_paneBody);
+        _pane.Controls.Add(_paneScroll);
+        _paneScroll.AttachScrollPanel(_pane, _paneBody);
+        _pane.Resize += (_, _) => LayoutPane();
         _nav = new SettingsNav(Categories) { Dock = DockStyle.Left, Width = NavW };
         _nav.Selected += ShowCategory;
         Controls.Add(_pane);
         Controls.Add(_nav);
+        Application.AddMessageFilter(this);   // route the mouse wheel over the pane to the themed scrollbar
         ShowCategory(0);
 
         if (Anim.MotionEnabled) Opacity = 0; // fade up from invisible in OnShown
@@ -93,8 +102,8 @@ internal sealed class SettingsForm : Form
     {
         bool categoryChanged = index != _lastCat;
         _lastCat = index;
-        var old = _pane.Controls.Cast<Control>().ToArray();
-        _pane.Controls.Clear();
+        var old = _paneBody.Controls.Cast<Control>().ToArray();
+        _paneBody.Controls.Clear();
         // The page-title Label owns a DisplayFont; CardPanels dispose their own fonts. Free the title's
         // font here so switching categories doesn't leak a GDI font each time.
         foreach (var c in old) { if (c is Label lbl) lbl.Font.Dispose(); c.Dispose(); }
@@ -112,14 +121,19 @@ internal sealed class SettingsForm : Form
             default: BuildAbout(); break;
         }
 
-        // Size the dialog to its content (clamped) so sparse pages (Photos/Safety/About) aren't a
-        // mostly-empty 600px window, while dense ones (Library) still fit without scrolling. _y already
-        // holds the exact content bottom (+10 trailing gap) since the layout is absolute.
-        // Grow to fit the content (so dense pages don't scroll), but never taller than the screen.
-        int screenMax = Screen.FromControl(this).WorkingArea.Height - 72;
-        int desired = Math.Clamp(_y + 12, MinHeight, Math.Min(MaxHeight, screenMax));
+        // Size the scrollable body to its content and reset it to the top; the themed scrollbar appears
+        // only when this exceeds the (screen-clamped) window height.
+        _paneBody.Top = 0;
+        _paneBody.Height = _y + 18;
+
+        // Fixed, compact window height for EVERY category (no jiggle when switching, no ballooning toward
+        // full-screen on the dense Library page) — content taller than the viewport scrolls via the themed
+        // ThinScrollBar. Capped to the screen so it never opens taller than the desktop.
+        int desired = Math.Min(PageHeight, Screen.FromControl(this).WorkingArea.Height - 72);
         if (ClientSize.Height != desired) ClientSize = new Size(ClientSize.Width, desired);
 
+        // Re-lay-out the themed scrollbar for the (rare) case content still exceeds the screen-capped window.
+        LayoutPane();
         if (categoryChanged) AnimatePaneIn();
     }
 
@@ -127,16 +141,43 @@ internal sealed class SettingsForm : Form
     private void AnimatePaneIn()
     {
         if (!Anim.MotionEnabled) return;
-        var kids = _pane.Controls.Cast<Control>().ToArray();
+        var kids = _paneBody.Controls.Cast<Control>().ToArray();
         var baseTops = Array.ConvertAll(kids, c => c.Top);
         Anim.Run(180, v =>
         {
             if (IsDisposed) return;
             int dy = (int)Math.Round(12 * (1 - v));
-            _pane.SuspendLayout();
+            _paneBody.SuspendLayout();
             for (int i = 0; i < kids.Length; i++) if (!kids[i].IsDisposed) kids[i].Top = baseTops[i] + dy;
-            _pane.ResumeLayout();
+            _paneBody.ResumeLayout();
         }, null, Easings.OutCubic);
+    }
+
+    /// <summary>Keep the themed scrollbar pinned to the pane's right edge; the body fills the rest of the
+    /// width so it never sits on top of (and hides) the scrollbar — the same contract the song list uses.</summary>
+    private void LayoutPane()
+    {
+        int bar = _paneScroll.Width;
+        _paneBody.Width = Math.Max(0, _pane.ClientSize.Width - bar);
+        _paneScroll.Bounds = new Rectangle(_pane.ClientSize.Width - bar, 0, bar, _pane.ClientSize.Height);
+        _paneScroll.BringToFront();
+    }
+
+    /// <summary>Route the mouse wheel to the themed scrollbar when the pointer is over the content pane.</summary>
+    bool IMessageFilter.PreFilterMessage(ref Message m)
+    {
+        const int WM_MOUSEWHEEL = 0x020A;
+        if (m.Msg != WM_MOUSEWHEEL || IsDisposed || !_pane.IsHandleCreated) return false;
+        var p = _pane.PointToClient(Cursor.Position);
+        if (p.X < 0 || p.Y < 0 || p.X >= _pane.ClientSize.Width || p.Y >= _pane.ClientSize.Height) return false;
+        _paneScroll.ScrollByWheel((short)((long)m.WParam >> 16));
+        return true;
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        Application.RemoveMessageFilter(this);
+        base.OnFormClosed(e);
     }
 
     // ---- category pages ----
@@ -148,7 +189,7 @@ internal sealed class SettingsForm : Form
         Row("Accent colour", "Used for highlights, buttons and selection.", accent);
 
         var theme = new SegmentedControl { Options = Theme.ThemeVariants, SelectedIndex = Math.Max(0, Array.IndexOf(Theme.ThemeVariants, _s.ThemeVariant)), Width = 432 };
-        theme.SelectedChanged += () => { _s.ThemeVariant = Theme.ThemeVariants[theme.SelectedIndex]; _s.Save(); _applyChanged(); BackColor = Theme.Bg; _pane.BackColor = Theme.Bg; _nav.Invalidate(); Rebuild(); };
+        theme.SelectedChanged += () => { _s.ThemeVariant = Theme.ThemeVariants[theme.SelectedIndex]; _s.Save(); _applyChanged(); BackColor = Theme.Bg; _pane.BackColor = Theme.Bg; _paneBody.BackColor = Theme.Bg; _nav.Invalidate(); Rebuild(); };
         Row("Background", "The window's colour palette.", theme);
 
         var density = new SegmentedControl { Options = new[] { "Comfortable", "Compact" }, SelectedIndex = _s.Compact ? 1 : 0, Width = 220 };
@@ -243,7 +284,7 @@ internal sealed class SettingsForm : Form
     {
         // Align the heading text with the card label column (card.Left + the card's internal labelLeft)
         // so the page title and every row title share one left edge.
-        _pane.Controls.Add(new Label { Text = text, Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Left = ContentLeft + 18, Top = _y, Width = CardW, Height = 34, TextAlign = ContentAlignment.MiddleLeft });
+        _paneBody.Controls.Add(new Label { Text = text, Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Left = ContentLeft + 18, Top = _y, Width = CardW, Height = 34, TextAlign = ContentAlignment.MiddleLeft });
         _y += 44;
     }
 
@@ -253,7 +294,7 @@ internal sealed class SettingsForm : Form
         var card = new CardPanel(CardW) { Left = ContentLeft, Top = _y };
         card.AddRow(title, subtitle, control, rowH);
         card.Finish();
-        _pane.Controls.Add(card);
+        _paneBody.Controls.Add(card);
         _y += card.Height + 10;
     }
 
@@ -274,7 +315,7 @@ internal sealed class SettingsForm : Form
         var card = new CardPanel(CardW) { Left = ContentLeft, Top = _y };
         foreach (var (l, v) in rows) card.AddInfoRow(l, v);
         card.Finish();
-        _pane.Controls.Add(card);
+        _paneBody.Controls.Add(card);
         _y += card.Height + 10;
     }
 

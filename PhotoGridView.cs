@@ -157,7 +157,10 @@ internal sealed class PhotoGridView : Panel
         }
 
         int cols = Columns;
-        int x0 = Pad, y0 = Pad - _scroll;
+        // Centre the tile block so the leftover horizontal slack is split evenly (it was all dumped on the
+        // right, leaving a big empty gutter with the scrollbar floating in it).
+        int gridW = cols * TileW + Math.Max(0, cols - 1) * Gap;
+        int x0 = Math.Max(Pad, (Width - gridW) / 2), y0 = Pad - _scroll;
         for (int i = 0; i < _tiles.Count; i++)
         {
             int col = i % cols, row = i / cols;

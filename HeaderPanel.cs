@@ -14,6 +14,10 @@ internal sealed class HeaderPanel : Panel
     public readonly ThemedButton DeleteButton = new() { Text = "Delete", Width = 96, Pill = true, Danger = true, BlockedReason = "No iPod is connected." };
     public readonly ThemedButton CoverButton = new() { Text = "Cover Flow", Width = 120, Pill = true };
 
+    /// <summary>The search box, hosted in the header (positioned just left of the action-button stack).</summary>
+    public Control? Search { get; set; }
+    private int _buttonsLeft, _searchLeft, _buttonsBottom;
+
     /// <summary>Raised when the artwork tile is clicked (only when <see cref="ArtClickable"/>) — used to pick a cover.</summary>
     public event Action? ArtClicked;
     /// <summary>When true the artwork shows a hand cursor + "Change cover" hint on hover and raises <see cref="ArtClicked"/>.</summary>
@@ -133,14 +137,35 @@ internal sealed class HeaderPanel : Panel
 
     protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutButtons(); }
 
-    /// <summary>Pack the visible action buttons against the right edge — Cover Flow | Add music | Delete —
-    /// skipping any that are hidden for the current view. Called on resize and before each paint so a
-    /// visibility change (per view) is reflected without needing a resize.</summary>
+    /// <summary>Layout A — a right-aligned control cluster: the search box sits directly above one
+    /// horizontal row of buttons (Cover Flow / Add / Delete), sharing the same right edge, vertically
+    /// centred; the title block keeps the left. Skips hidden buttons. Called on resize + before each paint.</summary>
     public void LayoutButtons()
     {
-        int by = (Height - AddButton.Height) / 2, x = Width - Pad;
-        foreach (var b in new[] { DeleteButton, AddButton, CoverButton })
-            if (b.Visible) { x -= b.Width; b.Location = new Point(x, by); x -= 10; }
+        const int bh = 30, gap = 10, searchH = 32, gapV = 8;
+        var items = new (ThemedButton b, int w)[] { (CoverButton, 124), (AddButton, 132), (DeleteButton, 104) };
+        int totalW = 0, n = 0;
+        foreach (var (b, w) in items) if (b.Visible) { totalW += w; n++; }
+        if (n > 1) totalW += (n - 1) * gap;
+
+        bool hasBtns = n > 0, hasSearch = Search is { Visible: true };
+        int clusterH = (hasSearch ? searchH : 0) + (hasSearch && hasBtns ? gapV : 0) + (hasBtns ? bh : 0);
+        int top = Math.Max(8, (Height - clusterH) / 2);
+        int btnTop = top + (hasSearch ? searchH + gapV : 0);
+
+        int right = Width - Pad, rowLeft = right - totalW, x = rowLeft;
+        foreach (var (b, w) in items) if (b.Visible) { b.SetBounds(x, btnTop, w, bh); x += w + gap; }
+        _buttonsLeft = hasBtns ? rowLeft : right;
+        _buttonsBottom = hasBtns ? btnTop + bh : top;
+
+        if (Search is { Visible: true } search)
+        {
+            int sw = Math.Max(180, hasBtns ? totalW : 220);   // search spans the button cluster width
+            int sx = right - sw;
+            search.SetBounds(sx, top, sw, searchH);
+            _searchLeft = sx;
+        }
+        else _searchLeft = _buttonsLeft;
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -175,11 +200,9 @@ internal sealed class HeaderPanel : Panel
         }
 
         int tx = TextX;
-        // Leave room for the right-aligned action buttons so the title never runs under them (use the
-        // leftmost visible button — Cover Flow when shown, else Add, else Delete).
-        int rightLimit = Width - Pad;
-        foreach (var b in new[] { CoverButton, AddButton, DeleteButton }) if (b.Visible) { rightLimit = b.Left - 16; break; }
-        int rightW = Math.Max(120, rightLimit - tx);
+        // Leave room for the search box + action-button stack on the right so the title never runs under them.
+        int rightLimit = (Search is { Visible: true } ? _searchLeft : _buttonsLeft) - 16;
+        int rightW = Math.Max(80, rightLimit - tx);
         using var kickerFont = Theme.UiFont(8.5f, FontStyle.Bold);
         using var titleFont = Theme.DisplayFont(21f, FontStyle.Bold);
         using var subFont = Theme.UiFont(9.5f);
@@ -230,9 +253,15 @@ internal sealed class HeaderPanel : Panel
         {
             using var statusFont = Theme.UiFont(8.75f, _statusClickable ? FontStyle.Bold : FontStyle.Regular);
             var sz = TextRenderer.MeasureText(g, _status, statusFont);
-            int sw = Math.Min(sz.Width + 6, (int)(Width * 0.55));
-            int sx = Width - Pad - sw;
-            int sy = AddButton.Visible ? AddButton.Bottom + 7 : Height - 12 - sz.Height;
+            // Tuck the status line right-aligned just under the button row (within the control cluster).
+            int right = Width - Pad;
+            // Width to fit the status in. With a right cluster (search/buttons) keep it within that cluster's
+            // width; with NO cluster (e.g. the Device page) _searchLeft sits at the right edge → that gap is 0,
+            // so fall back to the full text-area width or the summary clips to "185 son…".
+            int avail = _searchLeft < right ? (right - _searchLeft) : (right - TextX);
+            int sw = Math.Min(sz.Width + 6, Math.Max(60, avail));
+            int sx = right - sw;
+            int sy = Math.Min(Height - 6 - sz.Height, _buttonsBottom + 4);
             _statusRect = new Rectangle(sx, sy, sw, sz.Height);
             // Warnings read in a warm amber; everything else stays quiet. Brighten on hover.
             Color col = _statusClickable
@@ -245,5 +274,7 @@ internal sealed class HeaderPanel : Panel
 
         using var pen = new Pen(Theme.Border);
         g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
+
+        Theme.CarveCardCorners(g, this, Theme.RadShell, true, true, false, false);   // content card's TOP corners
     }
 }

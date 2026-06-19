@@ -98,12 +98,15 @@ internal sealed class ArtworkLibrary : IArtworkSink
         try { bytes = MetadataExtractor.ReadArt(sourcePath); } catch { bytes = null; }
         if (bytes is null || bytes.Length == 0) return null;
 
-        Image src;
-        try { using var ms = new MemoryStream(bytes); src = Image.FromStream(ms); }
-        catch { return null; }
-
         try
         {
+            // GDI+ decodes JPEG/PNG lazily, so the backing stream MUST stay open for the whole life of the
+            // Image — keep ms + src in one scope spanning the entire encode loop (a too-narrow `using ms`
+            // disposed the stream before DrawImage touched the pixels, throwing "generic error in GDI+" and
+            // aborting the whole artwork rebuild for many covers).
+            using var ms = new MemoryStream(bytes);
+            using var src = Image.FromStream(ms);
+
             var item = new ArtworkItem { Id = _nextId++, TrackDbid = trackDbid, SourceImageSize = (uint)bytes.Length };
             uint total = 0;
             foreach (var fmt in _addFormats)
@@ -112,8 +115,10 @@ internal sealed class ArtworkLibrary : IArtworkSink
                 item.Thumbs.Add(new ArtworkThumb
                 {
                     FormatId = fmt.FormatId,
-                    Width = fmt.Width,
-                    Height = fmt.Height,
+                    // Store the RENDERED extent (incl. any letterbox), like the photo path — not the full slot
+                    // size, which contradicted a non-zero pad and shifted/squished non-square covers on-device.
+                    Width = slot.ImageWidth,
+                    Height = slot.ImageHeight,
                     VPad = slot.VPad,
                     HPad = slot.HPad,
                     Size = slot.Pixels.Length,
@@ -125,7 +130,7 @@ internal sealed class ArtworkLibrary : IArtworkSink
             Model.MaxId = Math.Max(Model.MaxId, item.Id);
             return (item.Id, total);
         }
-        finally { src.Dispose(); }
+        catch { return null; }   // a corrupt/undecodable cover → no art for this track, never abort the batch
     }
 
     public void Commit()

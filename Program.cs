@@ -42,6 +42,11 @@ internal static class Program
         // view = songs (default) | videos | photos | settings.
         if (args.Length >= 3 && args[0] == "--render") { RunRender(args[1], args[2], args.Length >= 4 ? args[3] : "songs"); return; }
 
+        // Regenerate the app icon (app.ico) from a source PNG: crop to the artwork's bounding box, round
+        // the corners (transparent), and write a multi-resolution PNG-in-ICO. Usage:
+        //   Mixtape.exe --makeicon <source.png> [out.ico]   (also writes icon-preview.png to eyeball)
+        if (args.Length >= 2 && args[0] == "--makeicon") { RunMakeIcon(args[1], args.Length >= 3 ? args[2] : "app.ico"); return; }
+
         // Design-review the context menu without a device: build a representative right-click menu,
         // show it off-screen, highlight a row, and capture the (rounded) popup window. Usage:
         //   Mixtape.exe --menupreview <out.png>
@@ -732,6 +737,63 @@ internal static class Program
             return;
         }
 
+        // The Pro-features dialog renders on its own.
+        if (view == "profeatures")
+        {
+            using var pf = new ProFeaturesDialog(gapless: true, crossOn: true, crossSecs: 6, normalize: false, mono: false, sleepMin: 0, (_, _, _, _, _) => { }, _ => { })
+            { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            pf.Show();
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using var pbmp = new Bitmap(pf.Width, pf.Height);
+            pf.DrawToBitmap(pbmp, new Rectangle(0, 0, pf.Width, pf.Height));
+            pbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            pf.Close();
+            return;
+        }
+
+        // The Library Doctor dialog renders on its own with a synthetic report.
+        if (view == "librarydoctor" || view == "librarydoctorclean")
+        {
+            var rep = new DoctorReport { TotalTracks = 185 };
+            if (view != "librarydoctorclean")
+            {
+                rep.MissingFiles.Add(new Track()); rep.MissingFiles.Add(new Track()); rep.MissingFiles.Add(new Track());
+                rep.OrphanFiles.Add(("a", 4_200_000)); rep.OrphanFiles.Add(("b", 3_900_000)); rep.OrphanBytes = 8_100_000;
+                rep.DuplicateGroups.Add(new List<Track> { new(), new() });
+                rep.DuplicateGroups.Add(new List<Track> { new(), new(), new() });
+                rep.DuplicateExtras = 3;
+                rep.IncompleteTags = 9; rep.AlbumGaps = 2;
+            }
+            using var dlg = new LibraryDoctorDialog(rep) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            dlg.Show();
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using var dbmp = new Bitmap(dlg.Width, dlg.Height);
+            dlg.DrawToBitmap(dbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
+            dbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            dlg.Close();
+            return;
+        }
+
+        // The Up Next queue panel renders on its own with synthetic tracks.
+        if (view == "upnext")
+        {
+            // Preview the panel content at the floating flyout's content size (DWM corner-rounding is live-only).
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(304, UpNextPanel.DesiredHeight(8, true, false)), BackColor = Theme.PanelBg };
+            var panel = new UpNextPanel { Dock = DockStyle.Fill };
+            f.Controls.Add(panel);
+            f.Show();
+            var now = new Track { Title = "A Moment Apart", Artist = "ODESZA", MediaType = 1 };
+            string[] titles = { "Higher Ground", "Late Night", "Loyal", "Corners of the Earth", "Just a Memory", "Across the Room", "Line of Sight", "Falls" };
+            var items = new List<(Track, Bitmap?)>();
+            for (int i = 0; i < titles.Length; i++) items.Add((new Track { Title = titles[i], Artist = "ODESZA", MediaType = 1 }, CoverArt.Generate(i * 7 + 3, 48)));
+            panel.SetData(now, CoverArt.Generate(45, 48), items, null);
+            for (int i = 0; i < 4; i++) { Application.DoEvents(); Thread.Sleep(40); }
+            using var bmp = new Bitmap(panel.Width, panel.Height);
+            panel.DrawToBitmap(bmp, new Rectangle(0, 0, panel.Width, panel.Height));
+            bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            return;
+        }
+
         // The cover picker renders on its own.
         if (view == "coverpicker")
         {
@@ -829,14 +891,27 @@ internal static class Program
             return;
         }
 
-        // The detached mini player renders on its own with a synthetic track + cover.
-        if (view == "miniplayer")
+        // The detached mini player renders on its own with a synthetic track + cover ("miniplayer" =
+        // normal, "miniplayercompact" = the small control UI).
+        if (view == "miniplayer" || view == "miniplayercompact" || view == "miniplayeridle")
         {
             using var mp = new MiniPlayerForm { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
             mp.Show();
+            if (view == "miniplayercompact") { mp.SetCompact(true); mp.Location = new Point(-2600, -2600); }
+            bool idle = view == "miniplayeridle";
             var t = new Track { Title = "A Moment Apart", Artist = "ODESZA", Album = "A Moment Apart", MediaType = 1, LengthMs = 234000 };
-            mp.SetTrack(t, CoverArt.Generate(45, 300));
-            mp.SetProgress(playing: true, posSec: 78, durSec: 234, volume: 0.72, muted: false);
+            // Prefer a real embedded cover (more honest preview); fall back to synthetic art.
+            Bitmap? cover = null;
+            const string sample = @"C:\Users\Erik\Music\M4A\A Moment Apart - ODESZA.m4a";
+            try { if (File.Exists(sample) && MetadataExtractor.ReadArt(sample) is { Length: > 0 } b) using (var ms = new MemoryStream(b)) cover = new Bitmap(Image.FromStream(ms)); } catch { cover = null; }
+            if (!idle) mp.SetTrack(t, cover ?? CoverArt.Generate(45, 300));
+            mp.SetProgress(playing: !idle, posSec: idle ? 0 : 78, durSec: idle ? 0 : 234, volume: 0.72, muted: false, shuffle: !idle, repeat: NowPlayingBar.RepeatMode.All);
+            if (!idle)   // no live audio in a render → inject a representative spectrum so the bars are visible
+            {
+                var demo = new float[28];
+                for (int i = 0; i < demo.Length; i++) demo[i] = (float)(0.30 + 0.55 * Math.Abs(Math.Sin(i * 0.7)) * (1.0 - i / 40.0));
+                mp.DebugSpectrum(demo);
+            }
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var mbmp = new Bitmap(mp.ClientSize.Width, mp.ClientSize.Height);
             mp.DrawToBitmap(mbmp, new Rectangle(0, 0, mp.ClientSize.Width, mp.ClientSize.Height));
@@ -945,6 +1020,104 @@ internal static class Program
             bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
         }
         form.Close();
+    }
+
+    /// <summary>Regenerate app.ico from a source PNG: crop to the artwork's bounding box (ignoring white /
+    /// soft-shadow background), round the corners with transparency, and emit a multi-resolution PNG-in-ICO.</summary>
+    private static void RunMakeIcon(string srcPng, string outIco)
+    {
+        using var orig = (Bitmap)Image.FromFile(srcPng);
+        int W = orig.Width, H = orig.Height;
+        using var src = new Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g0 = Graphics.FromImage(src)) { g0.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic; g0.DrawImage(orig, 0, 0, W, H); }
+
+        // Bounding box of real content: skip transparent pixels and light, low-saturation background
+        // (white margin + the soft drop shadow), so the box hugs the coloured artwork.
+        int minX = W, minY = H, maxX = -1, maxY = -1;
+        var d = src.LockBits(new Rectangle(0, 0, W, H), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        unsafe
+        {
+            byte* b0 = (byte*)d.Scan0; int st = d.Stride;
+            for (int y = 0; y < H; y++)
+            {
+                byte* row = b0 + y * st;
+                for (int x = 0; x < W; x++)
+                {
+                    byte* p = row + x * 4;
+                    int bl = p[0], gr = p[1], re = p[2], al = p[3];
+                    if (al <= 12) continue;
+                    int mx = Math.Max(re, Math.Max(gr, bl)), mn = Math.Min(re, Math.Min(gr, bl));
+                    bool bg = mx >= 232 && (mx - mn) <= 18; // white-ish / grey shadow
+                    if (bg) continue;
+                    if (x < minX) minX = x; if (x > maxX) maxX = x;
+                    if (y < minY) minY = y; if (y > maxY) maxY = y;
+                }
+            }
+        }
+        src.UnlockBits(d);
+        if (maxX < minX) { minX = minY = 0; maxX = W - 1; maxY = H - 1; }
+
+        int side = Math.Min(Math.Min(W, H), Math.Max(maxX - minX + 1, maxY - minY + 1));
+        int cxp = (minX + maxX) / 2, cyp = (minY + maxY) / 2;
+        int sx = Math.Max(0, Math.Min(cxp - side / 2, W - side)), sy = Math.Max(0, Math.Min(cyp - side / 2, H - side));
+        var crop = new Rectangle(sx, sy, side, side);
+
+        int[] sizes = { 256, 128, 64, 48, 32, 24, 16 };
+        var pngs = new List<byte[]>();
+        foreach (int S in sizes)
+        {
+            int SS = S * 2; // supersample → smooth rounded edge after downscale
+            using var hi = new Bitmap(SS, SS, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(hi))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using var path = RoundedIconPath(SS, SS * 0.18f);
+                g.SetClip(path);
+                g.DrawImage(src, new Rectangle(0, 0, SS, SS), crop, GraphicsUnit.Pixel);
+                g.ResetClip();
+            }
+            var sm = new Bitmap(S, S, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(sm))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.DrawImage(hi, new Rectangle(0, 0, S, S), new Rectangle(0, 0, SS, SS), GraphicsUnit.Pixel);
+            }
+            using (var ms = new MemoryStream()) { sm.Save(ms, System.Drawing.Imaging.ImageFormat.Png); pngs.Add(ms.ToArray()); }
+            if (S == 256) sm.Save("icon-preview.png", System.Drawing.Imaging.ImageFormat.Png);
+            sm.Dispose();
+        }
+
+        using (var fs = new FileStream(outIco, FileMode.Create, FileAccess.Write))
+        using (var w = new BinaryWriter(fs))
+        {
+            w.Write((short)0); w.Write((short)1); w.Write((short)sizes.Length);   // ICONDIR
+            int offset = 6 + 16 * sizes.Length;
+            for (int i = 0; i < sizes.Length; i++)
+            {
+                byte dim = (byte)(sizes[i] >= 256 ? 0 : sizes[i]);
+                w.Write(dim); w.Write(dim); w.Write((byte)0); w.Write((byte)0);     // w, h, palette, reserved
+                w.Write((short)1); w.Write((short)32);                              // planes, bpp
+                w.Write(pngs[i].Length); w.Write(offset);
+                offset += pngs[i].Length;
+            }
+            foreach (var p in pngs) w.Write(p);
+        }
+        Console.WriteLine($"Wrote {outIco} ({sizes.Length} sizes) from {srcPng}; crop={crop} of {W}x{H}");
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath RoundedIconPath(int size, float rad)
+    {
+        float d = rad * 2;
+        var p = new System.Drawing.Drawing2D.GraphicsPath();
+        p.AddArc(0, 0, d, d, 180, 90);
+        p.AddArc(size - d, 0, d, d, 270, 90);
+        p.AddArc(size - d, size - d, d, d, 0, 90);
+        p.AddArc(0, size - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
     }
 
     /// <summary>Add cover art to songs already on the iPod, in place, without re-copying them.</summary>

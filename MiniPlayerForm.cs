@@ -1,17 +1,18 @@
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Runtime.InteropServices;
 
 namespace iPodCommander;
 
 /// <summary>
-/// iTunes-style MiniPlayer: a small, always-on-top floating window that mirrors and drives the main
-/// window's single audio engine (via <see cref="NowPlayingBar"/>'s facade). It shows an ambient
-/// blurred-art backdrop, the cover, title, artist, a live seek bar, transport (prev / play-pause /
-/// next), volume (slider + scroll) and an "expand back to the full window" button. The whole card is
-/// draggable; Esc / double-click-art / closing it all return to the full window (the mini never quits
-/// the app). It owns NO playback state — it's a pure view + input: the host pushes state in with
-/// <see cref="SetTrack"/> / <see cref="SetProgress"/> and wires its events.
+/// iTunes / Windows-Media-Player-style MiniPlayer: a small floating window that mirrors and drives the
+/// main window's single audio engine (via <see cref="NowPlayingBar"/>'s facade). Layout: a title bar
+/// (leave-mini arrow · app icon · name · minimize / maximize / close), a large blurred-album-art hero
+/// with the track text overlaid lower-left, and a floating dark "glass" control panel holding one row
+/// of controls (volume · shuffle · prev · play · next · repeat · more) above a seek row. Icons are
+/// Segoe Fluent / MDL2 glyphs to match the Windows look. The window is draggable; the leave-mini arrow,
+/// maximize, close and Esc all return to the full window (the mini never quits the app on its own).
 /// </summary>
 internal sealed class MiniPlayerForm : Form
 {
@@ -21,25 +22,46 @@ internal sealed class MiniPlayerForm : Form
     public event Action<double>? SeekRequested;     // 0..1
     public event Action<double>? VolumeRequested;    // 0..1
     public event Action? MuteRequested;
+    public event Action? ShuffleRequested;
+    public event Action? RepeatRequested;
+    public event Action<Rectangle>? EqualizerRequested;     // arg = anchor screen rect for the flyout
+    public event Action<Rectangle>? ProFeaturesRequested;   // open the Pro-features hub
     public event Action? ExpandRequested;            // return to the full window
 
     private Track? _track;
     private Bitmap? _cover;
-    private Bitmap? _backdrop;                // cached blurred ambient background (rebuilt per track)
-    private bool _playing;
+    private Bitmap? _backdrop;                 // cached blurred ambient background (rebuilt per track)
+    private Bitmap? _iconBmp;                  // cached app icon for the title bar
+    private bool _playing, _shuffle, _muted;
+    private bool _compact;                     // small ↔ normal control UI (toggled by the maximize button)
+    private NowPlayingBar.RepeatMode _repeat;
     private double _dur, _vol = 1;
-    private bool _muted;
-    private double _posBase;                  // engine position at the last push
-    private readonly Stopwatch _sw = new();   // interpolates between ~5 Hz pushes for a smooth seek bar
-    private Tween? _anim;                      // ~30 fps repaint while playing (seek + eq bars)
-    private double _eqPhase;                   // drives the "now playing" eq bars on the cover
-    private double _scrubFrac = -1;           // while dragging the seek bar
-    private bool _volDrag;
+    private double _posBase;                   // engine position at the last push
+    private readonly Stopwatch _sw = new();    // interpolates between ~5 Hz pushes for a smooth seek bar
+    private Tween? _anim;                       // ~30 fps repaint of the moving seek strip while playing
+    private double _scrubFrac = -1;            // while dragging the seek bar
+    public Func<float[], bool>? SpectrumProvider;   // host fills 0..1 spectrum bands; returns false when silent/paused
+    private readonly float[] _spec = new float[28], _specTmp = new float[28];   // smoothed spectrum + scratch
 
-    private enum Hit { None, Prev, Play, Next, Speaker, Expand }
+    private enum Hit { None, Restore, Min, Max, Close, Volume, Shuffle, Prev, Play, Next, Repeat, More }
     private Hit _hover = Hit.None;
 
-    private const int W = 420, H = 166, Pad = 16, ArtSz = 92;
+    private const int W = 360, H = 500, TitleH = 42;
+    private static readonly Size NormalSize = new(W, H), CompactSize = new(300, 398);
+
+    // Segoe Fluent (Win11) / MDL2 (Win10) icon glyphs — the family the reference uses. Built from char
+    // codes because literal PUA glyphs get stripped when written into source.
+    private static readonly string? IconFont = ResolveIconFont();
+    private static string? ResolveIconFont()
+    {
+        foreach (var n in new[] { "Segoe Fluent Icons", "Segoe MDL2 Assets" })
+            try { using var ff = new FontFamily(n); return n; } catch { }
+        return null;
+    }
+    private static string Ch(int cp) => ((char)cp).ToString();
+    private static readonly string GRestore = Ch(0xE944), GMin = Ch(0xE921), GMax = Ch(0xE922), GRestoreDown = Ch(0xE923), GClose = Ch(0xE8BB);
+    private static readonly string GVol = Ch(0xE767), GMute = Ch(0xE74F), GShuffle = Ch(0xE8B1), GPrev = Ch(0xE892), GNext = Ch(0xE893);
+    private static readonly string GPlay = Ch(0xE768), GPause = Ch(0xE769), GRepeatAll = Ch(0xE8EE), GRepeatOne = Ch(0xE8ED), GMore = Ch(0xE712);
 
     public MiniPlayerForm()
     {
@@ -53,13 +75,13 @@ internal sealed class MiniPlayerForm : Form
         Text = "Mixtape — Mini Player";
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        try { if (Environment.ProcessPath is string p) Icon = System.Drawing.Icon.ExtractAssociatedIcon(p); } catch { }
+        try { if (Environment.ProcessPath is string p) { Icon = System.Drawing.Icon.ExtractAssociatedIcon(p); _iconBmp = Icon?.ToBitmap(); } } catch { }
 
         MouseDown += OnDown;
         MouseMove += OnMove;
         MouseUp += OnUp;
         MouseLeave += (_, _) => { if (_hover != Hit.None) { _hover = Hit.None; Invalidate(); } };
-        DoubleClick += (_, _) => { if (Layout().Art.Contains(PointToClient(Cursor.Position))) ExpandRequested?.Invoke(); };
+        DoubleClick += (_, _) => { var p = PointToClient(Cursor.Position); if (p.Y > TitleH && !Layout().Panel.Contains(p)) ExpandRequested?.Invoke(); };
         KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Escape) ExpandRequested?.Invoke();
@@ -81,9 +103,9 @@ internal sealed class MiniPlayerForm : Form
     }
 
     /// <summary>Push live playback state (cheap; called on every engine tick + state change).</summary>
-    public void SetProgress(bool playing, double posSec, double durSec, double volume, bool muted)
+    public void SetProgress(bool playing, double posSec, double durSec, double volume, bool muted, bool shuffle, NowPlayingBar.RepeatMode repeat)
     {
-        _playing = playing; _dur = durSec; _vol = volume; _muted = muted;
+        _playing = playing; _dur = durSec; _vol = volume; _muted = muted; _shuffle = shuffle; _repeat = repeat;
         _posBase = posSec; _sw.Restart();
         if (playing && Visible) StartAnim(); else StopAnim();
         Invalidate();
@@ -95,8 +117,8 @@ internal sealed class MiniPlayerForm : Form
         return _dur > 0 ? Math.Min(_dur, Math.Max(0, p)) : Math.Max(0, p);
     }
 
-    // A soft blurred wash of the cover behind the controls (Apple-Music "now playing" feel). Cheap blur:
-    // downsample the cover hard, then stretch it across the whole card; finish with a dark legibility scrim.
+    // A soft blurred wash of the cover (Apple-Music / WMP "now playing" feel). Cheap blur: downsample the
+    // cover hard, then stretch it over the whole window. Legibility scrims are drawn live in OnPaint.
     private void BuildBackdrop()
     {
         _backdrop?.Dispose(); _backdrop = null;
@@ -104,14 +126,12 @@ internal sealed class MiniPlayerForm : Form
         int w = ClientSize.Width, h = ClientSize.Height;
         var bd = new Bitmap(w, h);
         using (var g = Graphics.FromImage(bd))
-        using (var small = new Bitmap(18, 18))
+        using (var small = new Bitmap(20, 20))
         {
-            using (var gs = Graphics.FromImage(small)) { gs.InterpolationMode = InterpolationMode.HighQualityBilinear; gs.PixelOffsetMode = PixelOffsetMode.HighQuality; gs.DrawImage(_cover, new Rectangle(0, 0, 18, 18)); }
+            using (var gs = Graphics.FromImage(small)) { gs.InterpolationMode = InterpolationMode.HighQualityBilinear; gs.PixelOffsetMode = PixelOffsetMode.HighQuality; gs.DrawImage(_cover, new Rectangle(0, 0, 20, 20)); }
             g.InterpolationMode = InterpolationMode.HighQualityBilinear;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.DrawImage(small, new Rectangle(-6, -6, w + 12, h + 12)); // overscan so card edges aren't a single sampled row
-            using (var scrim = new LinearGradientBrush(new Rectangle(0, 0, w, h), Color.FromArgb(150, 12, 12, 14), Color.FromArgb(210, 8, 8, 10), 90f))
-                g.FillRectangle(scrim, 0, 0, w, h);
+            g.DrawImage(small, new Rectangle(-8, -8, w + 16, h + 16)); // overscan so card edges aren't a single sampled row
         }
         _backdrop = bd;
     }
@@ -122,11 +142,27 @@ internal sealed class MiniPlayerForm : Form
         int tick = 0;
         _anim = Anim.Run(1_000_000_000, _ =>
         {
-            _eqPhase += 0.18;
-            if ((++tick & 1) == 0 && !IsDisposed) Invalidate();   // ~30 fps (seek + eq both move)
+            if (IsDisposed) return;
+            UpdateSpectrum();
+            if ((++tick & 1) == 0) { Invalidate(SeekStrip()); Invalidate(Layout().Spectrum); }
         }, null, Easings.Linear);
     }
-    private void StopAnim() { _anim?.Cancel(); _anim = null; }
+    private void StopAnim() { _anim?.Cancel(); _anim = null; Array.Clear(_spec); if (!IsDisposed && IsHandleCreated) Invalidate(Layout().Spectrum); }
+
+    // Ease the spectrum toward the host's live bands (fast attack, slow decay); falls to zero when paused/silent.
+    private void UpdateSpectrum()
+    {
+        bool live = SpectrumProvider?.Invoke(_specTmp) ?? false;
+        for (int i = 0; i < _spec.Length; i++)
+        {
+            float target = live ? _specTmp[i] : 0f;
+            _spec[i] += (target - _spec[i]) * (target > _spec[i] ? 0.55f : 0.16f);
+        }
+    }
+
+    /// <summary>Render-only: inject a static spectrum so a screenshot shows the bars (no live audio in renders).</summary>
+    public void DebugSpectrum(float[] b) { for (int i = 0; i < _spec.Length; i++) _spec[i] = i < b.Length ? b[i] : 0f; Invalidate(); }
+    private Rectangle SeekStrip() { var l = Layout(); return new Rectangle(l.Panel.X, l.Seek.Y - 14, l.Panel.Width, 30); }
 
     // ---- chrome: dark, rounded (DWM), with the standard drop shadow — like the main window ----
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
@@ -134,9 +170,9 @@ internal sealed class MiniPlayerForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }      // dark mode
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { } // rounded corners
-        try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { } // no border line
+        try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
+        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
+        try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { }
     }
 
     protected override void OnVisibleChanged(EventArgs e)
@@ -147,7 +183,6 @@ internal sealed class MiniPlayerForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        // Closing the mini (Alt+F4, taskbar close, ✕) returns to the full window — it never quits the app.
         if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; ExpandRequested?.Invoke(); return; }
         base.OnFormClosing(e);
     }
@@ -161,78 +196,129 @@ internal sealed class MiniPlayerForm : Form
         Invalidate();
     }
 
+    /// <summary>Switch between the small (compact) and normal control UI, keeping the window centred.</summary>
+    public void SetCompact(bool compact)
+    {
+        _compact = compact;
+        var center = new Point(Left + Width / 2, Top + Height / 2);
+        ClientSize = compact ? CompactSize : NormalSize;
+        var wa = Screen.FromControl(this).WorkingArea;
+        int nx = Math.Clamp(center.X - Width / 2, wa.Left + 8, Math.Max(wa.Left + 8, wa.Right - Width - 8));
+        int ny = Math.Clamp(center.Y - Height / 2, wa.Top + 8, Math.Max(wa.Top + 8, wa.Bottom - Height - 8));
+        Location = new Point(nx, ny);
+        BuildBackdrop();   // backdrop is size-dependent
+        Invalidate();
+    }
+
     // ---- layout (one source of truth for paint + hit-testing) ----
     private struct Lo
     {
-        public Rectangle Art, Expand, Title, Artist, Seek, LeftTime, RightTime, Prev, Play, Next, Speaker, Vol;
+        public Rectangle Restore, IconR, Min, Max, Close;
+        public Rectangle Cover, Spectrum, Panel, Volume, Shuffle, Prev, Play, Next, Repeat, More;
+        public Rectangle Seek, LeftTime, RightTime, Title, Artist;
     }
 
     private Lo Layout()
     {
-        int w = ClientSize.Width;
+        int w = ClientSize.Width, h = ClientSize.Height;
+        bool c = _compact;
         var l = new Lo
         {
-            Art = new Rectangle(Pad, Pad, ArtSz, ArtSz),
-            Expand = new Rectangle(w - 14 - 22, 16, 22, 22),
+            Restore = new Rectangle(8, 7, 30, 28),
+            IconR = new Rectangle(44, (TitleH - 18) / 2, 18, 18),
+            Close = new Rectangle(w - 6 - 38, 6, 38, 30),
         };
-        // title + artist sit in the right zone, vertically centred against the cover
-        int tx = l.Art.Right + 16;
-        l.Title = new Rectangle(tx, 40, Math.Max(40, l.Expand.Left - 12 - tx), 24);
-        l.Artist = new Rectangle(tx, 64, Math.Max(40, w - Pad - tx), 18);
+        l.Max = new Rectangle(l.Close.Left - 38, 6, 38, 30);
+        l.Min = new Rectangle(l.Max.Left - 38, 6, 38, 30);
 
-        // seek bar runs full-width BELOW the cover so nothing overlaps the art
-        int seekY = 118;
-        l.LeftTime = new Rectangle(Pad, seekY - 7, 40, 16);
-        l.Seek = new Rectangle(60, seekY, Math.Max(40, w - 120), 4);
-        l.RightTime = new Rectangle(w - Pad - 40, seekY - 7, 40, 16);
+        // sharp album cover — the hero — centred under the title bar
+        int pm = c ? 12 : 14;
+        int cov = c ? 150 : 218, covY = c ? 48 : 60;
+        l.Cover = new Rectangle((w - cov) / 2, covY, cov, cov);
 
-        // transport centred on the window; volume to the right
-        int cx = w / 2, ty = 128;
-        l.Play = new Rectangle(cx - 18, ty, 36, 36);
-        l.Prev = new Rectangle(l.Play.Left - 12 - 30, ty + 3, 30, 30);
-        l.Next = new Rectangle(l.Play.Right + 12, ty + 3, 30, 30);
-        l.Vol = new Rectangle(w - Pad - 72, ty + 16, 72, 4);
-        l.Speaker = new Rectangle(l.Vol.Left - 8 - 18, ty + 7, 18, 18);
+        // live spectrum band beneath the cover
+        l.Spectrum = new Rectangle(pm, l.Cover.Bottom + 8, w - pm * 2, c ? 24 : 32);
+
+        // centred track text beneath the spectrum
+        int tY = l.Spectrum.Bottom + (c ? 6 : 8);
+        l.Title = new Rectangle(18, tY, w - 36, c ? 24 : 30);
+        l.Artist = new Rectangle(18, l.Title.Bottom + 1, w - 36, c ? 18 : 20);
+
+        // floating frosted control panel, pinned to the bottom — two tight rows: controls then seek
+        int ph = c ? 88 : 96;
+        l.Panel = new Rectangle(pm, h - pm - ph, w - pm * 2, ph);
+
+        // control row: 7 evenly-spaced controls, sitting in the top row of the panel
+        int pad = c ? 22 : 26, cy = l.Panel.Top + (c ? 34 : 38);
+        int x0 = l.Panel.Left + pad, x1 = l.Panel.Right - pad;
+        float step = (x1 - x0) / 6f;
+        Rectangle Box(int i, int s) => new((int)(x0 + i * step) - s / 2, cy - s / 2, s, s);
+        l.Volume = Box(0, 32); l.Shuffle = Box(1, 32); l.Prev = Box(2, 32);
+        l.Play = Box(3, 44); l.Next = Box(4, 32); l.Repeat = Box(5, 32); l.More = Box(6, 32);
+
+        // seek row — just below the controls (tight gap)
+        int sy = l.Panel.Bottom - (c ? 18 : 20);
+        l.LeftTime = new Rectangle(l.Panel.Left + 12, sy - 8, 36, 18);
+        l.RightTime = new Rectangle(l.Panel.Right - 12 - 36, sy - 8, 36, 18);
+        l.Seek = new Rectangle(l.LeftTime.Right + 8, sy, l.RightTime.Left - 8 - (l.LeftTime.Right + 8), 5);
         return l;
     }
 
     // ---- interaction ----
     private void OnDown(object? s, MouseEventArgs e)
     {
-        var l = Layout();
         if (e.Button != MouseButtons.Left) return;
-        if (l.Expand.Contains(e.Location)) { ExpandRequested?.Invoke(); return; }
-        if (l.Speaker.Contains(e.Location)) { MuteRequested?.Invoke(); return; }
-        if (Inflate(l.Vol, 4, 9).Contains(e.Location)) { _volDrag = true; SetVolFromX(l.Vol, e.X); return; }
+        var l = Layout();
+        if (l.Restore.Contains(e.Location) || l.Close.Contains(e.Location)) { ExpandRequested?.Invoke(); return; }
+        if (l.Min.Contains(e.Location)) { WindowState = FormWindowState.Minimized; return; }
+        if (l.Max.Contains(e.Location)) { SetCompact(!_compact); return; }
+        if (l.Volume.Contains(e.Location)) { MuteRequested?.Invoke(); return; }
+        if (l.Shuffle.Contains(e.Location)) { ShuffleRequested?.Invoke(); return; }
+        if (l.Repeat.Contains(e.Location)) { RepeatRequested?.Invoke(); return; }
+        if (l.More.Contains(e.Location)) { ShowMoreMenu(l.More); return; }
         if (l.Play.Contains(e.Location)) { PlayPauseRequested?.Invoke(); return; }
         if (l.Prev.Contains(e.Location)) { PrevRequested?.Invoke(); return; }
         if (l.Next.Contains(e.Location)) { NextRequested?.Invoke(); return; }
-        if (_track is not null && Inflate(l.Seek, 0, 10).Contains(e.Location)) { _scrubFrac = FracAt(l.Seek, e.X); Invalidate(); return; }
+        if (_track is not null && Inflate(l.Seek, 0, 11).Contains(e.Location)) { _scrubFrac = FracAt(l.Seek, e.X); Invalidate(); return; }
         StartWindowDrag(); // anywhere else: drag the whole window
     }
 
     private void OnMove(object? s, MouseEventArgs e)
     {
         var l = Layout();
-        if (_volDrag) { SetVolFromX(l.Vol, e.X); return; }
-        if (_scrubFrac >= 0) { _scrubFrac = FracAt(l.Seek, e.X); Invalidate(); return; }
-        var h = l.Expand.Contains(e.Location) ? Hit.Expand
-            : l.Speaker.Contains(e.Location) ? Hit.Speaker
-            : l.Play.Contains(e.Location) ? Hit.Play
+        if (_scrubFrac >= 0) { _scrubFrac = FracAt(l.Seek, e.X); Invalidate(SeekStrip()); return; }
+        var h = l.Restore.Contains(e.Location) ? Hit.Restore
+            : l.Min.Contains(e.Location) ? Hit.Min
+            : l.Max.Contains(e.Location) ? Hit.Max
+            : l.Close.Contains(e.Location) ? Hit.Close
+            : l.Volume.Contains(e.Location) ? Hit.Volume
+            : l.Shuffle.Contains(e.Location) ? Hit.Shuffle
             : l.Prev.Contains(e.Location) ? Hit.Prev
+            : l.Play.Contains(e.Location) ? Hit.Play
             : l.Next.Contains(e.Location) ? Hit.Next
+            : l.Repeat.Contains(e.Location) ? Hit.Repeat
+            : l.More.Contains(e.Location) ? Hit.More
             : Hit.None;
         if (h != _hover) { _hover = h; Invalidate(); }
+        Cursor = h != Hit.None ? Cursors.Hand : Cursors.Default;
     }
 
     private void OnUp(object? s, MouseEventArgs e)
     {
         if (_scrubFrac >= 0) { SeekRequested?.Invoke(_scrubFrac); _scrubFrac = -1; Invalidate(); }
-        _volDrag = false;
+    }
+
+    private void ShowMoreMenu(Rectangle r)
+    {
+        var m = ThemedMenu.New();
+        var anchor = RectangleToScreen(r);
+        m.Items.Add("Equalizer…", null, (_, _) => EqualizerRequested?.Invoke(anchor));
+        m.Items.Add("Pro features…", null, (_, _) => ProFeaturesRequested?.Invoke(anchor));
+        m.Items.Add("Show full window", null, (_, _) => ExpandRequested?.Invoke());
+        m.Show(this, new Point(r.Left, r.Bottom));
     }
 
     private double FracAt(Rectangle seek, int x) => Math.Clamp((x - seek.Left) / (double)Math.Max(1, seek.Width), 0, 1);
-    private void SetVolFromX(Rectangle vol, int x) { double v = FracAt(vol, x); _vol = v; _muted = v <= 0.001; VolumeRequested?.Invoke(v); Invalidate(); }
     private static Rectangle Inflate(Rectangle r, int dx, int dy) { var c = r; c.Inflate(dx, dy); return c; }
 
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
@@ -245,63 +331,68 @@ internal sealed class MiniPlayerForm : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         int w = ClientSize.Width, h = ClientSize.Height;
-
-        // ambient backdrop: blurred cover wash, or a themed gradient when there's no art
-        if (_backdrop is not null) g.DrawImage(_backdrop, 0, 0, w, h);
-        else using (var bg = new LinearGradientBrush(new Rectangle(0, 0, w, h), Theme.Blend(Theme.SidebarBg, Color.White, 0.05), Theme.Blend(Theme.SidebarBg, Color.Black, 0.18), 90f))
-                g.FillRectangle(bg, 0, 0, w, h);
-        using (var lip = new Pen(Color.FromArgb(28, 255, 255, 255))) g.DrawLine(lip, 1, 0, w - 1, 0); // crisp top sheen
-
         var l = Layout();
         bool idle = _track is null;
 
-        // cover (drop shadow + rounded clip; idle = quiet placeholder with a note)
-        var cr = l.Art;
-        int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
-        var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
-        using (var shp = Theme.RoundedRect(new RectangleF(cr.X + 1, cr.Y + 3, cr.Width, cr.Height), cvr))
-        using (var sh = new SolidBrush(Color.FromArgb(95, 0, 0, 0))) g.FillPath(sh, shp);
-        using (var cp = Theme.RoundedRect(crF, cvr))
-        {
-            var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            if (idle)
-                using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.SidebarBg, Color.White, 0.12), Theme.Blend(Theme.SidebarBg, Color.Black, 0.05), Theme.ArtAngle)) g.FillRectangle(ph, cr);
-            else
-                g.DrawImage(_cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff)), cr);
-            g.Clip = saved;
-        }
-        if (idle) Theme.DrawNote(g, cr, Color.FromArgb(120, 255, 255, 255));
-        using (var bp = new Pen(Color.FromArgb(60, 255, 255, 255))) { using var cp2 = Theme.RoundedRect(crF, cvr); g.DrawPath(bp, cp2); }
-        if (!idle && _playing) DrawEqBars(g, cr); // animated "now playing" cue, bottom-right of the cover
+        // blurred-art ambient backdrop (or a themed gradient when there's no art)
+        if (_backdrop is not null) g.DrawImage(_backdrop, 0, 0, w, h);
+        else using (var bg = new LinearGradientBrush(new Rectangle(0, 0, w, h), Theme.Blend(Theme.SidebarBg, Color.White, 0.06), Theme.Blend(Theme.SidebarBg, Color.Black, 0.22), 90f))
+                g.FillRectangle(bg, 0, 0, w, h);
 
-        // title + artist/album (white on the dark scrim)
+        // global dim so the sharp cover + white text always read over a bright blur, plus top/bottom scrims
+        using (var wash = new SolidBrush(Color.FromArgb(74, 8, 9, 13))) g.FillRectangle(wash, 0, 0, w, h);
+        using (var top = new LinearGradientBrush(new Rectangle(0, 0, w, TitleH + 20), Color.FromArgb(120, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), 90f))
+            g.FillRectangle(top, 0, 0, w, TitleH + 20);
+        using (var bot = new LinearGradientBrush(new Rectangle(0, l.Cover.Bottom, w, h - l.Cover.Bottom + 1), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(150, 0, 0, 0), 90f))
+            g.FillRectangle(bot, 0, l.Cover.Bottom, w, h - l.Cover.Bottom);
+        // faint grain dithers the long dark gradients so they don't show 8-bit horizontal banding
+        using (var grain = new TextureBrush(Noise()) { WrapMode = WrapMode.Tile }) g.FillRectangle(grain, 0, 0, w, h);
+
+        // ---- title bar ----
+        if (_iconBmp is not null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(_iconBmp, l.IconR); }
+        TextRenderer.DrawText(g, "Mixtape", Theme.UiFont(9f), new Rectangle(l.IconR.Right + 8, 0, l.Min.Left - l.IconR.Right - 12, TitleH),
+            Color.FromArgb(220, 240, 241, 244), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        CaptionBtn(g, l.Restore, GRestore, _hover == Hit.Restore, false, 14f);
+        CaptionBtn(g, l.Min, GMin, _hover == Hit.Min, false, 10f);
+        CaptionBtn(g, l.Max, _compact ? GMax : GRestoreDown, _hover == Hit.Max, false, 10f);   // grow ↔ shrink
+        CaptionBtn(g, l.Close, GClose, _hover == Hit.Close, true, 10f);
+
+        // ---- sharp album cover (the hero) ----
+        DrawCover(g, l.Cover);
+
+        // ---- live spectrum ----
+        DrawSpectrum(g, l.Spectrum);
+
+        // ---- centred track text ----
+        var ctr = TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
         string title = idle ? "Nothing playing" : _track!.DisplayTitle;
-        string sub = idle ? "Pick a song to start"
-                          : string.Join("   •   ", new[] { _track!.Artist, _track.Album }.Where(x => !string.IsNullOrWhiteSpace(x)));
-        TextRenderer.DrawText(g, title, Theme.UiFont(11.5f, FontStyle.Bold), l.Title, idle ? Color.FromArgb(210, 230, 230, 232) : Color.White,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        TextRenderer.DrawText(g, sub, Theme.UiFont(9f), l.Artist, Color.FromArgb(idle ? 150 : 205, 235, 236, 240),
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(g, title, Theme.DisplayFont(_compact ? 15f : 18f), l.Title,
+            idle ? Color.FromArgb(225, 235, 235, 237) : Color.White, ctr);
+        string sub = idle ? "Pick a song to start" : (_track!.Artist ?? "");
+        if (!string.IsNullOrWhiteSpace(sub))
+            TextRenderer.DrawText(g, sub, Theme.UiFont(_compact ? 9.5f : 10.5f, FontStyle.Bold), l.Artist,
+                Color.FromArgb(208, 224, 225, 230), ctr);
 
-        DrawExpand(g, l.Expand, _hover == Hit.Expand);
+        // ---- control panel: frosted glass over the blurred art ----
+        DrawFrostedPanel(g, l.Panel);
 
-        // seek bar + times
+        Color on = Color.FromArgb(235, 240, 241, 244), dim = Color.FromArgb(120, 235, 238, 240);
+        CtrlGlyph(g, l.Volume, _muted ? GMute : GVol, _muted ? Theme.Accent : on, _hover == Hit.Volume, 18f);
+        CtrlGlyph(g, l.Shuffle, GShuffle, _shuffle ? Theme.Accent : on, _hover == Hit.Shuffle, 18f);
+        CtrlGlyph(g, l.Prev, GPrev, idle ? dim : on, _hover == Hit.Prev, 17f);
+        CtrlGlyph(g, l.Play, _playing ? GPause : GPlay, idle ? dim : Color.White, _hover == Hit.Play, 23f);
+        CtrlGlyph(g, l.Next, GNext, idle ? dim : on, _hover == Hit.Next, 17f);
+        CtrlGlyph(g, l.Repeat, _repeat == NowPlayingBar.RepeatMode.One ? GRepeatOne : GRepeatAll,
+            _repeat != NowPlayingBar.RepeatMode.Off ? Theme.Accent : on, _hover == Hit.Repeat, 18f);
+        CtrlGlyph(g, l.More, GMore, on, _hover == Hit.More, 18f);
+
+        // ---- seek row ----
         double pos = _scrubFrac >= 0 ? _scrubFrac * _dur : DisplayPos();
         double frac = _scrubFrac >= 0 ? _scrubFrac : (_dur > 0 ? Math.Clamp(pos / _dur, 0, 1) : 0);
-        DrawSlider(g, l.Seek, idle ? 0 : frac, !idle);
-        Color tc = Color.FromArgb(190, 225, 226, 230);
+        DrawSeek(g, l.Seek, idle ? 0 : frac, !idle);
+        Color tc = Color.FromArgb(200, 226, 227, 231);
         TextRenderer.DrawText(g, idle ? "0:00" : Fmt(pos), Theme.UiFont(8f), l.LeftTime, tc, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
         TextRenderer.DrawText(g, idle ? "0:00" : Fmt(_dur), Theme.UiFont(8f), l.RightTime, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-
-        // transport
-        DrawCircleGlyph(g, l.Prev, _hover == Hit.Prev, GlyphPrev, idle);
-        DrawPlayButton(g, l.Play, _hover == Hit.Play, idle);
-        DrawCircleGlyph(g, l.Next, _hover == Hit.Next, GlyphNext, idle);
-
-        // volume
-        DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
-        DrawSlider(g, l.Vol, _muted ? 0 : _vol, false);
     }
 
     private static string Fmt(double sec)
@@ -311,7 +402,54 @@ internal sealed class MiniPlayerForm : Form
         return t.Hours > 0 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
     }
 
-    private static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob)
+    // A row of centred, accent-tinted spectrum bars rising from the baseline (reacts to the live audio).
+    private void DrawSpectrum(Graphics g, Rectangle r)
+    {
+        if (r.Height < 6 || r.Width < 30) return;
+        int n = _spec.Length;
+        float gap = 3f;
+        float bw = (r.Width - (n - 1) * gap) / n;
+        if (bw < 1.5f) return;
+        float baseY = r.Bottom;
+        float rad = Math.Min(2f, bw / 2f);
+        for (int i = 0; i < n; i++)
+        {
+            float v = Math.Clamp(_spec[i], 0f, 1f);
+            float bh = Math.Max(2f, v * r.Height);
+            float x = r.X + i * (bw + gap);
+            int a = (int)(120 + 110 * v);   // brighter as it peaks
+            using var br = new SolidBrush(Color.FromArgb(a, Theme.AccentBright));
+            using var p = Theme.RoundedRect(new RectangleF(x, baseY - bh, bw, bh), rad);
+            g.FillPath(br, p);
+        }
+    }
+
+    // The hero: the actual album cover drawn crisply, rounded, with a soft drop shadow + a hairline edge.
+    private void DrawCover(Graphics g, Rectangle r)
+    {
+        int rad = Math.Max(8, (int)Math.Round(r.Width * Theme.TileFrac));
+        for (int i = 4; i >= 1; i--)   // soft layered drop shadow
+            using (var sh = new SolidBrush(Color.FromArgb(22, 0, 0, 0)))
+            using (var sp = Theme.RoundedRect(new RectangleF(r.X - i, r.Y + i + 2, r.Width + i * 2, r.Height + i * 2), rad + i))
+                g.FillPath(sh, sp);
+
+        using var clip = Theme.RoundedRect(new RectangleF(r.X, r.Y, r.Width, r.Height), rad);
+        var saved = g.Clip;
+        g.SetClip(clip, CombineMode.Intersect);
+        if (_cover is not null)
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.DrawImage(_cover, r);
+        }
+        else using (var ph = new LinearGradientBrush(r, Theme.Blend(Theme.PanelBg, Color.White, 0.06), Theme.Blend(Theme.PanelBg, Color.Black, 0.28), 60f))
+            g.FillRectangle(ph, r);
+        g.Clip = saved;
+
+        using (var edge = new Pen(Color.FromArgb(40, 255, 255, 255))) g.DrawPath(edge, clip);
+    }
+
+    private void DrawSeek(Graphics g, Rectangle track, double frac, bool knob)
     {
         var t = new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1, track.Height - 1);
         using (var tb = new SolidBrush(Color.FromArgb(70, 255, 255, 255)))
@@ -323,117 +461,79 @@ internal sealed class MiniPlayerForm : Form
         if (knob)
         {
             float kx = t.X + fw, ky = t.Y + t.Height / 2f;
-            using (var ks = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(ks, kx - 5.5f, ky - 5f, 11, 11);
+            using (var ks = new SolidBrush(Color.FromArgb(80, 0, 0, 0))) g.FillEllipse(ks, kx - 6f, ky - 5.5f, 12, 12);
             using var kb = new SolidBrush(Color.White);
-            g.FillEllipse(kb, kx - 5, ky - 5, 10, 10);
+            g.FillEllipse(kb, kx - 5.5f, ky - 5.5f, 11, 11);
         }
     }
 
-    /// <summary>Four little accent eq bars bouncing in the cover's bottom-right — the "this is playing" cue.</summary>
-    private void DrawEqBars(Graphics g, Rectangle cover)
+    // Title-bar caption button: hover highlight (red for close, white otherwise) + a centred glyph.
+    private void CaptionBtn(Graphics g, Rectangle r, string glyph, bool hover, bool close, float size)
     {
-        const int n = 4, bw = 3, gap = 2, maxH = 14;
-        int totalW = n * bw + (n - 1) * gap;
-        float baseY = cover.Bottom - 7;
-        float x0 = cover.Right - 7 - totalW;
-        using (var scrim = new LinearGradientBrush(new RectangleF(cover.Left, cover.Bottom - 22, cover.Width, 22), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(130, 0, 0, 0), 90f))
-        {
-            var save = g.Clip;
-            using (var clip = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac))
-                g.SetClip(clip, CombineMode.Intersect);
-            g.FillRectangle(scrim, cover.Left, cover.Bottom - 22, cover.Width, 22);
-            g.Clip = save;
-        }
-        using var b = new SolidBrush(Theme.AccentBright);
-        double[] off = { 0.0, 1.7, 3.3, 5.0 }, spd = { 1.0, 1.35, 0.85, 1.15 };
-        for (int i = 0; i < n; i++)
-        {
-            double v = 0.30 + 0.70 * (0.5 + 0.5 * Math.Sin(_eqPhase * spd[i] + off[i]));
-            float bh = (float)(maxH * v);
-            g.FillRectangle(b, x0 + i * (bw + gap), baseY - bh, bw, bh);
-        }
+        if (hover)
+            using (var hb = new SolidBrush(close ? Color.FromArgb(232, 17, 35) : Color.FromArgb(38, 255, 255, 255)))
+                g.FillRectangle(hb, r);
+        Glyph(g, r, glyph, hover ? Color.White : Color.FromArgb(220, 235, 236, 239), size);
     }
 
-    private void DrawPlayButton(Graphics g, Rectangle r, bool hover, bool dim)
+    // Control-panel glyph button: round hover halo + the glyph (accent when active).
+    private void CtrlGlyph(Graphics g, Rectangle r, string glyph, Color c, bool hover, float size)
     {
-        // soft halo so the accent disc reads on any backdrop
-        using (var halo = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(halo, r.X - 2, r.Y - 1, r.Width + 4, r.Height + 4);
-        Color disc = dim ? Color.FromArgb(120, 235, 238, 240) : hover ? Theme.AccentBright : Theme.Accent;
-        using (var b = new SolidBrush(disc)) g.FillEllipse(b, r);
-        var c = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
-        Color fg = dim ? Color.FromArgb(150, 20, 24, 24) : Theme.OnAccent;
-        using var p = new SolidBrush(fg);
-        if (_playing && !dim)
-        {
-            float bw = 3.2f, gap = 3.2f, bh = 11;
-            g.FillRectangle(p, c.X - gap / 2 - bw, c.Y - bh / 2, bw, bh);
-            g.FillRectangle(p, c.X + gap / 2, c.Y - bh / 2, bw, bh);
-        }
-        else
-        {
-            float tr = 5.5f;
-            g.FillPolygon(p, new[] { new PointF(c.X - tr + 1.5f, c.Y - tr), new PointF(c.X - tr + 1.5f, c.Y + tr), new PointF(c.X + tr + 1.5f, c.Y) });
-        }
+        if (hover) { using var hb = new SolidBrush(Color.FromArgb(34, 255, 255, 255)); g.FillEllipse(hb, r); }
+        Glyph(g, r, glyph, c, size);
     }
 
-    private static void DrawCircleGlyph(Graphics g, Rectangle r, bool hover, Action<Graphics, Rectangle, Color> glyph, bool dim)
+    // A frosted-glass material: the blurred art already shows beneath, so a translucent tint + a soft
+    // top sheen + faint acrylic noise + a bright top edge read as a pane of frosted glass with elevation.
+    private void DrawFrostedPanel(Graphics g, Rectangle p)
     {
-        if (hover && !dim) { using var hb = new SolidBrush(Color.FromArgb(40, 255, 255, 255)); g.FillEllipse(hb, r); }
-        glyph(g, r, dim ? Color.FromArgb(120, 235, 238, 240) : hover ? Color.White : Color.FromArgb(225, 240, 241, 244));
+        using (var sh = new SolidBrush(Color.FromArgb(75, 0, 0, 0)))
+        using (var sp = Theme.RoundedRect(new RectangleF(p.X, p.Y + 4, p.Width, p.Height), 16)) g.FillPath(sh, sp);
+
+        using var clip = Theme.RoundedRect(new RectangleF(p.X + 0.5f, p.Y + 0.5f, p.Width - 1, p.Height - 1), 16);
+        var saved = g.Clip;
+        g.SetClip(clip, CombineMode.Intersect);
+        using (var tint = new SolidBrush(Color.FromArgb(120, 22, 23, 29))) g.FillRectangle(tint, p);          // dark glass (art shows through)
+        using (var lum = new SolidBrush(Color.FromArgb(16, 255, 255, 255))) g.FillRectangle(lum, p);           // luminosity
+        using (var sheen = new LinearGradientBrush(new Rectangle(p.X, p.Y, p.Width, Math.Max(1, p.Height * 2 / 3)), Color.FromArgb(30, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
+            g.FillRectangle(sheen, p.X, p.Y, p.Width, p.Height * 2 / 3);
+        using (var nb = new TextureBrush(Noise()) { WrapMode = WrapMode.Tile }) g.FillRectangle(nb, p);        // subtle acrylic grain
+        g.Clip = saved;
+
+        using (var edge = new Pen(Color.FromArgb(46, 255, 255, 255))) g.DrawPath(edge, clip);                  // bright glass edge
     }
 
-    private static void GlyphPrev(Graphics g, Rectangle r, Color c)
+    private static Bitmap? _noise;
+    private static Bitmap Noise()
     {
-        var m = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
+        if (_noise is not null) return _noise;
+        var bmp = new Bitmap(110, 110, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var rnd = new Random(20260617);
+        for (int y = 0; y < bmp.Height; y++)
+            for (int x = 0; x < bmp.Width; x++)
+            {
+                int gray = rnd.Next(150, 225), a = rnd.Next(0, 12);
+                bmp.SetPixel(x, y, Color.FromArgb(a, gray, gray, gray));
+            }
+        _noise = bmp;
+        return _noise;
+    }
+
+    private void Glyph(Graphics g, Rectangle r, string glyph, Color c, float sizePx)
+    {
+        if (IconFont is null) return;
+        using var f = new Font(IconFont, sizePx, FontStyle.Regular, GraphicsUnit.Pixel);
         using var b = new SolidBrush(c);
-        float s = 5f;
-        g.FillPolygon(b, new[] { new PointF(m.X + 1, m.Y - s), new PointF(m.X + 1, m.Y + s), new PointF(m.X - s + 1, m.Y) });
-        g.FillRectangle(b, m.X - s - 1.5f, m.Y - s, 2.2f, s * 2);
-    }
-
-    private static void GlyphNext(Graphics g, Rectangle r, Color c)
-    {
-        var m = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
-        using var b = new SolidBrush(c);
-        float s = 5f;
-        g.FillPolygon(b, new[] { new PointF(m.X - 1, m.Y - s), new PointF(m.X - 1, m.Y + s), new PointF(m.X + s - 1, m.Y) });
-        g.FillRectangle(b, m.X + s - 0.7f, m.Y - s, 2.2f, s * 2);
-    }
-
-    private static void DrawSpeaker(Graphics g, Rectangle r, bool muted, bool hover)
-    {
-        Color c = muted ? Color.FromArgb(150, 225, 226, 230) : hover ? Color.White : Color.FromArgb(210, 232, 233, 236);
-        using var b = new SolidBrush(c);
-        using var p = new Pen(c, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-        float x = r.X, cy = r.Y + r.Height / 2f;
-        g.FillPolygon(b, new[]
-        {
-            new PointF(x, cy - 3), new PointF(x + 4, cy - 3), new PointF(x + 9, cy - 6),
-            new PointF(x + 9, cy + 6), new PointF(x + 4, cy + 3), new PointF(x, cy + 3),
-        });
-        if (muted) { g.DrawLine(p, x + 12, cy - 4, x + 17, cy + 4); g.DrawLine(p, x + 17, cy - 4, x + 12, cy + 4); }
-        else { g.DrawArc(p, x + 8, cy - 4, 7, 8, -55, 110); g.DrawArc(p, x + 8, cy - 7, 11, 14, -50, 100); }
-    }
-
-    /// <summary>"Expand back to the full window" — two diagonal arrows pointing to opposite corners.</summary>
-    private static void DrawExpand(Graphics g, Rectangle r, bool hover)
-    {
-        if (hover) { using var hb = new SolidBrush(Color.FromArgb(45, 255, 255, 255)); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
-        Color c = hover ? Color.White : Color.FromArgb(210, 232, 233, 236);
-        using var p = new Pen(c, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-        float x = r.X + 6, y = r.Y + 6, s = r.Width - 12, a = 4.5f; // a = arrow-head leg length
-        g.DrawLine(p, x, y, x + s * 0.55f, y + s * 0.55f);
-        g.DrawLine(p, x, y, x + a, y);
-        g.DrawLine(p, x, y, x, y + a);
-        float bx = x + s, by = y + s;
-        g.DrawLine(p, bx, by, bx - s * 0.55f, by - s * 0.55f);
-        g.DrawLine(p, bx, by, bx - a, by);
-        g.DrawLine(p, bx, by, bx, by - a);
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        var hint = g.TextRenderingHint;
+        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+        g.DrawString(glyph, f, b, new RectangleF(r.X, r.Y, r.Width, r.Height), sf);
+        g.TextRenderingHint = hint;
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _anim?.Cancel(); _cover?.Dispose(); _backdrop?.Dispose(); }
+        if (disposing) { _anim?.Cancel(); _cover?.Dispose(); _backdrop?.Dispose(); _iconBmp?.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -28,7 +28,10 @@ internal static class MusicCopier
             string dest = Path.Combine(bucketDir, name);
             try { using (new FileStream(dest, FileMode.CreateNew, FileAccess.Write)) { } }
             catch (IOException) { continue; } // name already taken — draw another
-            File.Copy(sourcePath, dest, overwrite: true);
+            // If the copy fails (disk full, source vanished, USB drop), delete the 0-byte/partial file we just
+            // claimed so it doesn't linger on the device as an orphan, then rethrow for the caller to report.
+            try { File.Copy(sourcePath, dest, overwrite: true); }
+            catch { try { File.Delete(dest); } catch { } throw; }
             // ":iPod_Control:Music:F03:ipcm012345.mp3" — well under the ~112-byte device limit.
             return ($":iPod_Control:Music:{bucket}:{name}", dest);
         }

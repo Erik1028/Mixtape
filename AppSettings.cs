@@ -10,7 +10,7 @@ internal sealed class AppSettings
     public string Accent { get; set; } = "Teal";
     /// <summary>Background palette: Graphite|Midnight|Carbon|Mocha.</summary>
     public string ThemeVariant { get; set; } = "Graphite";
-    public bool Compact { get; set; }          // false = comfortable (52px rows), true = compact (40px)
+    public bool Compact { get; set; }          // false = comfortable (52px rows + art), true = compact (28px, text-only)
     public bool ShowArtwork { get; set; } = true;
 
     // ---- Playback modes (now-playing bar) ----
@@ -42,6 +42,18 @@ internal sealed class AppSettings
     public bool EqEnabled { get; set; }
     /// <summary>Per-band gains in dB (10 bands: 31 Hz … 16 kHz). Empty/short = flat.</summary>
     public float[] EqGains { get; set; } = new float[10];
+
+    // ---- Pro playback features (advanced; off by default so default playback is the proven path) ----
+    /// <summary>Gapless playback: no silence between back-to-back tracks.</summary>
+    public bool GaplessEnabled { get; set; }
+    /// <summary>Crossfade: blend the end of one track into the start of the next.</summary>
+    public bool CrossfadeEnabled { get; set; }
+    /// <summary>Crossfade length in seconds (UI clamps 1..12).</summary>
+    public double CrossfadeSeconds { get; set; } = 6.0;
+    /// <summary>Even out loudness across tracks (RMS-based normalization gain).</summary>
+    public bool NormalizeVolume { get; set; }
+    /// <summary>Downmix playback to mono (single channel through both speakers).</summary>
+    public bool MonoOutput { get; set; }
 
     // ---- Video / transcoding ----
     /// <summary>Transcode target: "Safe" (320x240, plays on 5G + Classic) or "High" (640x480, Classic/late).</summary>
@@ -115,7 +127,12 @@ internal sealed class AppSettings
         catch { /* settings are best-effort */ }
     }
 
-    public int RowHeight => Compact ? 34 : 52;
+    public int RowHeight => Compact ? 28 : 52;
+
+    /// <summary>Whether the song list shows the artwork column. Compact mode is text-only (iTunes-style),
+    /// so the cover column is dropped there regardless of <see cref="ShowArtwork"/> — that art is also what
+    /// forces the taller rows, so hiding it is what makes compact truly compact.</summary>
+    public bool ListArtwork => ShowArtwork && !Compact;
 
     /// <summary>Resolve <see cref="Accent"/> (preset name or hex) to a colour, falling back to Teal.</summary>
     public Color ResolveAccent()

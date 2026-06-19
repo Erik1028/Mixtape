@@ -167,8 +167,10 @@ internal sealed class FfmpegService
     /// </summary>
     public void TranscodeAudio(string src, string dst, int kbps, double durationSec, Action<double> progress, Func<bool> cancelled)
     {
-        // -vn drops any embedded cover-art "video" stream; the `ipod` muxer writes an Apple-friendly .m4a.
-        string args = $"-y -i \"{src}\" -vn -c:a aac -profile:a aac_low -b:a {kbps}k -ar 44100 -movflags +faststart -f ipod \"{dst}\"";
+        // iPods only decode AAC-LC, ≤2 channels, ≤48 kHz. Force STEREO (-ac 2) and 44.1 kHz so a multichannel
+        // (5.1) or odd-layout FLAC can't pass its channels straight through — that plays as noise/artifacts on
+        // the device. -vn drops any embedded cover-art "video" stream; the `ipod` muxer writes an Apple .m4a.
+        string args = $"-y -i \"{src}\" -vn -c:a aac -profile:a aac_low -b:a {kbps}k -ar 44100 -ac 2 -movflags +faststart -f ipod \"{dst}\"";
         RunEncode(args, dst, durationSec, progress, cancelled);
     }
 
