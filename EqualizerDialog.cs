@@ -78,12 +78,12 @@ internal sealed class EqualizerDialog : FlyoutForm
 {
     private static readonly (string Name, float[] Gains)[] Presets =
     {
-        ("Flat",   new float[10]),
-        ("Bass",   new float[] { 6, 5, 4, 2, 0, 0, 0, 0, 0, 0 }),
-        ("Treble", new float[] { 0, 0, 0, 0, 0, 0, 2, 4, 5, 6 }),
-        ("Vocal",  new float[] { -2, -1, 0, 2, 4, 4, 3, 1, 0, -1 }),
-        ("Rock",   new float[] { 4, 3, 1, -1, -1, 0, 2, 3, 4, 4 }),
-        ("Pop",    new float[] { -1, 0, 2, 3, 3, 2, 0, -1, -1, -2 }),
+        (Loc.T("Flat"),   new float[10]),
+        (Loc.T("Bass"),   new float[] { 6, 5, 4, 2, 0, 0, 0, 0, 0, 0 }),
+        (Loc.T("Treble"), new float[] { 0, 0, 0, 0, 0, 0, 2, 4, 5, 6 }),
+        (Loc.T("Vocal"),  new float[] { -2, -1, 0, 2, 4, 4, 3, 1, 0, -1 }),
+        (Loc.T("Rock"),   new float[] { 4, 3, 1, -1, -1, 0, 2, 3, 4, 4 }),
+        (Loc.T("Pop"),    new float[] { -1, 0, 2, 3, 3, 2, 0, -1, -1, -2 }),
     };
 
     private readonly Action<bool, float[]> _onChange;
@@ -94,11 +94,11 @@ internal sealed class EqualizerDialog : FlyoutForm
     public EqualizerDialog(bool enabled, float[] gains, Action<bool, float[]> onChange)
     {
         _onChange = onChange;
-        Text = "Equalizer";
+        Text = Loc.T("Equalizer");
         ClientSize = new Size(404, 286);
         ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);   // borderless/anchored chrome comes from FlyoutForm
 
-        Controls.Add(new Label { Text = "Equalizer", Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Bounds = new Rectangle(18, 14, 220, 24), TextAlign = ContentAlignment.MiddleLeft });
+        Controls.Add(new Label { Text = Loc.T("Equalizer"), Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Bounds = new Rectangle(18, 14, 220, 24), TextAlign = ContentAlignment.MiddleLeft });
 
         _toggle = new ToggleSwitch { Checked = enabled, Location = new Point(ClientSize.Width - 18 - 46, 15) };
         _toggle.CheckedChanged += Push;

@@ -152,7 +152,12 @@ internal sealed class TrackHeader : Control
             var pad = right ? new Rectangle(r.X + 4, 0, r.Width - rp, Height) : new Rectangle(r.X + 8, 0, r.Width - 12, Height);
             var flags = (right ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter
                         | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-            TextRenderer.DrawText(g, _grid.Columns[i].HeaderText, f, pad, Theme.Faint, flags);
+            // The sorted column bakes a "  ↑/↓" arrow into HeaderText — split it off so the base name still
+            // matches a translation key, then re-append the arrow.
+            string head = _grid.Columns[i].HeaderText;
+            int ai = head.IndexOf("  ↑", StringComparison.Ordinal); if (ai < 0) ai = head.IndexOf("  ↓", StringComparison.Ordinal);
+            string caption = ai >= 0 ? Loc.T(head[..ai]) + head[ai..] : Loc.T(head);
+            TextRenderer.DrawText(g, caption, f, pad, Theme.Faint, flags);
         }
 
         using var pen = new Pen(Theme.Border);

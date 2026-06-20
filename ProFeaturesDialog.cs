@@ -80,13 +80,13 @@ internal sealed class ProFeaturesDialog : FlyoutForm
         Action<bool, double, bool, bool, bool> onChange, Action<int> onSleep)
     {
         _onChange = onChange; _onSleep = onSleep;
-        Text = "Pro Features";
+        Text = Loc.T("Pro Features");
         ClientSize = new Size(404, 300);
         ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);   // borderless/anchored chrome comes from FlyoutForm
 
         Controls.Add(new Label
         {
-            Text = "Pro Features", Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol,
+            Text = Loc.T("Pro Features"), Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol,
             AutoSize = false, Bounds = new Rectangle(18, 14, 300, 24), TextAlign = ContentAlignment.MiddleLeft,
         });
 
@@ -96,16 +96,16 @@ internal sealed class ProFeaturesDialog : FlyoutForm
         _mono = new ToggleSwitch { Checked = mono };
         _secs = new DurationSlider(crossSecs) { Width = 172 };
         int sleepIdx = Math.Max(0, Array.IndexOf(SleepOpts, sleepMin));
-        _sleep = new SegmentedControl { Options = new[] { "Off", "15m", "30m", "60m" }, SelectedIndex = sleepIdx, Width = 196 };
+        _sleep = new SegmentedControl { Options = new[] { Loc.T("Off"), "15m", "30m", "60m" }, SelectedIndex = sleepIdx, Width = 196 };
 
         const int row = 46;
         var card = new CardPanel(ClientSize.Width - 36) { Location = new Point(18, 46) };
-        card.AddRow("Gapless playback", "No silence between back-to-back tracks", _gapless, row);
-        card.AddRow("Crossfade", "Blend the end of one track into the next", _crossfade, row);
-        card.AddRow("Crossfade length", null, _secs, 42);
-        card.AddRow("Volume normalization", "Even out loud and quiet tracks", _normalize, row);
-        card.AddRow("Mono", "Combine left and right into one channel", _mono, row);
-        card.AddRow("Sleep timer", "Fade out and pause", _sleep, row);
+        card.AddRow(Loc.T("Gapless playback"), Loc.T("No silence between back-to-back tracks"), _gapless, row);
+        card.AddRow(Loc.T("Crossfade"), Loc.T("Blend the end of one track into the next"), _crossfade, row);
+        card.AddRow(Loc.T("Crossfade length"), null, _secs, 42);
+        card.AddRow(Loc.T("Volume normalization"), Loc.T("Even out loud and quiet tracks"), _normalize, row);
+        card.AddRow(Loc.T("Mono"), Loc.T("Combine left and right into one channel"), _mono, row);
+        card.AddRow(Loc.T("Sleep timer"), Loc.T("Fade out and pause"), _sleep, row);
         card.Finish();
         Controls.Add(card);
         ClientSize = new Size(ClientSize.Width, card.Bottom + 16);

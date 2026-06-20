@@ -40,7 +40,7 @@ internal static class Program
         // Headless UI render: paint the populated window (from a fixture DB) into a PNG so the
         // design can be reviewed without a live screenshot. Usage: --render <db|root> <out.png> [view]
         // view = songs (default) | videos | photos | settings.
-        if (args.Length >= 3 && args[0] == "--render") { RunRender(args[1], args[2], args.Length >= 4 ? args[3] : "songs"); return; }
+        if (args.Length >= 3 && args[0] == "--render") { RunRender(args[1], args[2], args.Length >= 4 ? args[3] : "songs", args.Length >= 5 ? args[4] : null); return; }
 
         // Regenerate the app icon (app.ico) from a source PNG: crop to the artwork's bounding box, round
         // the corners (transparent), and write a multi-resolution PNG-in-ICO. Usage:
@@ -141,9 +141,15 @@ internal static class Program
         using var mutex = new System.Threading.Mutex(initiallyOwned: true, @"Local\MixtapeSingleInstance", out bool isFirst);
         if (!isFirst)
         {
-            PostMessage(HWND_BROADCAST, ShowInstanceMessage, IntPtr.Zero, IntPtr.Zero);
-            return;
+            // A "Restart now" relaunch (e.g. after a language change) races the closing instance for the lock —
+            // wait briefly for the old process to release it instead of just surfacing the (exiting) window.
+            if (args.Contains("--relaunch") && mutex.WaitOne(5000)) isFirst = true;
+            if (!isFirst) { PostMessage(HWND_BROADCAST, ShowInstanceMessage, IntPtr.Zero, IntPtr.Zero); return; }
         }
+
+        // Resolve the UI language ONCE, before any window is built (a language change restarts the app, so it
+        // never changes mid-run). MIX_LANG env overrides for testing/renders without touching saved settings.
+        Loc.Lang = Environment.GetEnvironmentVariable("MIX_LANG") is { Length: > 0 } ml ? Loc.Resolve(ml) : Loc.Resolve(AppSettings.Load().Language);
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -697,11 +703,12 @@ internal static class Program
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-ratings.txt"), log.ToString());
     }
 
-    private static void RunRender(string dbPath, string outPng, string view)
+    private static void RunRender(string dbPath, string outPng, string view, string? sizeArg = null)
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        Loc.Lang = Loc.Resolve(Environment.GetEnvironmentVariable("MIX_LANG"));   // render harness: MIX_LANG=hu to preview Hungarian
 
         IPodDevice? device;
         if (Directory.Exists(dbPath))
@@ -754,7 +761,7 @@ internal static class Program
         // The Library Doctor dialog renders on its own with a synthetic report.
         if (view == "librarydoctor" || view == "librarydoctorclean")
         {
-            var rep = new DoctorReport { TotalTracks = 185 };
+            var rep = new DoctorReport { TotalTracks = 185, TotalPhotos = 320 };
             if (view != "librarydoctorclean")
             {
                 rep.MissingFiles.Add(new Track()); rep.MissingFiles.Add(new Track()); rep.MissingFiles.Add(new Track());
@@ -762,9 +769,30 @@ internal static class Program
                 rep.DuplicateGroups.Add(new List<Track> { new(), new() });
                 rep.DuplicateGroups.Add(new List<Track> { new(), new(), new() });
                 rep.DuplicateExtras = 3;
+                rep.DuplicatePhotoGroups.Add(new List<Photo> { new(), new() });
+                rep.DuplicatePhotoGroups.Add(new List<Photo> { new(), new(), new() });
+                rep.DuplicatePhotoExtras = 3;
                 rep.IncompleteTags = 9; rep.AlbumGaps = 2;
             }
             using var dlg = new LibraryDoctorDialog(rep) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            dlg.Show();
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using var dbmp = new Bitmap(dlg.Width, dlg.Height);
+            dlg.DrawToBitmap(dbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
+            dbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            dlg.Close();
+            return;
+        }
+
+        if (view == "trackinfo")
+        {
+            var tracks = new List<Track>
+            {
+                new() { Title = "Higher Ground", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, TrackNumber = 1, Rating = 80 },
+                new() { Title = "Across the Room", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, TrackNumber = 5, Rating = 60 },
+                new() { Title = "Line of Sight", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, TrackNumber = 7, Rating = 100 },
+            };
+            using var dlg = new TrackInfoDialog(tracks) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
             dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var dbmp = new Bitmap(dlg.Width, dlg.Height);
@@ -793,6 +821,7 @@ internal static class Program
             bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
             return;
         }
+
 
         // The cover picker renders on its own.
         if (view == "coverpicker")
@@ -919,6 +948,41 @@ internal static class Program
             return;
         }
 
+        // Regression test for the "rows blank after scrolling" bug: a SmoothGrid in a clipping viewport scrolled
+        // deep, captured via CopyFromScreen — the LIVE partial-clip paint path that DrawToBitmap can't reproduce
+        // (DataGridView paints rows at absolute Y, so a clip-sized buffer blanked them once scrolled). 5th arg =
+        // scroll px; every row must still render. Needs an interactive desktop session (not headless).
+        if (view == "gridscroll")
+        {
+            int scrollPx = 6000; if (sizeArg is not null && int.TryParse(sizeArg, out int sp)) scrollPx = sp;
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(60, 60), FormBorderStyle = FormBorderStyle.None, Size = new Size(820, 520), BackColor = Theme.Bg };
+            var vp = new Panel { Location = new Point(20, 20), Size = new Size(780, 460), BackColor = Theme.Bg };
+            var grid = new SmoothGrid { Dock = DockStyle.None, Location = new Point(0, 0), Width = 760 };
+            grid.RowTemplate.Height = 52;
+            grid.ColumnHeadersVisible = false; grid.RowHeadersVisible = false; grid.AllowUserToAddRows = false;
+            grid.BackgroundColor = Theme.Bg; grid.GridColor = Theme.Bg; grid.BorderStyle = BorderStyle.None;
+            grid.CellBorderStyle = DataGridViewCellBorderStyle.None;
+            for (int ci = 0; ci < 4; ci++) grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "C" + ci, Width = 180, SortMode = DataGridViewColumnSortMode.NotSortable });
+            grid.DefaultCellStyle.BackColor = Theme.Bg; grid.DefaultCellStyle.ForeColor = Theme.TextCol;
+            grid.DefaultCellStyle.SelectionBackColor = Theme.Bg; grid.DefaultCellStyle.SelectionForeColor = Theme.TextCol;
+            for (int r = 0; r < 140; r++) grid.Rows.Add($"Song {r}", $"Artist {r}", $"Album {r}", $"{r % 5}:0{r % 6}");
+            vp.Controls.Add(grid);
+            f.Controls.Add(vp);
+            f.Show();
+            grid.Height = 140 * 52;   // full content (mimics SizeTracks)
+            Application.DoEvents();
+            grid.SetScrollTop(-scrollPx);
+            grid.Invalidate(); grid.Update();
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(80); }
+            // Capture what's actually on screen in the viewport region (live paint path)
+            var scr = vp.RectangleToScreen(new Rectangle(0, 0, vp.Width, vp.Height));
+            using var shot = new Bitmap(scr.Width, scr.Height);
+            using (var gg = Graphics.FromImage(shot)) gg.CopyFromScreen(scr.Location, Point.Empty, scr.Size);
+            shot.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            f.Close();
+            return;
+        }
+
         // The sidebar with playlist cover icons (verifies the rounded crisp mini-cover rendering).
         if (view == "sidebaricon")
         {
@@ -963,7 +1027,8 @@ internal static class Program
         // The photo grid renders on its own with synthetic tiles (enough to overflow → shows the scrollbar).
         if (view == "photogrid")
         {
-            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(720, 480), BackColor = Theme.Bg };
+            int gw = 720; if (sizeArg is not null && int.TryParse(sizeArg, out int sw)) gw = sw;   // optional 5th arg = width, to eyeball the edge-to-edge flex
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(gw, 480), BackColor = Theme.Bg };
             var grid = new PhotoGridView { Dock = DockStyle.Fill };
             f.Controls.Add(grid);
             f.Show();
@@ -1001,11 +1066,12 @@ internal static class Program
             return;
         }
 
+        int winW = 1080; if (sizeArg is not null && int.TryParse(sizeArg, out int swArg)) winW = swArg;   // optional width override, to eyeball the grid flex
         var form = new MainForm(autoDetect: false)
         {
             StartPosition = FormStartPosition.Manual,
             Location = new Point(-2600, -2600),
-            Size = new Size(1080, view == "device" ? 1180 : 700), // device page is tall — show it all for review
+            Size = new Size(winW, view == "device" ? 1180 : 700), // device page is tall — show it all for review
         };
         form.Show();
         Application.DoEvents();

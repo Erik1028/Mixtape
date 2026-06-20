@@ -301,17 +301,40 @@ internal static class Theme
         g.SmoothingMode = savedSmooth;
     }
 
-    // One AA corner wedge (0=TL,1=TR,2=BR,3=BL): area between the square corner point and the quarter-circle arc.
+    // One AA corner wedge (0=TL,1=TR,2=BR,3=BL): the region between the quarter-circle arc and the corner. The
+    // OUTER edges overshoot the card boundary by `o` so the AA fill gives FULL coverage on the card's outermost
+    // edge pixels (otherwise their ~50% partial coverage let the card's square-corner colour bleed through as a
+    // faint 1px line tracing the corner). The overshoot lands in the wallpaper gap, which is already wallpaper.
     private static void FillCornerWedge(Graphics g, Brush brush, RectangleF r, float radius, int corner)
     {
-        float d = radius * 2;
+        float d = radius * 2, o = 1.2f;
         using var p = new GraphicsPath();
         switch (corner)
         {
-            case 0: p.AddLine(r.X, r.Y, r.X + radius, r.Y);                   p.AddArc(r.X, r.Y, d, d, 270, -90); break;                    // top-left
-            case 1: p.AddLine(r.Right, r.Y, r.Right, r.Y + radius);           p.AddArc(r.Right - d, r.Y, d, d, 0, -90); break;              // top-right
-            case 2: p.AddLine(r.Right, r.Bottom, r.Right - radius, r.Bottom); p.AddArc(r.Right - d, r.Bottom - d, d, d, 90, -90); break;   // bottom-right
-            case 3: p.AddLine(r.X, r.Bottom, r.X, r.Bottom - radius);         p.AddArc(r.X, r.Bottom - d, d, d, 180, -90); break;          // bottom-left
+            case 0: // top-left — arc (X+r,Y)→(X,Y+r), then around the overshot outer corner
+                p.AddArc(r.X, r.Y, d, d, 270, -90);
+                p.AddLine(r.X, r.Y + radius, r.X - o, r.Y + radius);
+                p.AddLine(r.X - o, r.Y + radius, r.X - o, r.Y - o);
+                p.AddLine(r.X - o, r.Y - o, r.X + radius, r.Y - o);
+                break;
+            case 1: // top-right
+                p.AddArc(r.Right - d, r.Y, d, d, 0, -90);
+                p.AddLine(r.Right - radius, r.Y, r.Right - radius, r.Y - o);
+                p.AddLine(r.Right - radius, r.Y - o, r.Right + o, r.Y - o);
+                p.AddLine(r.Right + o, r.Y - o, r.Right + o, r.Y + radius);
+                break;
+            case 2: // bottom-right
+                p.AddArc(r.Right - d, r.Bottom - d, d, d, 90, -90);
+                p.AddLine(r.Right, r.Bottom - radius, r.Right + o, r.Bottom - radius);
+                p.AddLine(r.Right + o, r.Bottom - radius, r.Right + o, r.Bottom + o);
+                p.AddLine(r.Right + o, r.Bottom + o, r.Right - radius, r.Bottom + o);
+                break;
+            case 3: // bottom-left
+                p.AddArc(r.X, r.Bottom - d, d, d, 180, -90);
+                p.AddLine(r.X + radius, r.Bottom, r.X + radius, r.Bottom + o);
+                p.AddLine(r.X + radius, r.Bottom + o, r.X - o, r.Bottom + o);
+                p.AddLine(r.X - o, r.Bottom + o, r.X - o, r.Bottom - radius);
+                break;
         }
         p.CloseFigure();
         g.FillPath(brush, p);
@@ -394,8 +417,11 @@ internal sealed class ThemedButton : Button
     private bool _danger;
     public bool Danger { get => _danger; set { if (_danger != value) { _danger = value; Invalidate(); } } }  // destructive: red label + tinted border
     public string? Glyph { get; init; }
-    public enum Ico { None, Play, Settings }
-    public Ico Icon { get; init; }   // crisp vector icon (Ghost buttons) instead of a symbol-font glyph
+    public enum Ico { None, Play, Settings, Add, CoverFlow, Trash }
+    public Ico Icon { get; init; }   // crisp vector icon (Ghost buttons, or filled buttons in CompactIcon mode)
+    private bool _compactIcon;
+    /// <summary>Render only the centred <see cref="Icon"/> (no text) — for a narrow header where a full pill won't fit.</summary>
+    public bool CompactIcon { get => _compactIcon; set { if (_compactIcon != value) { _compactIcon = value; Invalidate(); } } }
     protected override bool ShowFocusCues => false;   // no dotted focus rectangle on our custom buttons
     private float _hoverT;  // 0→1 hover wash
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
@@ -474,7 +500,13 @@ internal sealed class ThemedButton : Button
 
         float h = Math.Clamp(_hoverT, 0f, 1f);
         float inset = 3f * Math.Clamp(_pressT, 0f, 1f);   // shrink toward centre while pressed
-        var r = new RectangleF(0.5f + inset, 0.5f + inset, Width - 1 - inset * 2, Height - 1 - inset * 2);
+        // A pill rounds to a full semicircle at each end, so its curve reaches the very edges of the
+        // control on all four sides; with only a half-pixel inset the bottom (and left/right) of that
+        // antialiased arc spills past the control boundary and clips flat. Give pills ~1.5px of room —
+        // still on a .5 boundary so the straight top/bottom borders stay a crisp 1px. Plain buttons have
+        // a small corner radius whose arc sits well inside, so they keep the tight 0.5px inset.
+        float pad = (Pill ? 1.5f : 0.5f) + inset;
+        var r = new RectangleF(pad, pad, Width - 2 * pad, Height - 2 * pad);
         float radius = Pill ? r.Height / 2f : Theme.RadControl;
         using var path = Theme.RoundedRect(r, radius);
         var textRect = Rectangle.Round(r);
@@ -499,6 +531,8 @@ internal sealed class ThemedButton : Button
 
         using (var b = new SolidBrush(fill)) g.FillPath(b, path);
         if (!Primary) using (var p = new Pen(border)) g.DrawPath(p, path);
+
+        if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, text); return; }   // narrow header: icon only, no label
 
         string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
         TextRenderer.DrawText(g, label, Font, textRect, text,
@@ -533,6 +567,42 @@ internal sealed class ThemedButton : Button
             float rh = ro * 0.38f;                             // centre hole (even-odd punches it out)
             gp.AddEllipse(cx - rh, cy - rh, rh * 2, rh * 2);
             g.FillPath(b, gp);
+        }
+        else if (icon == Ico.Add)
+        {
+            float s = Math.Min(r.Width, r.Height) * 0.24f;
+            using var pen = new Pen(c, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLine(pen, cx - s, cy, cx + s, cy);
+            g.DrawLine(pen, cx, cy - s, cx, cy + s);
+        }
+        else if (icon == Ico.CoverFlow)
+        {
+            float s = Math.Min(r.Width, r.Height);
+            float cw = s * 0.30f, ch = s * 0.42f, side = s * 0.17f;
+            using (var sb = new SolidBrush(Color.FromArgb(150, c)))   // the two receding side covers
+            {
+                using var lp = Theme.RoundedRect(new RectangleF(cx - cw / 2 - side - 2, cy - ch * 0.34f, side, ch * 0.68f), 2);
+                g.FillPath(sb, lp);
+                using var rp = Theme.RoundedRect(new RectangleF(cx + cw / 2 + 2, cy - ch * 0.34f, side, ch * 0.68f), 2);
+                g.FillPath(sb, rp);
+            }
+            using var cp = Theme.RoundedRect(new RectangleF(cx - cw / 2, cy - ch / 2, cw, ch), 3);
+            g.FillPath(b, cp);                                         // the front (centre) cover
+        }
+        else if (icon == Ico.Trash)
+        {
+            float s = Math.Min(r.Width, r.Height);
+            using var pen = new Pen(c, 1.9f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+            float bw = s * 0.36f, bh = s * 0.38f, bx = cx - bw / 2, by = cy - bh * 0.28f;
+            g.DrawLine(pen, cx - bw * 0.66f, by, cx + bw * 0.66f, by);                                  // lid
+            g.DrawLine(pen, cx - bw * 0.20f, by - s * 0.10f, cx + bw * 0.20f, by - s * 0.10f);          // handle
+            using (var body = new GraphicsPath())                                                       // can (open top, slight taper)
+            {
+                body.AddLines(new[] { new PointF(bx + bw * 0.06f, by + 2), new PointF(bx + bw * 0.16f, by + bh), new PointF(bx + bw * 0.84f, by + bh), new PointF(bx + bw * 0.94f, by + 2) });
+                g.DrawPath(pen, body);
+            }
+            g.DrawLine(pen, cx - bw * 0.16f, by + bh * 0.26f, cx - bw * 0.16f, by + bh * 0.80f);        // ribs
+            g.DrawLine(pen, cx + bw * 0.16f, by + bh * 0.26f, cx + bw * 0.16f, by + bh * 0.80f);
         }
     }
 

@@ -30,7 +30,12 @@ internal static class AppConfig
             o["Accent"] = accent;
             o["ThemeVariant"] = variant;
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, o.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            // Atomic write (temp + replace), mirroring the WinForms AppSettings.Save — so a crash mid-write can't
+            // truncate the settings.json the two apps share and wipe the Windows app's library/playlist/cover data.
+            string tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, o.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null);
+            else File.Move(tmp, FilePath);
         }
         catch { }
     }

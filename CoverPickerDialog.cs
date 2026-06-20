@@ -10,7 +10,7 @@ internal sealed class CoverPickerDialog : Form
     private readonly CoverGrid _grid;
     public int SelectedCoverId => _grid.SelectedCoverId;
 
-    public CoverPickerDialog(string title, int currentId)
+    public CoverPickerDialog(string title, int currentId, string? sampleName = null)
     {
         Text = title;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -21,16 +21,27 @@ internal sealed class CoverPickerDialog : Form
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
 
-        _grid = new CoverGrid(currentId) { Dock = DockStyle.Top, Height = 472, BackColor = Theme.Bg };
+        _grid = new CoverGrid(currentId, sampleName) { Dock = DockStyle.Top, Height = 472, BackColor = Theme.Bg };
         _grid.Confirmed += () => { DialogResult = DialogResult.OK; Close(); };
 
-        var ok = new ThemedButton { Text = "Use cover", Primary = true, Pill = true, Width = 110, Height = 32, DialogResult = DialogResult.OK, Anchor = AnchorStyles.Bottom | AnchorStyles.Right, Location = new Point(ClientSize.Width - 110 - 18, 490) };
-        var cancel = new ThemedButton { Text = "Cancel", Pill = true, Width = 96, Height = 32, DialogResult = DialogResult.Cancel, Anchor = AnchorStyles.Bottom | AnchorStyles.Right, Location = new Point(ClientSize.Width - 110 - 96 - 28, 490) };
+        var ok = new ThemedButton { Text = Loc.T("Use cover"), Primary = true, Pill = true, Width = 110, Height = 32, DialogResult = DialogResult.OK, Anchor = AnchorStyles.Bottom | AnchorStyles.Right, Location = new Point(ClientSize.Width - 110 - 18, 490) };
+        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, DialogResult = DialogResult.Cancel, Anchor = AnchorStyles.Bottom | AnchorStyles.Right, Location = new Point(ClientSize.Width - 110 - 96 - 28, 490) };
         Controls.Add(_grid);
         Controls.Add(ok);
         Controls.Add(cancel);
         AcceptButton = ok;
         CancelButton = cancel;
+        if (Anim.MotionEnabled) Opacity = 0;   // fade up in OnShown, matching the Settings / Library Doctor dialogs
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (!Anim.MotionEnabled) { Opacity = 1; return; }
+        int home = Top;
+        Top = home + 10;
+        Anim.Run(190, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(10 * (1 - v)); },
+            () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutCubic);
     }
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
@@ -52,9 +63,11 @@ internal sealed class CoverGrid : Panel
     private const int Tile = 78, Gap = 12, Pad = 16, Cols = 6;
     private int _hover = -2; // -2 none, -1 default tile, 0..N art
     private readonly List<(Rectangle Rect, int Id)> _hit = new();
+    private readonly string _sampleName;
 
-    public CoverGrid(int currentId)
+    public CoverGrid(int currentId, string? sampleName)
     {
+        _sampleName = string.IsNullOrWhiteSpace(sampleName) ? "Mixtape" : sampleName!;
         SelectedCoverId = currentId;
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
@@ -77,10 +90,11 @@ internal sealed class CoverGrid : Panel
         g.Clear(Theme.Bg);
         _hit.Clear();
 
-        // tile -1 = Default, then 0..Count-1
-        for (int i = 0; i < CoverArt.Count + 1; i++)
+        // tile -1 = Default, then 0..Count-1, then the cassette ("mixtape") tile last
+        int total = CoverArt.Count + 2;
+        for (int i = 0; i < total; i++)
         {
-            int id = i - 1; // -1 default, then 0..
+            int id = i == total - 1 ? CoverArt.CassetteId : i - 1; // last = cassette; else -1 default then 0..
             int col = i % Cols, row = i / Cols;
             int x = Pad + col * (Tile + Gap), y = Pad + row * (Tile + Gap);
             var rect = new Rectangle(x, y, Tile, Tile);
@@ -91,7 +105,11 @@ internal sealed class CoverGrid : Panel
                 using var bb = new SolidBrush(Theme.PanelBg);
                 using var bp = Theme.RoundedRect(rect, 10);
                 g.FillPath(bb, bp);
-                TextRenderer.DrawText(g, "Default", Theme.UiFont(8.5f, FontStyle.Bold), rect, Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, Loc.T("Default"), Theme.UiFont(8.5f, FontStyle.Bold), rect, Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+            else if (id == CoverArt.CassetteId)
+            {
+                g.DrawImage(CoverArt.GenerateTitled(CoverArt.CassetteId, Tile, _sampleName), rect);
             }
             else
             {

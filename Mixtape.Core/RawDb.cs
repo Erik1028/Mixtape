@@ -23,6 +23,7 @@ internal sealed class RawDb
     public List<RawDataset> Datasets = new();
     public byte[] Trailing = Array.Empty<byte>();
     public uint Version;
+    private Dictionary<uint, int>? _uidIndex;   // uid → index into the type-1 Tracks list; lazily built, nulled on add/remove
 
     // ---- parse ----
 
@@ -163,6 +164,7 @@ internal sealed class RawDb
         var tracks = Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks
             ?? throw new InvalidOperationException("No track dataset to add to.");
         tracks.Add(mhitChunk);
+        _uidIndex = null;   // track list changed → drop the uid→index cache
 
         foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
         {
@@ -181,6 +183,7 @@ internal sealed class RawDb
         if (tracks is null) return false;
         int removed = tracks.RemoveAll(mhit => ReadU32(mhit, 0x10) == uniqueId);
         if (removed == 0) return false;
+        _uidIndex = null;   // track list changed → drop the uid→index cache
 
         foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
             foreach (var pl in ds.Playlists!)
@@ -199,15 +202,31 @@ internal sealed class RawDb
     {
         var tracks = Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks;
         if (tracks is null) return false;
-        for (int i = 0; i < tracks.Count; i++)
+        int i = IndexOfTrack(tracks, uniqueId);   // O(1) via a cached uid→index map (was a linear scan → O(n²) in batch/fold loops)
+        if (i < 0 || tracks[i].Length < 0x20) return false;
+        var rebuilt = RebuildTrack(tracks[i], edit);
+        if (ReferenceEquals(rebuilt, tracks[i])) return false; // malformed → left unchanged
+        tracks[i] = rebuilt;   // same index + same uid → the cache stays valid
+        return true;
+    }
+
+    /// <summary>Index of the track with <paramref name="uniqueId"/> via a lazily-built uid→index cache, with a
+    /// linear fallback if the cache misses (so a missed invalidation can never return the wrong track).</summary>
+    private int IndexOfTrack(List<byte[]> tracks, uint uniqueId)
+    {
+        var map = _uidIndex;
+        if (map is null || map.Count != tracks.Count)   // (re)build on first use or after a structural change
         {
-            if (tracks[i].Length < 0x20 || ReadU32(tracks[i], 0x10) != uniqueId) continue;
-            var rebuilt = RebuildTrack(tracks[i], edit);
-            if (ReferenceEquals(rebuilt, tracks[i])) return false; // malformed → left unchanged
-            tracks[i] = rebuilt;
-            return true;
+            map = new Dictionary<uint, int>(tracks.Count);
+            for (int k = 0; k < tracks.Count; k++)
+                if (tracks[k].Length >= 0x14) map[ReadU32(tracks[k], 0x10)] = k;
+            _uidIndex = map;
         }
-        return false;
+        if (map.TryGetValue(uniqueId, out int idx) && idx < tracks.Count && tracks[idx].Length >= 0x14 && ReadU32(tracks[idx], 0x10) == uniqueId)
+            return idx;
+        for (int k = 0; k < tracks.Count; k++)          // stale/miss → linear fallback
+            if (tracks[k].Length >= 0x14 && ReadU32(tracks[k], 0x10) == uniqueId) return k;
+        return -1;
     }
 
     /// <summary>Link an EXISTING track to cover art: patch the fixed-width mhit fields in place
@@ -259,6 +278,7 @@ internal sealed class RawDb
         if (e.Rating is byte rt && headerLen > 0x1F) header[0x1F] = rt;
         if (e.Year is uint yr && headerLen >= 0x38) PatchU32(header, 0x34, yr);
         if (e.TrackNumber is uint tn && headerLen >= 0x30) PatchU32(header, 0x2C, tn);
+        if (e.PlayCount is uint pc && headerLen >= 0x54) PatchU32(header, 0x50, pc);   // play count (@0x50)
 
         // managed string mhod types → new value ("" means clear/remove); null entries aren't added.
         var managed = new Dictionary<uint, string>();
@@ -690,6 +710,7 @@ internal sealed class TrackEdit
     public uint? Year;
     public uint? TrackNumber;
     public byte? Rating;
+    public uint? PlayCount;   // absolute play count (@0x50); the caller folds on-device deltas in
 }
 
 /// <summary>Input spec for synthesizing a new track's mhit (see <see cref="RawDb.BuildMhitChunk"/>).</summary>

@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+
 namespace iPodCommander;
 
 /// <summary>
@@ -21,6 +23,9 @@ internal sealed class PhotoLibrary
     public PhotoDbModel Model { get; private set; }
     public bool SafeToWrite { get; private set; } = true;
     public string? BlockReason { get; private set; }
+    /// <summary>Bumped whenever the photo set changes (add/delete), so the UI can tell when its decoded grid is
+    /// still valid and skip re-decoding the whole library on a mere revisit of the Photos view.</summary>
+    public int Generation { get; private set; }
 
     private string PhotosDir => Path.Combine(Device.MountRoot, "Photos");
     private string ThumbsDir => Path.Combine(PhotosDir, "Thumbs");
@@ -71,19 +76,40 @@ internal sealed class PhotoLibrary
     /// RGB565 thumb (≈130px, crisp) over the tiny 50px browse thumb, but avoids the huge full-screen
     /// one so a big library stays fast and light.
     /// </summary>
+    private const int GridThumbCap = 280;   // downscale big slots to this max edge — crisp at any grid size, bounded memory
+
     public Bitmap? RenderThumb(Photo photo)
     {
+        // Decode the LARGEST RGB565 slot we understand (the ~320×240 full-screen image), not the tiny 130px
+        // preview — so the grid stays crisp when the photo is zoomed to fill the tile. Capped + downscaled so a
+        // big library doesn't balloon memory. (TV-out slots have SlotWidth 0 and are excluded.)
         var cands = photo.Thumbs.Where(x => x.SlotWidth > 0 && x.Size > 0).OrderBy(x => x.SlotWidth).ToList();
         if (cands.Count == 0) return null;
-        var t = cands.FirstOrDefault(x => x.SlotWidth is >= 110 and <= 200) ?? cands[0];
+        var t = cands.LastOrDefault(x => x.SlotWidth <= 400) ?? cands[^1];
         byte[]? px = ReadSlot(t);
         if (px is null) return null;
         using var full = Ithmb.Decode(px, t.SlotWidth, t.SlotHeight);
         if (full is null) return null;
+
         int cw = t.ImageWidth - t.HPad, ch = t.ImageHeight - t.VPad; // crop the letterbox out
-        if (cw > 0 && ch > 0 && t.HPad + cw <= t.SlotWidth && t.VPad + ch <= t.SlotHeight && (t.HPad > 0 || t.VPad > 0))
-            return full.Clone(new Rectangle(t.HPad, t.VPad, cw, ch), full.PixelFormat);
-        return (Bitmap)full.Clone();
+        bool crop = cw > 0 && ch > 0 && t.HPad + cw <= t.SlotWidth && t.VPad + ch <= t.SlotHeight && (t.HPad > 0 || t.VPad > 0);
+        var srcRect = crop ? new Rectangle(t.HPad, t.VPad, cw, ch) : new Rectangle(0, 0, full.Width, full.Height);
+
+        int longEdge = Math.Max(srcRect.Width, srcRect.Height);
+        if (longEdge <= GridThumbCap)
+            return crop ? full.Clone(srcRect, full.PixelFormat) : (Bitmap)full.Clone();
+
+        // downscale the cropped region to the cap (high-quality), centred — keeps memory bounded yet crisp
+        double sc = (double)GridThumbCap / longEdge;
+        int dw = Math.Max(1, (int)Math.Round(srcRect.Width * sc)), dh = Math.Max(1, (int)Math.Round(srcRect.Height * sc));
+        var scaled = new Bitmap(dw, dh);
+        using (var gg = Graphics.FromImage(scaled))
+        {
+            gg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            gg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            gg.DrawImage(full, new Rectangle(0, 0, dw, dh), srcRect, GraphicsUnit.Pixel);
+        }
+        return scaled;
     }
 
     /// <summary>
@@ -106,6 +132,28 @@ internal sealed class PhotoLibrary
             return (Bitmap)full.Clone();
         }
         return null;
+    }
+
+    /// <summary>
+    /// A content fingerprint for duplicate detection: a hash of the raw pixel bytes of a stable mid-size
+    /// thumbnail slot (the same ~130px slot the grid shows), prefixed with the slot dimensions so two
+    /// different formats can't collide on a short byte run. Two photos that are the SAME image have
+    /// byte-identical thumbnail pixels, hence the same key. Returns null when no slot is decodable (e.g. a
+    /// TV-out-only photo we can't read) so such photos are simply never flagged as duplicates. Reads on
+    /// demand (the .ithmb cache is shared with the grid); safe to call from a background thread.
+    /// </summary>
+    public string? ContentKey(Photo photo)
+    {
+        var cands = photo.Thumbs.Where(x => x.SlotWidth > 0 && x.Size > 0).OrderBy(x => x.SlotWidth).ToList();
+        if (cands.Count == 0) return null;
+        var t = cands.FirstOrDefault(x => x.SlotWidth is >= 110 and <= 200) ?? cands[0];
+        // A NOT-yet-saved photo (Add photos, no Save) has its pixels only in memory; its Offset is still 0, so
+        // ReadSlot would read SOME OTHER photo's bytes from the .ithmb and mis-key it (the dedup could then drop a
+        // freshly-added photo). Prefer the in-memory pixels when present; fall back to the on-disk slot.
+        byte[]? px = t.Pixels.Length > 0 ? t.Pixels : ReadSlot(t);
+        if (px is null || px.Length == 0) return null;
+        byte[] hash = System.Security.Cryptography.SHA1.HashData(px);
+        return $"{t.SlotWidth}x{t.SlotHeight}:{Convert.ToHexString(hash)}";
     }
 
     private byte[]? ReadSlot(PhotoThumb t)
@@ -146,13 +194,18 @@ internal sealed class PhotoLibrary
 
     // ---- edits ----
 
-    /// <summary>Render and stage one image (does not write — batch, then <see cref="Save"/>).</summary>
+    /// <summary>Render and stage one image from disk (does not write — batch, then <see cref="Save"/>).</summary>
     public void AddPhoto(string imagePath)
     {
-        if (_nextId == 0) _nextId = Math.Max(FirstImageId, (Model.Photos.Count > 0 ? Model.Photos.Max(p => p.ImageId) : 0) + 1);
         using var src = Image.FromFile(imagePath);
-        var fi = new FileInfo(imagePath);
-        var photo = new Photo { ImageId = _nextId++, Date = DateTime.UtcNow, OrigImageSize = (uint)Math.Min(fi.Length, uint.MaxValue) }; // RawMhii null ⇒ new
+        AddPhoto(src, new FileInfo(imagePath).Length);
+    }
+
+    /// <summary>Render and stage one in-memory image (e.g. a generated wallpaper) — same path as a disk add.</summary>
+    public void AddPhoto(Image src, long origSize)
+    {
+        if (_nextId == 0) _nextId = Math.Max(FirstImageId, (Model.Photos.Count > 0 ? Model.Photos.Max(p => p.ImageId) : 0) + 1);
+        var photo = new Photo { ImageId = _nextId++, Date = DateTime.UtcNow, OrigImageSize = (uint)Math.Min(origSize, uint.MaxValue) }; // RawMhii null ⇒ new
         foreach (var fmt in _addFormats)
         {
             var slot = Ithmb.Encode(src, fmt);
@@ -172,12 +225,15 @@ internal sealed class PhotoLibrary
         Model.Photos.Add(photo);
         Model.MaxImageId = Math.Max(Model.MaxImageId, photo.ImageId);
         foreach (var a in Model.Albums) if (a.IsMaster) a.ImageIds.Add(photo.ImageId);
+        Generation++;
     }
 
     public void DeletePhotos(IEnumerable<uint> imageIds)
     {
         var set = new HashSet<uint>(imageIds);
+        int countBefore = Model.Photos.Count;
         Model.Photos.RemoveAll(p => set.Contains(p.ImageId));
+        if (Model.Photos.Count != countBefore) Generation++;
         foreach (var a in Model.Albums)
         {
             int before = a.ImageIds.Count;

@@ -1,52 +1,102 @@
-using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace iPodCommander;
 
 /// <summary>
 /// The song list's DataGridView, re-hosted for PIXEL-smooth scrolling: its own column header is hidden
 /// and it is sized to its FULL content height inside a clipping viewport, then scrolled by moving its
-/// <see cref="Control.Top"/> (eased) — never by the grid's own row-based scroll. Because every row stays
-/// laid out at a fixed y, all the grid's normal logic (hit-testing, GetRowDisplayRectangle, selection,
-/// sorting, drag-reorder) keeps working unchanged; only the scroll mechanism differs. The themed
+/// <see cref="Control.Top"/> — never by the grid's own row-based scroll. Because every row stays laid out
+/// at a fixed y, all the grid's normal logic (hit-testing, GetRowDisplayRectangle, selection, sorting,
+/// drag-reorder) keeps working unchanged; only the scroll mechanism differs. The themed
 /// <c>ThinScrollBar</c> drives/repaints via the panel-scroll contract (it watches Top via LocationChanged).
+///
+/// Moving <see cref="Control.Top"/> lets Windows BLIT the existing pixels to the new position and repaint
+/// only the newly-exposed strip — far cheaper than a full-viewport repaint every frame. The faint column
+/// seams that earlier forced a full no-blit repaint are gone now that each row fills its full-width
+/// background before the cells paint (MainForm.OnRowPrePaint), so the blitted content is already seam-free.
 /// </summary>
 internal sealed class SmoothGrid : DataGridView
 {
-    private double _target;     // target Top while animating (<= 0)
-    private Tween? _tw;
-    private bool _suppressBlit; // true only while we move Top to scroll → tells WndProc to discard (not blit) old pixels
-
     public SmoothGrid()
     {
         DoubleBuffered = true;
         ScrollBars = ScrollBars.None;
+        _scrollTimer.Tick += (_, _) => FollowTick();
+    }
+
+    /// <summary>Selected row indices captured just BEFORE a left mouse-down collapses a multi-selection — so a
+    /// drag started on one of several selected rows can still carry the whole prior selection.</summary>
+    public readonly List<int> PreClickSelection = new();
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Left)
+        {
+            PreClickSelection.Clear();
+            foreach (DataGridViewRow r in SelectedRows) PreClickSelection.Add(r.Index);
+        }
+        base.OnMouseDown(e);   // raises the MouseDown event handlers AFTER the (now-snapshotted) selection collapses
     }
 
     private int RowH => Math.Max(1, RowTemplate.Height);
     private int ViewportH => Parent?.ClientSize.Height ?? Height;
     private int MaxScroll => Math.Max(0, Height - ViewportH);   // how far up the content can move
 
-    /// <summary>Set the content's Top (clamped to the scrollable range).</summary>
+    /// <summary>Set the content's Top (clamped). Windows blits + repaints only the exposed strip; the
+    /// LocationChanged it raises drives the ThinScrollBar.</summary>
     public void SetScrollTop(int top)
     {
         top = Math.Clamp(top, -MaxScroll, 0);
         if (Top == top) return;
-        // Moving the control normally lets the OS BLIT the old pixels to the new position; at the (fractional)
-        // Fill-column boundaries that blit can leave faint vertical seams AND, when the move and repaint don't
-        // line up, a ghost sliver of a row — the "weird grid" / "stuck partial row" people see while scrolling.
-        // Suppress the blit (see WndProc): the whole client is discarded and repainted fresh, so every presented
-        // frame is a real, seam-free paint. Cheaper too — no wasted blit that we immediately overpaint.
-        _suppressBlit = true;
-        Top = top;        // LocationChanged → ThinScrollBar repaints
-        _suppressBlit = false;
-        Update();         // present the freshly painted frame now, so animated scrolling stays crisp
+        Top = top;
+    }
+
+    // ---- inertial wheel scroll ----
+    // An accumulating target that Top chases with a frame-rate-independent exponential follower. The old
+    // approach restarted a fresh fixed-duration tween on every wheel notch, so a fast spin crawled — each
+    // notch reset the glide to the barely-moved current position. A single continuous follower lets rapid
+    // notches accumulate, so fast scrolling actually scrolls fast.
+    private readonly System.Windows.Forms.Timer _scrollTimer = new() { Interval = 15 };
+    private readonly Stopwatch _sw = new();
+    private double _targetTop;     // destination Top (<= 0)
+    private long _lastMs;
+    private const double Tau = 80.0;   // follower time constant (ms) — smaller = snappier catch-up
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        // Do NOT call base — the grid never scrolls itself; we move the whole control.
+        if (MaxScroll <= 0) return;
+        double cur = _scrollTimer.Enabled ? _targetTop : Top;
+        double dy = (e.Delta / 120.0) * RowH * 3;     // wheel up (delta>0) → Top toward 0 (content down); ~3 rows/notch
+        _targetTop = Math.Clamp(cur + dy, -MaxScroll, 0);
+        if (!Anim.MotionEnabled) { StopFollow(); SetScrollTop((int)Math.Round(_targetTop)); return; }
+        StartFollow();
+    }
+
+    private void StartFollow()
+    {
+        if (_scrollTimer.Enabled) return;
+        _sw.Restart(); _lastMs = 0;
+        _scrollTimer.Start();
+    }
+    private void StopFollow() => _scrollTimer.Stop();
+
+    private void FollowTick()
+    {
+        long now = _sw.ElapsedMilliseconds;
+        double dt = Math.Clamp(now - _lastMs, 1, 64); _lastMs = now;
+        double k = 1 - Math.Exp(-dt / Tau);                 // fraction of the remaining gap to close this frame
+        _targetTop = Math.Clamp(_targetTop, -MaxScroll, 0); // window may have resized mid-glide
+        double next = Top + (_targetTop - Top) * k;
+        if (Math.Abs(_targetTop - next) < 0.5) { SetScrollTop((int)Math.Round(_targetTop)); StopFollow(); return; }
+        SetScrollTop((int)Math.Round(next));
     }
 
     /// <summary>Nudge the scroll by a pixel delta (used for drag auto-scroll near the edges).</summary>
-    public void ScrollByPixels(int dy) { _tw?.Cancel(); _tw = null; SetScrollTop(Top - dy); }
+    public void ScrollByPixels(int dy) { StopFollow(); SetScrollTop(Top - dy); }
 
-    /// <summary>Stop any in-flight wheel animation, so an external driver (the scrollbar) can't fight it.</summary>
-    public void CancelAnim() { _tw?.Cancel(); _tw = null; }
+    /// <summary>Stop any in-flight wheel glide, so an external driver (the scrollbar) can't fight it.</summary>
+    public void CancelAnim() => StopFollow();
 
     /// <summary>Scroll so row <paramref name="index"/> is fully visible (called on activate/play).</summary>
     public void EnsureRowVisible(int index)
@@ -54,51 +104,13 @@ internal sealed class SmoothGrid : DataGridView
         if (index < 0 || MaxScroll == 0) return;
         int rowTop = index * RowH, rowBot = rowTop + RowH;
         int viewTop = -Top, viewBot = viewTop + ViewportH;
-        if (rowTop < viewTop) SetScrollTop(-rowTop);
-        else if (rowBot > viewBot) SetScrollTop(-(rowBot - ViewportH));
-    }
-
-    protected override void OnMouseWheel(MouseEventArgs e)
-    {
-        // Do NOT call base — the grid never scrolls itself; we move the whole control, eased.
-        if (MaxScroll <= 0) return;
-        bool running = _tw is { IsRunning: true };
-        double cur = running ? _target : Top;
-        double dy = (e.Delta / 120.0) * RowH * 3;     // wheel up (delta>0) → Top toward 0 (content down); ~3 rows/notch
-        _target = Math.Clamp(cur + dy, -MaxScroll, 0);
-        if (!Anim.MotionEnabled) { SetScrollTop((int)Math.Round(_target)); return; }
-        double from = Top;
-        _tw?.Cancel();
-        _tw = Anim.Run(190, v => SetScrollTop((int)Math.Round(from + (_target - from) * v)), () => _tw = null, Easings.OutCubic);
-    }
-
-    // ---- blit-free move: discard the client on a scroll move so it repaints fresh (no seams / ghost rows) ----
-    private const int WM_WINDOWPOSCHANGING = 0x0046;
-    private const uint SWP_NOCOPYBITS = 0x0100;
-
-    protected override void WndProc(ref Message m)
-    {
-        if (m.Msg == WM_WINDOWPOSCHANGING && _suppressBlit && m.LParam != IntPtr.Zero)
-        {
-            var wp = Marshal.PtrToStructure<WINDOWPOS>(m.LParam);
-            wp.flags |= SWP_NOCOPYBITS;
-            Marshal.StructureToPtr(wp, m.LParam, false);
-        }
-        base.WndProc(ref m);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WINDOWPOS
-    {
-        public IntPtr hwnd;
-        public IntPtr hwndInsertAfter;
-        public int x, y, cx, cy;
-        public uint flags;
+        if (rowTop < viewTop) { StopFollow(); SetScrollTop(-rowTop); }
+        else if (rowBot > viewBot) { StopFollow(); SetScrollTop(-(rowBot - ViewportH)); }
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _tw?.Cancel();
+        if (disposing) { _scrollTimer.Stop(); _scrollTimer.Dispose(); }
         base.Dispose(disposing);
     }
 }

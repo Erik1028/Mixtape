@@ -69,10 +69,16 @@ internal static class ModelTable
     public static (IPodGeneration Gen, string? Name) Lookup(string? modelNumStr)
     {
         if (string.IsNullOrWhiteSpace(modelNumStr)) return (IPodGeneration.Unknown, null);
-        string s = modelNumStr.Trim();
-        // Strip a single leading marketing letter if the remainder looks like a 4-char code.
-        if (s.Length == 5 && char.IsLetter(s[0])) s = s[1..];
-        if (Models.TryGetValue(s, out var e)) return (e.Gen, e.Name);
+        string u = modelNumStr.Trim().ToUpperInvariant();
+        // Real SysInfo model strings carry a marketing prefix and/or a region suffix ("MA350LL/A", "xM9802"); the
+        // table keys are the bare 4-char code ("A350", "9802", "C293"). Try the bare string first, then strip an
+        // optional "x" + a single marketing letter and take the 4-char code. (The old length==5 strip only handled
+        // the exact "M####" form, so any suffixed/double-prefixed model fell through to Unknown generation.)
+        if (Models.TryGetValue(u, out var e0)) return (e0.Gen, e0.Name);
+        // Optional "x" + a single marketing letter (M/P/…), then the 4-char code. [A-Z]? then M? covers the bare
+        // "M####" form, the "xM####" double prefix, and the "P####"/"PA###" forms (regex backtracks for a bare code).
+        var m = System.Text.RegularExpressions.Regex.Match(u, "^[A-Z]?M?([0-9A-Z]{4})");
+        if (m.Success && Models.TryGetValue(m.Groups[1].Value, out var e)) return (e.Gen, e.Name);
         return (IPodGeneration.Unknown, null);
     }
 

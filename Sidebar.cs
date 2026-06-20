@@ -37,12 +37,19 @@ internal sealed class Sidebar : Panel
     private readonly List<(Rectangle Rect, Row Row)> _ejectHit = new(); // ⏏ sub-regions on device rows
     private Row? _hover;
     private Row? _ejectHover;
+    private Row? _dropRow;   // playlist row highlighted as the current drag-drop target (songs → playlist)
     private int _scroll;
     private int _contentH; // total laid-out row height, captured each paint; used to clamp scrolling
     private Bitmap? _logo;
+    // Cached fonts — Theme.UiFont/DisplayFont allocate a fresh GDI Font per call; the rail repaints on every
+    // hover/scroll and the row font was allocated PER ROW. Reuse instead.
+    private readonly Font _fWordmark = Theme.DisplayFont(13f, FontStyle.Bold);
+    private readonly Font _fHint = Theme.UiFont(8.5f, FontStyle.Italic);
+    private readonly Font _fSection = Theme.UiFont(8f, FontStyle.Bold);
+    private readonly Font _fRow = Theme.UiFont(9.5f), _fRowBold = Theme.UiFont(9.5f, FontStyle.Bold);
 
-    private readonly ThemedButton _refresh = new() { Text = "Refresh", Pill = true, Height = 30 };
-    private readonly ThemedButton _openFolder = new() { Text = "Open folder", Pill = true, Height = 30 };
+    private readonly ThemedButton _refresh = new() { Text = Loc.T("Refresh"), Pill = true, Height = 30 };
+    private readonly ThemedButton _openFolder = new() { Text = Loc.T("Open folder"), Pill = true, Height = 30 };
     private readonly ThemedButton _settings = new() { Icon = ThemedButton.Ico.Settings, Width = 30, Height = 28, Ghost = true };
     private readonly ThemedButton _playFile = new() { Icon = ThemedButton.Ico.Play, Width = 30, Height = 28, Ghost = true };
     private readonly ToolTip _tip = new();
@@ -238,6 +245,18 @@ internal sealed class Sidebar : Panel
         return null;
     }
 
+    /// <summary>The user playlist under a client point (or null) — used as a song drag-drop target by the host.</summary>
+    public Playlist? PlaylistAtPoint(Point clientPt) =>
+        HitTest(clientPt) is { Kind: SidebarRowKind.Playlist, Tag: Playlist pl } ? pl : null;
+
+    /// <summary>Highlight a playlist row as the active drop target (null clears the highlight).</summary>
+    public void SetDropHighlight(Playlist? pl)
+    {
+        Row? r = pl is null ? null : _rows.FirstOrDefault(x => ReferenceEquals(x.Tag, pl));
+        if (ReferenceEquals(r, _dropRow)) return;
+        _dropRow = r; Invalidate();
+    }
+
     private Row? EjectHitTest(Point p)
     {
         foreach (var (rect, row) in _ejectHit) if (rect.Contains(p)) return row;
@@ -253,7 +272,7 @@ internal sealed class Sidebar : Panel
 
         // --- wordmark header ---
         if (_logo != null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(_logo, new Rectangle(Pad, 15, 28, 28)); }
-        TextRenderer.DrawText(g, "Mixtape", Theme.DisplayFont(13f, FontStyle.Bold),
+        TextRenderer.DrawText(g, "Mixtape", _fWordmark,
             new Rectangle(Pad + 34, 14, Width - Pad - 40, 30), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
@@ -269,7 +288,7 @@ internal sealed class Sidebar : Panel
             if (row.Hint)
             {
                 if (y + ItemH > clip.Top && y < clip.Bottom)
-                    TextRenderer.DrawText(g, row.Text, Theme.UiFont(8.5f, FontStyle.Italic),
+                    TextRenderer.DrawText(g, row.Text, _fHint,
                         new Rectangle(Pad + 8, y, Width - Pad * 2 - 8, ItemH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordEllipsis);
                 y += ItemH;
@@ -280,7 +299,7 @@ internal sealed class Sidebar : Panel
             {
                 if (anyDrawn) y += 10; // breathing room above each group after the first
                 if (y + SectionH > clip.Top)
-                    TextRenderer.DrawText(g, row.Text, Theme.UiFont(8f, FontStyle.Bold),
+                    TextRenderer.DrawText(g, row.Text, _fSection,
                         new Rectangle(Pad + 4, y, Width - Pad * 2, SectionH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.Bottom);
                 y += SectionH;
@@ -304,6 +323,15 @@ internal sealed class Sidebar : Panel
                     using var pb = new SolidBrush(fill);
                     using var pp = Theme.RoundedRect(pill, Theme.RadControl);
                     g.FillPath(pb, pp);
+                }
+                if (ReferenceEquals(row, _dropRow))   // song drag-drop target → brighter wash + accent ring
+                {
+                    using var db = new SolidBrush(Color.FromArgb(70, Theme.Accent));
+                    using var dp = Theme.RoundedRect(pill, Theme.RadControl);
+                    g.FillPath(db, dp);
+                    using var dpen = new Pen(Theme.AccentBright, 1.6f);
+                    using var dp2 = Theme.RoundedRect(new RectangleF(pill.X + 0.8f, pill.Y + 0.8f, pill.Width - 1.6f, pill.Height - 1.6f), Theme.RadControl);
+                    g.DrawPath(dpen, dp2);
                 }
 
                 // icon: real mini cover when available, else a coloured tile with a white glyph
@@ -353,7 +381,7 @@ internal sealed class Sidebar : Panel
 
                 var textRect = new Rectangle(tile.Right + 10, y, pill.Right - tile.Right - rightInset, ItemH);
                 Color tc = row.Active ? Color.White : Theme.TextCol;
-                TextRenderer.DrawText(g, row.Text, Theme.UiFont(9.5f, row.Active ? FontStyle.Bold : FontStyle.Regular),
+                TextRenderer.DrawText(g, row.Text, row.Active ? _fRowBold : _fRow,
                     textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             }
             y += ItemH;
@@ -368,5 +396,11 @@ internal sealed class Sidebar : Panel
         //  a hard vertical line there read as an out-of-place divider.)
 
         Theme.CarveCardCorners(g, this, Theme.RadShell, true, true, true, true);   // smooth (AA) rounded card corners
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _fWordmark.Dispose(); _fHint.Dispose(); _fSection.Dispose(); _fRow.Dispose(); _fRowBold.Dispose(); _logo?.Dispose(); }
+        base.Dispose(disposing);
     }
 }

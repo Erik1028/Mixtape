@@ -52,6 +52,47 @@ internal static class PlayCounts
         catch { return 0; } // a display nicety — never let it block loading the library
     }
 
+    /// <summary>
+    /// Fold the on-device "Play Counts" into the RAW database so a save PERSISTS them — the iTunes-style sync
+    /// the no-iTunes crowd otherwise never gets. Plays are ADDED to the DB total; a rating set on the iPod
+    /// REPLACES the DB one (mirrors <see cref="Apply"/>'s semantics + its positional alignment). Only the two
+    /// fields whose offsets are confirmed are written (play count @0x50, rating @0x1F) — never last-played/skip.
+    /// Returns the file path to delete AFTER a successful write, plus a pre-fold snapshot of the RawDb so a
+    /// FAILED write can roll the fold back without losing the user's other staged edits; null = nothing folded.
+    /// </summary>
+    public static (string path, byte[] preFold)? FoldIntoRaw(IpodLibrary lib)
+    {
+        try
+        {
+            string path = Path.Combine(Path.GetDirectoryName(lib.Device.ITunesDbPath)!, "Play Counts");
+            var entries = Read(path);
+            if (entries is null || entries.Count == 0) return null;
+            var rawTracks = lib.Raw.Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks;
+            // Same safety as Apply: positional alignment is only valid when the file matches the DB track-for-track.
+            if (rawTracks is null || rawTracks.Count != entries.Count) return null;
+            bool anyData = false;
+            foreach (var e in entries) if (e.PlayCount > 0 || e.Rating > 0) { anyData = true; break; }
+            if (!anyData) return null;
+
+            byte[] preFold = lib.Raw.Serialize();   // snapshot BEFORE mutating, for safe rollback on a failed write
+            bool folded = false;
+            for (int i = 0; i < rawTracks.Count; i++)
+            {
+                byte[] mhit = rawTracks[i];
+                if (mhit.Length <= 0x53) continue;                  // need play count @0x50..0x53
+                var e = entries[i];
+                if (e.PlayCount == 0 && e.Rating == 0) continue;
+                uint uid = BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x10));
+                var edit = new TrackEdit();
+                if (e.PlayCount > 0) edit.PlayCount = BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x50)) + e.PlayCount; // add on-device plays
+                if (e.Rating > 0) edit.Rating = e.Rating;                                                                       // on-device rating wins
+                if (lib.Raw.EditTrack(uid, edit)) folded = true;
+            }
+            return folded ? (path, preFold) : null;
+        }
+        catch { return null; }   // best-effort: never let a play-counts quirk block a save
+    }
+
     private static List<Entry>? Read(string path)
     {
         if (!File.Exists(path)) return null;

@@ -28,7 +28,7 @@ internal sealed class PhotoViewerDialog : Form
         _caption = caption;
 
         FormBorderStyle = FormBorderStyle.Sizable;
-        Text = "Photo";
+        Text = Loc.T("Photo");
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.FromArgb(12, 12, 14);
         KeyPreview = true;
@@ -116,7 +116,7 @@ internal sealed class PhotoViewerDialog : Form
         }
         else
         {
-            TextRenderer.DrawText(g, "This photo can't be previewed.", Theme.UiFont(11f),
+            TextRenderer.DrawText(g, Loc.T("This photo can't be previewed."), Theme.UiFont(11f),
                 new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }

@@ -29,6 +29,17 @@ internal sealed class UpNextPanel : Control
 
     private const int HeaderH = 44, NowH = 54, RowH = 46, Pad = 14, Art = 34, ThumbW = 6;
 
+    // Cached fonts — the panel repaints on hover/scroll/drag and the item title/artist fonts were allocated PER ROW.
+    private readonly Font _fHeader = Theme.DisplayFont(12.5f, FontStyle.Bold);
+    private readonly Font _fCount = Theme.UiFont(9f, FontStyle.Bold);
+    private readonly Font _fClear = Theme.UiFont(9f);
+    private readonly Font _fNowLbl = Theme.UiFont(7f, FontStyle.Bold);
+    private readonly Font _fNowTitle = Theme.UiFont(9.75f, FontStyle.Bold);
+    private readonly Font _fItemTitle = Theme.UiFont(9.5f, FontStyle.Bold);
+    private readonly Font _fArtist = Theme.UiFont(8.5f);
+    private readonly Font _fEmpty = Theme.UiFont(9.5f);
+    private readonly Font _fHint = Theme.UiFont(8.25f);
+
     public UpNextPanel()
     {
         DoubleBuffered = true;
@@ -82,18 +93,18 @@ internal sealed class UpNextPanel : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         // header
-        TextRenderer.DrawText(g, "Up Next", Theme.DisplayFont(12.5f, FontStyle.Bold), new Rectangle(Pad, 0, Width - 2 * Pad - 80, HeaderH),
+        TextRenderer.DrawText(g, Loc.T("Up Next"), _fHeader, new Rectangle(Pad, 0, Width - 2 * Pad - 80, HeaderH),
             Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         if (_items.Count > 0)
         {
-            var ts = TextRenderer.MeasureText(g, "Up Next", Theme.DisplayFont(12.5f, FontStyle.Bold));
-            TextRenderer.DrawText(g, _items.Count.ToString(), Theme.UiFont(9f, FontStyle.Bold), new Rectangle(Pad + ts.Width + 7, 0, 40, HeaderH),
+            var ts = TextRenderer.MeasureText(g, Loc.T("Up Next"), _fHeader);
+            TextRenderer.DrawText(g, _items.Count.ToString(), _fCount, new Rectangle(Pad + ts.Width + 7, 0, 40, HeaderH),
                 Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
         if (_items.Count > 0)
         {
             if (_hoverClear) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(ClearRect, Theme.RadControl); g.FillPath(hb, hp); }
-            TextRenderer.DrawText(g, "Clear", Theme.UiFont(9f), ClearRect, _hoverClear ? Theme.TextCol : Theme.Subtle,
+            TextRenderer.DrawText(g, Loc.T("Clear"), _fClear, ClearRect, _hoverClear ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
         DrawX(g, CloseRect, _hoverClose);
@@ -107,11 +118,11 @@ internal sealed class UpNextPanel : Control
             int cy = HeaderH + (NowH - Art) / 2;
             DrawArt(g, _nowArt, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad;
-            TextRenderer.DrawText(g, "NOW PLAYING", Theme.UiFont(7f, FontStyle.Bold), new Rectangle(tx, HeaderH + 8, tw, 12), Theme.Accent,
+            TextRenderer.DrawText(g, Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeaderH + 8, tw, 12), Theme.Accent,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, _now.DisplayTitle, Theme.UiFont(9.75f, FontStyle.Bold), new Rectangle(tx, HeaderH + 20, tw, 18), Theme.TextCol,
+            TextRenderer.DrawText(g, _now.DisplayTitle, _fNowTitle, new Rectangle(tx, HeaderH + 20, tw, 18), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, _now.Artist ?? "", Theme.UiFont(8.5f), new Rectangle(tx, HeaderH + 37, tw, 15), Theme.Subtle,
+            TextRenderer.DrawText(g, _now.Artist ?? "", _fArtist, new Rectangle(tx, HeaderH + 37, tw, 15), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, Pad, HeaderH + NowH - 1, Width - Pad, HeaderH + NowH - 1);
         }
@@ -121,8 +132,8 @@ internal sealed class UpNextPanel : Control
         var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
         if (_items.Count == 0)
         {
-            string msg = "Nothing queued.\nRight-click songs → “Add to queue”.";
-            TextRenderer.DrawText(g, msg, Theme.UiFont(9.5f), new Rectangle(Pad, ListTop + 8, Width - 2 * Pad, 60), Theme.Faint,
+            string msg = Loc.T("Nothing queued.\nRight-click songs → “Add to queue”.");
+            TextRenderer.DrawText(g, msg, _fEmpty, new Rectangle(Pad, ListTop + 8, Width - 2 * Pad, 60), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak);
         }
         for (int i = 0; i < _items.Count; i++)
@@ -135,9 +146,9 @@ internal sealed class UpNextPanel : Control
             DrawArt(g, _items[i].art, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad - (hovered ? 24 : 0);
             var t = _items[i].t;
-            TextRenderer.DrawText(g, t.DisplayTitle, Theme.UiFont(9.5f, FontStyle.Bold), new Rectangle(tx, top + 7, tw, 17), Theme.TextCol,
+            TextRenderer.DrawText(g, t.DisplayTitle, _fItemTitle, new Rectangle(tx, top + 7, tw, 17), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, t.Artist ?? "", Theme.UiFont(8.5f), new Rectangle(tx, top + 24, tw, 15), Theme.Subtle,
+            TextRenderer.DrawText(g, t.Artist ?? "", _fArtist, new Rectangle(tx, top + 24, tw, 15), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             if (hovered) DrawX(g, RemoveRect(top), _hoverRemove);
         }
@@ -164,7 +175,7 @@ internal sealed class UpNextPanel : Control
         if (_hint is not null && _items.Count > 0)
         {
             using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, Pad, Height - 26, Width - Pad, Height - 26);
-            TextRenderer.DrawText(g, _hint, Theme.UiFont(8.25f), new Rectangle(Pad, Height - 25, Width - 2 * Pad, 24), Theme.Faint,
+            TextRenderer.DrawText(g, _hint, _fHint, new Rectangle(Pad, Height - 25, Width - 2 * Pad, 24), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
     }
@@ -262,6 +273,12 @@ internal sealed class UpNextPanel : Control
         base.OnMouseLeave(e);
         if (_hoverRow != -1 || _hoverClose || _hoverClear || _hoverRemove)
         { _hoverRow = -1; _hoverClose = _hoverClear = _hoverRemove = false; Invalidate(); }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _fHeader.Dispose(); _fCount.Dispose(); _fClear.Dispose(); _fNowLbl.Dispose(); _fNowTitle.Dispose(); _fItemTitle.Dispose(); _fArtist.Dispose(); _fEmpty.Dispose(); _fHint.Dispose(); }
+        base.Dispose(disposing);
     }
 }
 

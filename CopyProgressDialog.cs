@@ -48,7 +48,7 @@ internal sealed class CopyProgressDialog : Form
     private readonly ThemedProgressBar _bar = new() { Dock = DockStyle.Top, Height = 8, Margin = new Padding(0) };
     private readonly Label _status = new() { Dock = DockStyle.Top, Height = 22, ForeColor = Theme.Subtle, AutoEllipsis = true };
     private readonly Label _heading;
-    private readonly ThemedButton _cancel = new() { Text = "Cancel", Width = 96, Height = 30, Pill = true };
+    private readonly ThemedButton _cancel = new() { Text = Loc.T("Cancel"), Width = 96, Height = 30, Pill = true };
     private readonly Action<Action<int, string>, Func<bool>> _work;
     private volatile bool _cancelled;
 
@@ -69,10 +69,10 @@ internal sealed class CopyProgressDialog : Form
 
         _bar.Maximum = Math.Max(1, total);
         _heading = new Label { Text = heading, Dock = DockStyle.Top, Height = 26, Font = Theme.UiFont(11f, FontStyle.Bold), ForeColor = Theme.TextCol };
-        _status.Text = "Preparing…";
+        _status.Text = Loc.T("Preparing…");
         _cancel.Location = new Point(ClientSize.Width - 96 - 20, ClientSize.Height - 30 - 18);
         _cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-        _cancel.Click += (_, _) => { _cancelled = true; _cancel.Enabled = false; _status.Text = "Finishing the current file…"; };
+        _cancel.Click += (_, _) => { _cancelled = true; _cancel.Enabled = false; _status.Text = Loc.T("Finishing the current file…"); };
 
         // A padded host so the docked rows have margins.
         var host = new Panel { Dock = DockStyle.Fill, Padding = new Padding(20, 18, 20, 0), BackColor = Theme.Bg };

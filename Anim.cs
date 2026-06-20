@@ -91,19 +91,24 @@ internal static class Easings
     }
 }
 
+/// <summary>The motion used when swapping the centre view. Change the one constant in MainForm to restyle every
+/// view switch. Slide = horizontal push; Fade = cross-dissolve + small rise; Scale = zoom-in cross-dissolve.</summary>
+internal enum ViewTransition { Slide, Fade, Scale }
+
 /// <summary>
-/// A throw-away overlay that cross-dissolves between two snapshots (outgoing → incoming), with a small
-/// upward rise on the incoming. Placed over a region during a view switch, it removes itself when done.
+/// A throw-away overlay that animates between two snapshots (outgoing → incoming) over a region during a view
+/// switch, then removes itself. The <see cref="ViewTransition"/> style picks the motion.
 /// </summary>
-internal sealed class CrossfadePanel : Panel
+internal sealed class TransitionPanel : Panel
 {
     private readonly Bitmap _old, _new;
+    private readonly ViewTransition _style;
     private float _t;
     private Action? _onDone;
 
-    public CrossfadePanel(Bitmap oldBmp, Bitmap newBmp)
+    public TransitionPanel(Bitmap oldBmp, Bitmap newBmp, ViewTransition style)
     {
-        _old = oldBmp; _new = newBmp;
+        _old = oldBmp; _new = newBmp; _style = style;
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
         Enabled = false; // sit on top briefly without intercepting clicks
     }
@@ -111,16 +116,30 @@ internal sealed class CrossfadePanel : Panel
     public void Start(Action onDone)
     {
         _onDone = onDone;
-        Anim.Run(220, v => { _t = (float)v; if (!IsDisposed) Invalidate(); },
+        double dur = _style == ViewTransition.Slide ? 360 : 320;
+        Anim.Run(dur, v => { _t = (float)v; if (!IsDisposed) Invalidate(); },
             () => { var d = _onDone; _onDone = null; d?.Invoke(); }, Easings.OutCubic);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.DrawImage(_old, 0, 0, Width, Height);                 // outgoing holds underneath
-        float dy = 10f * (1f - _t);                             // incoming rises as it fades in
-        Theme.DrawImageAlpha(g, _new, new RectangleF(0, dy, Width, Height), _t);
+        switch (_style)
+        {
+            case ViewTransition.Slide:                          // old pushes off to the left, new rides in from the right
+                g.DrawImage(_old, -Width * _t, 0, Width, Height);
+                g.DrawImage(_new, Width * (1f - _t), 0, Width, Height);
+                break;
+            case ViewTransition.Scale:                          // new zooms up from 96% as it dissolves in over the old
+                g.DrawImage(_old, 0, 0, Width, Height);
+                float s = 0.96f + 0.04f * _t, w = Width * s, h = Height * s;
+                Theme.DrawImageAlpha(g, _new, new RectangleF((Width - w) / 2f, (Height - h) / 2f, w, h), _t);
+                break;
+            default:                                            // Fade: incoming rises a touch as it dissolves in
+                g.DrawImage(_old, 0, 0, Width, Height);
+                Theme.DrawImageAlpha(g, _new, new RectangleF(0, 16f * (1f - _t), Width, Height), _t);
+                break;
+        }
     }
 
     protected override void Dispose(bool disposing)

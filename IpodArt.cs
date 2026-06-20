@@ -70,32 +70,43 @@ internal static class IpodArt
         {
             using (var bb = new LinearGradientBrush(body, Theme.Blend(bodyColor, Color.White, 0.18), Theme.Blend(bodyColor, Color.Black, 0.16), 90f))
                 g.FillPath(bb, bp);
+            // a soft glossy sheen across the top third (plastic/anodised highlight)
+            var saved = g.Clip; g.SetClip(bp);
+            using (var sheen = new LinearGradientBrush(new RectangleF(body.X, body.Y, body.Width, body.Height * 0.38f), Color.FromArgb(46, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
+                g.FillRectangle(sheen, body.X, body.Y, body.Width, body.Height * 0.38f);
+            g.Clip = saved;
             using var pen = new Pen(Color.FromArgb(70, 0, 0, 0), 1f);
             g.DrawPath(pen, bp);
         }
 
         switch (spec.Shape)
         {
-            case Shape.ClickWheel: DrawClickWheel(g, body, spec.ScreenFrac); break;
+            case Shape.ClickWheel: DrawClickWheel(g, body, spec.ScreenFrac, bodyColor); break;
             case Shape.TouchSquare: DrawTouchSquare(g, body); break;
             case Shape.TouchTall: DrawTouchTall(g, body); break;
-            case Shape.Shuffle: DrawShuffle(g, body); break;
+            case Shape.Shuffle: DrawShuffle(g, body, bodyColor); break;
         }
         return bmp;
     }
 
+    private static double Lum(Color c) => (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255.0;
+
     private static void DrawScreen(Graphics g, RectangleF screen, float radius)
     {
         using var scp = Theme.RoundedRect(screen, radius);
-        using (var scb = new LinearGradientBrush(screen, Theme.Blend(Color.FromArgb(16, 22, 28), Theme.Accent, 0.08), Color.FromArgb(8, 11, 15), 90f)) g.FillPath(scb, scp);
+        // dark reflective glass (not a coloured glow — reads as a real iPod screen at any size)
+        using (var scb = new LinearGradientBrush(screen, Color.FromArgb(22, 26, 32), Color.FromArgb(8, 10, 14), 90f)) g.FillPath(scb, scp);
         var saved = g.Clip;
         g.SetClip(scp);
-        using (var glow = new SolidBrush(Color.FromArgb(38, Theme.Accent)))
-            g.FillEllipse(glow, screen.X + screen.Width * 0.08f, screen.Y + screen.Height * 0.25f, screen.Width * 0.84f, screen.Height * 0.95f);
+        // a soft diagonal glass reflection across the top
+        using (var refl = new LinearGradientBrush(new RectangleF(screen.X, screen.Y - 1, screen.Width, screen.Height * 0.6f + 1), Color.FromArgb(34, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 60f))
+            g.FillRectangle(refl, screen.X, screen.Y - 1, screen.Width, screen.Height * 0.6f + 1);
         g.Clip = saved;
+        using var rim = new Pen(Color.FromArgb(110, 0, 0, 0), 1f);   // crisp inner bezel
+        g.DrawPath(rim, scp);
     }
 
-    private static void DrawClickWheel(Graphics g, RectangleF body, float screenFrac)
+    private static void DrawClickWheel(Graphics g, RectangleF body, float screenFrac, Color bodyColor)
     {
         float pad = body.Width * 0.1f;
         DrawScreen(g, new RectangleF(body.X + pad, body.Y + pad, body.Width - 2 * pad, body.Height * screenFrac), body.Width * 0.05f);
@@ -104,12 +115,54 @@ internal static class IpodArt
         // and a big-screen model (5G/Classic) a proportionally smaller one, like the real devices.
         float lowerTop = body.Y + body.Height * (screenFrac + pad / body.Height + 0.04f);
         float lowerH = body.Bottom - body.Height * 0.06f - lowerTop;
-        float wd = Math.Min(body.Width * 0.76f, lowerH);
+        float wd = Math.Min(body.Width * 0.78f, lowerH);
         var wheel = new RectangleF(body.X + (body.Width - wd) / 2, lowerTop + (lowerH - wd) / 2, wd, wd);
-        using (var wb = new SolidBrush(Color.FromArgb(60, 0, 0, 0))) g.FillEllipse(wb, wheel); // recessed wheel reads on any body colour
-        using (var wp = new Pen(Color.FromArgb(45, 255, 255, 255), 1f)) g.DrawEllipse(wp, wheel.X + 0.5f, wheel.Y + 0.5f, wheel.Width - 1, wheel.Height - 1);
-        float cc = wd * 0.36f;
-        using (var cb = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(cb, wheel.X + (wd - cc) / 2, wheel.Y + (wd - cc) / 2, cc, cc);
+
+        // A real click wheel is the SAME colour family as the body (white wheel on a white iPod, grey on metal),
+        // not a black hole. Tint it slightly for contrast, with a faint rim.
+        bool dark = Lum(bodyColor) < 0.5;
+        Color wheelFill = dark ? Theme.Blend(bodyColor, Color.White, 0.12) : Theme.Blend(bodyColor, Color.Black, 0.07);
+        using (var wb = new SolidBrush(wheelFill)) g.FillEllipse(wb, wheel);
+        using (var wp = new Pen(Color.FromArgb(dark ? 70 : 45, 0, 0, 0), 1f)) g.DrawEllipse(wp, wheel.X + 0.5f, wheel.Y + 0.5f, wheel.Width - 1, wheel.Height - 1);
+
+        float cx = wheel.X + wd / 2f, cy = wheel.Y + wd / 2f, r = wd * 0.37f;   // ring radius the labels sit on
+        Color label = dark ? Color.FromArgb(150, 235, 235, 235) : Color.FromArgb(135, 60, 60, 60);
+        if (wd >= 42f)   // only label the wheel when it's big enough to read (skip on the tiny header/sidebar icon)
+        {
+            float gs = wd * 0.05f;   // glyph size unit
+            using (var f = Theme.UiFont(Math.Max(5.5f, wd * 0.082f), FontStyle.Bold))
+                TextRenderer.DrawText(g, "MENU", f, Rectangle.Round(new RectangleF(cx - wd * 0.28f, cy - r - wd * 0.085f, wd * 0.56f, wd * 0.2f)), label,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            DoubleTri(g, label, cx - r, cy, gs, -1);   // ◀◀
+            DoubleTri(g, label, cx + r, cy, gs, +1);   // ▶▶
+            PlayPause(g, label, cx, cy + r, gs);       // ▶❙❙
+        }
+
+        // raised centre button
+        float cc = wd * 0.34f;
+        Color centre = dark ? Theme.Blend(bodyColor, Color.White, 0.05) : Theme.Blend(bodyColor, Color.Black, 0.04);
+        using (var cb = new SolidBrush(centre)) g.FillEllipse(cb, cx - cc / 2, cy - cc / 2, cc, cc);
+        using (var cp = new Pen(Color.FromArgb(dark ? 80 : 50, 0, 0, 0), 1f)) g.DrawEllipse(cp, cx - cc / 2, cy - cc / 2, cc, cc);
+    }
+
+    // ◀◀ / ▶▶ : two stacked triangles. dir = -1 points left, +1 points right. (cx,cy) is the pair's centre.
+    private static void DoubleTri(Graphics g, Color c, float cx, float cy, float s, int dir)
+    {
+        using var b = new SolidBrush(c);
+        for (int k = -1; k <= 0; k++)
+        {
+            float ox = cx + dir * (k + 0.5f) * s * 1.15f;
+            g.FillPolygon(b, new[] { new PointF(ox - dir * s * 0.55f, cy - s * 0.62f), new PointF(ox - dir * s * 0.55f, cy + s * 0.62f), new PointF(ox + dir * s * 0.55f, cy) });
+        }
+    }
+
+    // ▶❙❙ : a play triangle followed by two pause bars. (cx,cy) is the glyph centre.
+    private static void PlayPause(Graphics g, Color c, float cx, float cy, float s)
+    {
+        using var b = new SolidBrush(c);
+        g.FillPolygon(b, new[] { new PointF(cx - s * 1.25f, cy - s * 0.62f), new PointF(cx - s * 1.25f, cy + s * 0.62f), new PointF(cx - s * 0.25f, cy) });
+        g.FillRectangle(b, cx + s * 0.25f, cy - s * 0.62f, s * 0.34f, s * 1.24f);
+        g.FillRectangle(b, cx + s * 0.78f, cy - s * 0.62f, s * 0.34f, s * 1.24f);
     }
 
     private static void DrawTouchSquare(Graphics g, RectangleF body)
@@ -133,13 +186,24 @@ internal static class IpodArt
         g.FillEllipse(hb, body.X + (body.Width - d) / 2, body.Y + body.Height * 0.86f - d / 2, d, d);
     }
 
-    private static void DrawShuffle(Graphics g, RectangleF body)
+    private static void DrawShuffle(Graphics g, RectangleF body, Color bodyColor)
     {
+        bool dark = Lum(bodyColor) < 0.5;
         float d = body.Width * 0.62f;
         var pad = new RectangleF(body.X + (body.Width - d) / 2, body.Y + (body.Height - d) / 2, d, d);
-        using (var wb = new SolidBrush(Color.FromArgb(55, 0, 0, 0))) g.FillEllipse(wb, pad);
-        using (var wp = new Pen(Color.FromArgb(55, 255, 255, 255), 1f)) g.DrawEllipse(wp, pad);
+        using (var wb = new SolidBrush(dark ? Theme.Blend(bodyColor, Color.White, 0.10) : Theme.Blend(bodyColor, Color.Black, 0.06))) g.FillEllipse(wb, pad);
+        using (var wp = new Pen(Color.FromArgb(dark ? 65 : 45, 0, 0, 0), 1f)) g.DrawEllipse(wp, pad);
+        // ▶❙❙ + ◀◀ / ▶▶ around the tiny control pad, like the clip-on shuffle's ring
+        Color label = dark ? Color.FromArgb(150, 235, 235, 235) : Color.FromArgb(135, 60, 60, 60);
+        if (d >= 30f)
+        {
+            float cx = pad.X + d / 2f, cy = pad.Y + d / 2f, r = d * 0.34f, gs = d * 0.05f;
+            DoubleTri(g, label, cx - r, cy, gs, -1);
+            DoubleTri(g, label, cx + r, cy, gs, +1);
+            PlayPause(g, label, cx, cy - r, gs);
+        }
         float c0 = d * 0.34f;
-        using (var cb = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(cb, pad.X + (d - c0) / 2, pad.Y + (d - c0) / 2, c0, c0);
+        using (var cb = new SolidBrush(dark ? Theme.Blend(bodyColor, Color.White, 0.04) : Theme.Blend(bodyColor, Color.Black, 0.04))) g.FillEllipse(cb, pad.X + (d - c0) / 2, pad.Y + (d - c0) / 2, c0, c0);
+        using (var cp = new Pen(Color.FromArgb(dark ? 75 : 50, 0, 0, 0), 1f)) g.DrawEllipse(cp, pad.X + (d - c0) / 2, pad.Y + (d - c0) / 2, c0, c0);
     }
 }

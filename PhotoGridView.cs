@@ -14,7 +14,7 @@ internal sealed class PhotoGridView : Panel
     /// <summary>Double-click on a tile — carries the photo id, for opening the full-size viewer.</summary>
     public event Action<uint>? ItemActivated;
 
-    private sealed class Tile { public uint Id; public Bitmap? Thumb; public bool Selected; }
+    private sealed class Tile { public uint Id; public Bitmap? Thumb; public bool Selected; public float Fade = 1f; public Tween? Tween; }
     private readonly List<Tile> _tiles = new();
     private readonly List<(Rectangle Rect, Tile Tile)> _hit = new();
     private Tile? _hover;
@@ -25,7 +25,24 @@ internal sealed class PhotoGridView : Panel
     private int _barDragStartY, _barDragStartScroll;
     private const int BarZone = 16;             // right-edge hit width for grabbing the scrollbar
 
-    private const int TileW = 132, TileH = 132, Gap = 14, Pad = 22;
+    private const int Gap = 14, Pad = 22;
+    private int _tileSize = 132;
+    /// <summary>TARGET square tile edge in px — the photo-view size slider. The tiles don't render at exactly
+    /// this size: it sets how many columns fit, and those columns then stretch to fill the width edge-to-edge
+    /// (iTunes-style), so widening the window grows the tiles instead of leaving a gutter. See <see cref="TileEdge"/>.</summary>
+    public int TileSize
+    {
+        get => _tileSize;
+        set { int v = Math.Clamp(value, 80, 280); if (v == _tileSize) return; _tileSize = v; _scroll = Math.Min(_scroll, MaxScroll()); Invalidate(); }
+    }
+
+    /// <summary>Content width between the side margins.</summary>
+    private int AvailW => Math.Max(0, Width - Pad * 2);
+    /// <summary>The ACTUAL on-screen square tile edge: the chosen columns stretched to fill <see cref="AvailW"/>
+    /// exactly, so the grid reaches edge-to-edge at any window size.</summary>
+    private int TileEdge { get { int c = Columns; return Math.Max(40, (AvailW - (c - 1) * Gap) / c); } }
+    private int TileW => TileEdge;
+    private int TileH => TileEdge;
 
     public PhotoGridView()
     {
@@ -43,7 +60,7 @@ internal sealed class PhotoGridView : Panel
 
     public void SetPhotos(IEnumerable<(uint Id, Bitmap? Thumb)> photos, string emptyText = "No photos yet.")
     {
-        foreach (var t in _tiles) t.Thumb?.Dispose();
+        foreach (var t in _tiles) { t.Tween?.Cancel(); t.Thumb?.Dispose(); }
         _tiles.Clear();
         foreach (var (id, thumb) in photos) _tiles.Add(new Tile { Id = id, Thumb = thumb });
         _empty = emptyText;
@@ -51,18 +68,69 @@ internal sealed class PhotoGridView : Panel
         Invalidate();
     }
 
-    /// <summary>Set a tile's thumbnail once it's been decoded in the background (matched by photo id).</summary>
+    /// <summary>Remove the tiles with these photo ids in place — keeping every surviving tile's already-decoded
+    /// thumbnail and the current scroll position (just re-clamped). Lets a delete refresh the grid without
+    /// rebuilding/re-decoding the whole library or snapping back to the top. Returns how many tiles were removed.</summary>
+    public int RemovePhotos(IReadOnlyCollection<uint> ids)
+    {
+        if (ids.Count == 0 || _tiles.Count == 0) return 0;
+        var set = ids as HashSet<uint> ?? new HashSet<uint>(ids);
+        int removed = _tiles.RemoveAll(t =>
+        {
+            if (!set.Contains(t.Id)) return false;
+            t.Tween?.Cancel(); t.Thumb?.Dispose();   // Cancel() stops the fade without firing onDone on the dead tile
+            return true;
+        });
+        if (removed == 0) return 0;
+        _hover = null;
+        _lastClicked = -1;
+        _scroll = Math.Min(_scroll, MaxScroll());   // a shorter grid may need less scroll; keep position otherwise
+        Invalidate();
+        SelectionChanged?.Invoke();                 // the removed tiles were the selection → it's now empty
+        return removed;
+    }
+
+    /// <summary>Set a tile's thumbnail once it's been decoded in the background (matched by photo id). The thumb
+    /// dissolves in over the placeholder glyph so tiles bloom in softly instead of popping.</summary>
     public void SetThumb(uint id, Bitmap thumb)
     {
-        foreach (var t in _tiles)
-            if (t.Id == id) { t.Thumb?.Dispose(); t.Thumb = thumb; Invalidate(); return; }
+        for (int i = 0; i < _tiles.Count; i++)
+        {
+            var t = _tiles[i];
+            if (t.Id != id) continue;
+            t.Thumb?.Dispose(); t.Thumb = thumb;
+            t.Tween?.Cancel();
+            if (Anim.MotionEnabled) { t.Fade = 0f; int idx = i; t.Tween = Anim.Run(220, v => { t.Fade = (float)v; InvalidateTileAt(idx); }, () => { t.Tween = null; t.Fade = 1f; InvalidateTileAt(idx); }, Easings.OutCubic); }
+            else t.Fade = 1f;
+            InvalidateTileAt(i);   // repaint ONLY this tile, not the whole 1500-tile grid, as each thumb decodes
+            return;
+        }
         thumb.Dispose(); // no matching tile (list changed) — don't leak
+    }
+
+    // Invalidate one tile's rect, computed from the uniform grid + current scroll (correct even if scrolled mid-fade).
+    private void InvalidateTileAt(int index)
+    {
+        if (IsDisposed || index < 0 || index >= _tiles.Count) return;
+        int cols = Columns;
+        int gridW = cols * TileW + Math.Max(0, cols - 1) * Gap;
+        int x0 = Math.Max(Pad, (Width - gridW) / 2);
+        int x = x0 + (index % cols) * (TileW + Gap);
+        int y = Pad - _scroll + (index / cols) * (TileH + Gap);
+        if (y + TileH < 0 || y > Height) return;
+        Invalidate(new Rectangle(x - 1, y - 1, TileW + 2, TileH + 2));
     }
 
     public List<uint> SelectedIds => _tiles.Where(t => t.Selected).Select(t => t.Id).ToList();
     public int Count => _tiles.Count;
+    /// <summary>True when every tile has its decoded thumbnail (the background decode finished) — lets the host
+    /// reuse the grid on a Photos-view revisit instead of re-decoding the whole library.</summary>
+    public bool AllThumbsLoaded => _tiles.Count > 0 && _tiles.All(t => t.Thumb is not null);
 
-    private int Columns => Math.Max(1, (Width - Pad * 2 + Gap) / (TileW + Gap));
+    // Choose the column count so the flexed tile size lands as CLOSE to the target as possible (round, not
+    // floor): widening the window grows tiles smoothly and only adds a column once tiles would otherwise get
+    // noticeably bigger than the target — instead of leaving the extra width as an empty side gutter.
+    private int Columns => AvailW <= 0 ? 1 : Math.Max(1, (int)Math.Round((AvailW + Gap) / (double)(_tileSize + Gap)));
     private int Rows => (int)Math.Ceiling(_tiles.Count / (double)Columns);
     private int ContentHeight => Pad * 2 + Rows * TileH + Math.Max(0, Rows - 1) * Gap;
     private int MaxScroll() => Math.Max(0, ContentHeight - Height);
@@ -196,16 +264,23 @@ internal sealed class PhotoGridView : Panel
             using (var bg = new SolidBrush(hover ? Theme.RowHover : Theme.PanelBg)) g.FillPath(bg, path);
             if (t.Thumb is not null)
             {
+                if (t.Fade < 1f)   // placeholder glyph shows through while the freshly-decoded thumb dissolves in
+                {
+                    using var gf0 = Theme.UiFont(20f);
+                    TextRenderer.DrawText(g, "▦", gf0, rect, Theme.Faint, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
                 var prev = g.InterpolationMode;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                // fit the thumb into the tile, centered, preserving aspect — never enlarge past 1:1
-                // (small native thumbs like the 64×64 Classic/Nano slot stay crisp instead of going blurry).
-                double s = Math.Min(1.0, Math.Min((double)(rect.Width - 12) / t.Thumb.Width, (double)(rect.Height - 12) / t.Thumb.Height));
-                int w = Math.Max(1, (int)(t.Thumb.Width * s)), h = Math.Max(1, (int)(t.Thumb.Height * s));
+                // COVER-fit: scale so the photo fills the whole tile, centred, with the overflow cropped by the
+                // rounded clip below — so landscape/portrait shots zoom to fill the frame instead of sitting
+                // letterboxed with black bars. (Aspect is preserved; only the long edge is cropped.)
+                double s = Math.Max((double)rect.Width / t.Thumb.Width, (double)rect.Height / t.Thumb.Height);
+                int w = Math.Max(1, (int)Math.Ceiling(t.Thumb.Width * s)), h = Math.Max(1, (int)Math.Ceiling(t.Thumb.Height * s));
                 var dest = new Rectangle(rect.X + (rect.Width - w) / 2, rect.Y + (rect.Height - h) / 2, w, h);
                 var clip = g.Clip;
                 g.SetClip(path, CombineMode.Intersect);
-                g.DrawImage(t.Thumb, dest);
+                if (t.Fade < 1f) Theme.DrawImageAlpha(g, t.Thumb, new RectangleF(dest.X, dest.Y, dest.Width, dest.Height), t.Fade);
+                else g.DrawImage(t.Thumb, dest);
                 g.Clip = clip;
                 g.InterpolationMode = prev;
             }
@@ -221,5 +296,11 @@ internal sealed class PhotoGridView : Panel
             using var path = Theme.RoundedRect(new RectangleF(rect.X + 1, rect.Y + 1, rect.Width - 2, rect.Height - 2), 10);
             g.DrawPath(pen, path);
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) foreach (var t in _tiles) { t.Tween?.Cancel(); t.Thumb?.Dispose(); }
+        base.Dispose(disposing);
     }
 }

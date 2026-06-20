@@ -34,7 +34,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
     {
         _s = settings; _device = device; _applyChanged = applyChanged; _reloadDevice = reloadDevice;
 
-        Text = "Settings";
+        Text = Loc.T("Settings");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -50,7 +50,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
         _pane.Controls.Add(_paneScroll);
         _paneScroll.AttachScrollPanel(_pane, _paneBody);
         _pane.Resize += (_, _) => LayoutPane();
-        _nav = new SettingsNav(Categories) { Dock = DockStyle.Left, Width = NavW };
+        _nav = new SettingsNav(Array.ConvertAll(Categories, Loc.T)) { Dock = DockStyle.Left, Width = NavW };
         _nav.Selected += ShowCategory;
         Controls.Add(_pane);
         Controls.Add(_nav);
@@ -109,7 +109,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
         foreach (var c in old) { if (c is Label lbl) lbl.Font.Dispose(); c.Dispose(); }
 
         _y = 6;
-        PageTitle(Categories[index]);
+        PageTitle(Loc.T(Categories[index]));
         switch (index)
         {
             case 0: BuildAppearance(); break;
@@ -184,98 +184,126 @@ internal sealed class SettingsForm : Form, IMessageFilter
 
     private void BuildAppearance()
     {
+        var langNames = Array.ConvertAll(Loc.Languages, l => l.Native);
+        var lang = new SegmentedControl { Options = langNames, SelectedIndex = Math.Max(0, Array.FindIndex(Loc.Languages, l => l.Code == Loc.Lang)), Width = 220 };
+        lang.SelectedChanged += () =>
+        {
+            string code = Loc.Languages[lang.SelectedIndex].Code;
+            if (code == Loc.Lang) return;
+            _s.Language = code; _s.Save();
+            PromptLanguageRestart();
+        };
+        Row(Loc.T("Language"), Loc.T("Choose the app's language. Mixtape restarts to apply."), lang);
+
         var accent = new AccentPicker(_s.Accent);
         accent.AccentChosen += name => { _s.Accent = name; _s.Save(); _applyChanged(); Rebuild(); };
-        Row("Accent colour", "Used for highlights, buttons and selection.", accent);
+        Row(Loc.T("Accent colour"), Loc.T("Used for highlights, buttons and selection."), accent);
 
         var theme = new SegmentedControl { Options = Theme.ThemeVariants, SelectedIndex = Math.Max(0, Array.IndexOf(Theme.ThemeVariants, _s.ThemeVariant)), Width = 432 };
         theme.SelectedChanged += () => { _s.ThemeVariant = Theme.ThemeVariants[theme.SelectedIndex]; _s.Save(); _applyChanged(); BackColor = Theme.Bg; _pane.BackColor = Theme.Bg; _paneBody.BackColor = Theme.Bg; _nav.Invalidate(); Rebuild(); };
-        Row("Background", "The window's colour palette.", theme);
+        Row(Loc.T("Background"), Loc.T("The window's colour palette."), theme);
 
-        var density = new SegmentedControl { Options = new[] { "Comfortable", "Compact" }, SelectedIndex = _s.Compact ? 1 : 0, Width = 220 };
+        var density = new SegmentedControl { Options = new[] { Loc.T("Comfortable"), Loc.T("Compact") }, SelectedIndex = _s.Compact ? 1 : 0, Width = 220 };
         density.SelectedChanged += () => { _s.Compact = density.SelectedIndex == 1; _s.Save(); _applyChanged(); };
-        Row("Row density", "How tall the song rows are.", density);
+        Row(Loc.T("Row density"), Loc.T("How tall the song rows are."), density);
 
-        Row("Show artwork", "Show album/photo covers in lists.", Toggle(_s.ShowArtwork, v => { _s.ShowArtwork = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Show artwork"), Loc.T("Show album/photo covers in lists."), Toggle(_s.ShowArtwork, v => { _s.ShowArtwork = v; _s.Save(); _applyChanged(); }));
+    }
+
+    /// <summary>Offer to relaunch so the new language takes effect. "Restart now" starts a fresh instance with
+    /// <c>--relaunch</c> (which waits for this one's single-instance lock to release) and exits this one.</summary>
+    private void PromptLanguageRestart()
+    {
+        if (MessageDialog.Show(this, Loc.T("The language changes after a restart. Restart Mixtape now?"),
+                Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        try
+        {
+            if (Environment.ProcessPath is string exe)
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "--relaunch") { UseShellExecute = true });
+                Application.Exit();
+            }
+        }
+        catch { }
     }
 
     private void BuildLibrary()
     {
-        string[] sorts = { "Playlist", "Song", "Artist", "Album", "Added", "Time" };
-        var sort = new SegmentedControl { Options = sorts, SelectedIndex = Math.Max(0, Array.IndexOf(sorts, _s.DefaultSort)), Width = 396 };
+        string[] sorts = { "Playlist", "Song", "Artist", "Album", "Added", "Time" };   // stored values (English) — translate only the display
+        var sort = new SegmentedControl { Options = Array.ConvertAll(sorts, Loc.T), SelectedIndex = Math.Max(0, Array.IndexOf(sorts, _s.DefaultSort)), Width = 396 };
         sort.SelectedChanged += () => { _s.DefaultSort = sorts[sort.SelectedIndex]; _s.Save(); _applyChanged(); };
-        Row("Default sort", "Column a list is sorted by when it opens.", sort);
-        Row("Sort descending", "Reverse the default sort order.", Toggle(_s.DefaultSortDescending, v => { _s.DefaultSortDescending = v; _s.Save(); _applyChanged(); }));
-        Row("Show Videos", "List the Videos library (video-capable iPods).", Toggle(_s.ShowVideos, v => { _s.ShowVideos = v; _s.Save(); _applyChanged(); }));
-        Row("Show Photos", "List the Photos library (colour-screen iPods).", Toggle(_s.ShowPhotos, v => { _s.ShowPhotos = v; _s.Save(); _applyChanged(); }));
-        Row("Artist column", "Show the Artist column in the song list.", Toggle(_s.ShowArtist, v => { _s.ShowArtist = v; _s.Save(); _applyChanged(); }));
-        Row("Album column", "Show the Album column in the song list.", Toggle(_s.ShowAlbum, v => { _s.ShowAlbum = v; _s.Save(); _applyChanged(); }));
-        Row("Star rating column", "Show your star ratings in the song list.", Toggle(_s.ShowRating, v => { _s.ShowRating = v; _s.Save(); _applyChanged(); }));
-        Row("Play count column", "Show how many times each song has been played.", Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
-        Row("Date added column", "Show when each song was added to the iPod.", Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
-        Row("Time column", "Show the Time column in the song list.", Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Default sort"), Loc.T("Column a list is sorted by when it opens."), sort);
+        Row(Loc.T("Sort descending"), Loc.T("Reverse the default sort order."), Toggle(_s.DefaultSortDescending, v => { _s.DefaultSortDescending = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Show Videos"), Loc.T("List the Videos library (video-capable iPods)."), Toggle(_s.ShowVideos, v => { _s.ShowVideos = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Show Photos"), Loc.T("List the Photos library (colour-screen iPods)."), Toggle(_s.ShowPhotos, v => { _s.ShowPhotos = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Artist column"), Loc.T("Show the Artist column in the song list."), Toggle(_s.ShowArtist, v => { _s.ShowArtist = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Album column"), Loc.T("Show the Album column in the song list."), Toggle(_s.ShowAlbum, v => { _s.ShowAlbum = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Star rating column"), Loc.T("Show your star ratings in the song list."), Toggle(_s.ShowRating, v => { _s.ShowRating = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Play count column"), Loc.T("Show how many times each song has been played."), Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Date added column"), Loc.T("Show when each song was added to the iPod."), Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Time column"), Loc.T("Show the Time column in the song list."), Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
     }
 
     private void BuildVideo()
     {
-        var quality = new SegmentedControl { Options = new[] { "iPod-safe", "High (Classic)" }, SelectedIndex = string.Equals(_s.VideoQuality, "High", StringComparison.OrdinalIgnoreCase) ? 1 : 0, Width = 230 };
+        var quality = new SegmentedControl { Options = new[] { Loc.T("iPod-safe"), Loc.T("High (Classic)") }, SelectedIndex = string.Equals(_s.VideoQuality, "High", StringComparison.OrdinalIgnoreCase) ? 1 : 0, Width = 230 };
         quality.SelectedChanged += () => { _s.VideoQuality = quality.SelectedIndex == 1 ? "High" : "Safe"; _s.Save(); _applyChanged(); };
-        Row("Quality", "iPod-safe (320×240) plays on every model; High (640×480) is Classic/5.5G only.", quality);
-        Row("Always re-encode", "Convert even files that already look compatible.", Toggle(_s.AlwaysTranscode, v => { _s.AlwaysTranscode = v; _s.Save(); }));
+        Row(Loc.T("Quality"), Loc.T("iPod-safe (320×240) plays on every model; High (640×480) is Classic/5.5G only."), quality);
+        Row(Loc.T("Always re-encode"), Loc.T("Convert even files that already look compatible."), Toggle(_s.AlwaysTranscode, v => { _s.AlwaysTranscode = v; _s.Save(); }));
 
         var ff = FfmpegService.Detect(_s.FfmpegPath);
-        var browse = new ThemedButton { Text = "Browse…", Pill = true, Width = 96, Height = 30 };
+        var browse = new ThemedButton { Text = Loc.T("Browse…"), Pill = true, Width = 96, Height = 30 };
         browse.Click += (_, _) =>
         {
-            using var d = new OpenFileDialog { Title = "Locate ffmpeg.exe", Filter = "ffmpeg|ffmpeg.exe|All files|*.*" };
+            using var d = new OpenFileDialog { Title = Loc.T("Locate ffmpeg.exe"), Filter = "ffmpeg|ffmpeg.exe|All files|*.*" };
             if (d.ShowDialog(this) == DialogResult.OK) { _s.FfmpegPath = d.FileName; _s.Save(); Rebuild(); }
         };
-        Row("ffmpeg", ff is null ? "Not found — install ffmpeg or browse to ffmpeg.exe to enable video conversion." : "Found: " + ff.FfmpegPath, browse);
+        Row("ffmpeg", ff is null ? Loc.T("Not found — install ffmpeg or browse to ffmpeg.exe to enable video conversion.") : Loc.T("Found: {0}", ff.FfmpegPath), browse);
     }
 
     private void BuildPhotos()
     {
-        Row("Store full-screen image", "Also write the 320×240 image so photos look sharp on the iPod (uses more space).",
+        Row(Loc.T("Store full-screen image"), Loc.T("Also write the 320×240 image so photos look sharp on the iPod (uses more space)."),
             Toggle(_s.PhotoStoreFullResolution, v => { _s.PhotoStoreFullResolution = v; _s.Save(); }));
     }
 
     private void BuildSafety()
     {
-        Row("Confirm before writing", "Show a reminder before the first change each session.", Toggle(_s.ConfirmWrites, v => { _s.ConfirmWrites = v; _s.Save(); }));
-        Row("Auto device-ID recovery", "When a hash58 iPod with no stored ID is plugged in, offer to read its hardware ID automatically (a safe, read-only query) so music can be written — no hunting for the “Read device ID” button.", Toggle(_s.AutoGuidRecovery, v => { _s.AutoGuidRecovery = v; _s.Save(); }));
+        Row(Loc.T("Confirm before writing"), Loc.T("Show a reminder before the first change each session."), Toggle(_s.ConfirmWrites, v => { _s.ConfirmWrites = v; _s.Save(); }));
+        Row(Loc.T("Auto device-ID recovery"), Loc.T("When a hash58 iPod with no stored ID is plugged in, offer to read its hardware ID automatically (a safe, read-only query) so music can be written — no hunting for the “Read device ID” button."), Toggle(_s.AutoGuidRecovery, v => { _s.AutoGuidRecovery = v; _s.Save(); }));
         if (_device is not null)
         {
-            var restore = new ThemedButton { Text = "Restore…", Pill = true, Width = 110, Height = 30 };
+            var restore = new ThemedButton { Text = Loc.T("Restore…"), Pill = true, Width = 110, Height = 30 };
             restore.Click += (_, _) => RestoreBackup();
-            Row("Database backup", "Mixtape backs up before every change and verifies the result. Restore rolls back to the previous state.", restore);
+            Row(Loc.T("Database backup"), Loc.T("Mixtape backs up before every change and verifies the result. Restore rolls back to the previous state."), restore);
         }
     }
 
     private void BuildDevice()
     {
-        if (_device is null) { Row("No iPod", "Connect an iPod to see its details.", null); return; }
+        if (_device is null) { Row(Loc.T("No iPod"), Loc.T("Connect an iPod to see its details."), null); return; }
         var p = _device.Profile;
         var rows = new List<(string, string)>
         {
-            ("Model", p.ModelName ?? p.ModelNumber ?? "iPod"),
-            ("Generation", p.GenerationDisplay),
-            ("Capacity", DriveSummary(_device.MountRoot)),
-            ("Signature", p.SchemeLabel),
-            ("Writable", p.CanWrite ? "Yes" : "No"),
-            ("Plays video", p.SupportsVideo ? "Yes" : "No"),
-            ("Shows photos", p.SupportsPhotos ? "Yes" : "No"),
+            (Loc.T("Model"), p.ModelName ?? p.ModelNumber ?? "iPod"),
+            (Loc.T("Generation"), p.GenerationDisplay),
+            (Loc.T("Capacity"), DriveSummary(_device.MountRoot)),
+            (Loc.T("Signature"), p.SchemeLabel),
+            (Loc.T("Writable"), p.CanWrite ? Loc.T("Yes") : Loc.T("No")),
+            (Loc.T("Plays video"), p.SupportsVideo ? Loc.T("Yes") : Loc.T("No")),
+            (Loc.T("Shows photos"), p.SupportsPhotos ? Loc.T("Yes") : Loc.T("No")),
         };
-        if (!string.IsNullOrEmpty(p.SerialNumber)) rows.Add(("Serial", p.SerialNumber!));
-        if (!string.IsNullOrEmpty(p.FirewireGuid)) rows.Add(("FireWire GUID", p.FirewireGuid!));
+        if (!string.IsNullOrEmpty(p.SerialNumber)) rows.Add((Loc.T("Serial"), p.SerialNumber!));
+        if (!string.IsNullOrEmpty(p.FirewireGuid)) rows.Add((Loc.T("FireWire GUID"), p.FirewireGuid!));
         InfoGroup(rows);
         if (!p.CanWrite && p.WriteBlockReason.Length > 0)
-            Row("Why read-only", p.WriteBlockReason, null);
+            Row(Loc.T("Why read-only"), p.WriteBlockReason, null);
     }
 
     private void BuildAbout()
     {
-        Row("Mixtape", "Version 0.10.0", null);
-        Row("A friendly manager for classic iPods", "Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes.", null);
+        Row("Mixtape", Loc.T("Version {0}", "0.11.0"), null);
+        Row(Loc.T("A friendly manager for classic iPods"), Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes."), null);
     }
 
     // ---- row builders ----
@@ -341,13 +369,13 @@ internal sealed class SettingsForm : Form, IMessageFilter
         if (_device is null) return;
         string db = _device.ITunesDbPath, bak = db + ".bak", orig = db + ".original";
         string? source = File.Exists(bak) ? bak : File.Exists(orig) ? orig : null;
-        if (source is null) { MessageBox.Show(this, "No database backup was found on this iPod yet.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-        string which = source == bak ? "the state before the last change (iTunesDB.bak)" : "the original database from before Mixtape first wrote to it";
-        if (MessageBox.Show(this, $"Restore {which}?\n\nThe current database will be replaced.", "Restore database", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        if (source is null) { MessageDialog.Show(this, Loc.T("No database backup was found on this iPod yet."), Loc.T("Restore"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        string which = source == bak ? Loc.T("the state before the last change (iTunesDB.bak)") : Loc.T("the original database from before Mixtape first wrote to it");
+        if (MessageDialog.Show(this, Loc.T("Restore {0}?\n\nThe current database will be replaced.", which), Loc.T("Restore database"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         try { File.Copy(source, db, overwrite: true); }
-        catch (Exception ex) { MessageBox.Show(this, "Restore failed:\n\n" + ex.Message, "Restore", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Restore failed:\n\n{0}", ex.Message), Loc.T("Restore"), MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         _reloadDevice();
-        MessageBox.Show(this, "Database restored.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageDialog.Show(this, Loc.T("Database restored."), Loc.T("Restore"), MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]

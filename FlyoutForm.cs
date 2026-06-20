@@ -68,5 +68,13 @@ internal abstract class FlyoutForm : Form
         Location = new Point(x, y);
         Show();
         Activate();
+
+        // Rise + fade in from just below the resting spot, so the popover reads as emerging from its button
+        // (matches the Settings / Library Doctor dialog entrances). Jumps straight in when motion is off.
+        if (!Anim.MotionEnabled) return;
+        int home = y;
+        Opacity = 0; Top = home + 8;
+        Anim.Run(170, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(8 * (1 - v)); },
+            () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutCubic);
     }
 }

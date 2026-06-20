@@ -10,16 +10,20 @@ namespace iPodCommander;
 internal sealed class DoctorReport
 {
     public int TotalTracks;
+    public int TotalPhotos;                                  // photos scanned (0 if the device has none / wasn't scanned)
     public List<Track> MissingFiles = new();                 // DB rows whose audio file is gone
     public List<(string Path, long Size)> OrphanFiles = new();// media files on the drive no track points at
     public List<List<Track>> DuplicateGroups = new();        // each group sorted best-keeper-first
+    public List<List<Photo>> DuplicatePhotoGroups = new();   // photos with identical thumbnails; each group keeper-first
     public int IncompleteTags;                               // songs missing title/artist/album
     public int AlbumGaps;                                    // albums with a track-number gap (report only)
     public long OrphanBytes;
     public int DuplicateExtras;                             // total copies beyond one-per-group
+    public int DuplicatePhotoExtras;                        // total duplicate photo copies beyond one-per-group
 
     public bool Clean => MissingFiles.Count == 0 && OrphanFiles.Count == 0
-                         && DuplicateExtras == 0 && IncompleteTags == 0 && AlbumGaps == 0;
+                         && DuplicateExtras == 0 && DuplicatePhotoExtras == 0
+                         && IncompleteTags == 0 && AlbumGaps == 0;
 }
 
 /// <summary>The user's chosen fixes. Ids reference Track.UniqueId; files are absolute OS paths.</summary>
@@ -28,8 +32,10 @@ internal sealed class DoctorPlan
     public List<uint> RemoveRows = new();      // missing-file rows → DeleteTrack(id, deleteFile:false)
     public List<uint> DeleteDupTracks = new(); // duplicate extras → row removed; file deleted (guarded)
     public List<string> DeleteFiles = new();   // orphan files → File.Delete (guarded against survivors)
+    public List<uint> DeletePhotoIds = new();  // duplicate photo extras → PhotoLibrary.DeletePhotos + Save
 
-    public bool HasActions => RemoveRows.Count > 0 || DeleteDupTracks.Count > 0 || DeleteFiles.Count > 0;
+    public bool HasActions => RemoveRows.Count > 0 || DeleteDupTracks.Count > 0
+                              || DeleteFiles.Count > 0 || DeletePhotoIds.Count > 0;
 }
 
 internal static class LibraryDoctor
@@ -37,11 +43,16 @@ internal static class LibraryDoctor
     private static readonly HashSet<string> MediaExts = new(StringComparer.OrdinalIgnoreCase)
     { ".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".m4v", ".mp4", ".mov", ".alac", ".flac", ".aax" };
 
-    public static DoctorReport Scan(IpodLibrary lib)
+    public static DoctorReport Scan(IpodLibrary lib, PhotoLibrary? photos = null)
     {
         var dev = lib.Device;
         var tracks = lib.View.Tracks;
-        var rep = new DoctorReport { TotalTracks = tracks.Count };
+        // Snapshot the photo list up front: Scan runs on a background thread, and the user can start a photo
+        // Add/Delete (which structurally mutates the live Model.Photos list) while it runs — enumerating the
+        // live list would throw "Collection was modified". ToArray() is a non-enumerator copy a concurrent
+        // mutation can't break; a slightly-stale snapshot is harmless for a dedup scan (re-runnable).
+        var photoSnapshot = photos?.Photos.ToArray();
+        var rep = new DoctorReport { TotalTracks = tracks.Count, TotalPhotos = photoSnapshot?.Length ?? 0 };
 
         // 1) Referenced files + missing files. Build the set of paths the DB points at; flag any that are gone.
         var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -90,6 +101,27 @@ internal static class LibraryDoctor
 
         // 5) Track-number gaps (report only; conservative to avoid false alarms on partial albums).
         rep.AlbumGaps = CountAlbumGaps(tracks);
+
+        // 6) Duplicate photos: same thumbnail pixels (content hash). Only when the photo DB parsed cleanly
+        //    (SafeToWrite) so we never propose deletes against a DB we couldn't fully read. Keeper = the
+        //    earliest-added existing photo (lowest image id, preserved verbatim); the extra copies are dropped.
+        if (photos is { SafeToWrite: true } && photoSnapshot is { Length: > 1 })
+        {
+            foreach (var g in photoSnapshot
+                         .Where(p => !p.IsNew)   // only dedup photos already on the device — never a not-yet-saved staged add
+                         .Select(p => (Photo: p, Key: photos.ContentKey(p)))
+                         .Where(x => x.Key is not null)
+                         .GroupBy(x => x.Key!)
+                         .Where(g => g.Count() > 1))
+            {
+                var list = g.Select(x => x.Photo)
+                            .OrderBy(p => p.IsNew ? 1 : 0)   // keep an existing (on-device) copy over an unsaved new one
+                            .ThenBy(p => p.ImageId)          // …then the earliest-added
+                            .ToList();
+                rep.DuplicatePhotoGroups.Add(list);
+                rep.DuplicatePhotoExtras += list.Count - 1;
+            }
+        }
 
         return rep;
     }

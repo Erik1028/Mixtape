@@ -54,7 +54,13 @@ internal static class MusicExporter
         // Keep the whole path under Windows' MAX_PATH even when Artist/Album/Title are all long, so the
         // copy succeeds instead of throwing on a deep destination. Leave room for a " (NN)" dedup suffix.
         int budget = 255 - dir.Length - 1 - ext.Length - 6;
-        if (budget >= 4 && baseName.Length > budget) baseName = baseName[..budget].TrimEnd('.', ' ');
+        if (budget < 1)
+            baseName = "_" + (uint)baseName.GetHashCode();   // dir alone is near the ceiling → a tiny stub gives the best chance
+        else if (baseName.Length > budget)
+        {
+            baseName = baseName[..budget].TrimEnd('.', ' ');   // ALWAYS truncate to fit (the old budget>=4 guard skipped this when the path was longest — the exact case it was meant to handle)
+            if (baseName.Length == 0) baseName = "_";
+        }
 
         string p = Path.Combine(dir, baseName + ext);
         for (int n = 2; File.Exists(p); n++) p = Path.Combine(dir, $"{baseName} ({n}){ext}");

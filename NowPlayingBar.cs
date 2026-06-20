@@ -29,8 +29,20 @@ internal sealed class NowPlayingBar : Panel
 
     private Track? _track;
     private Bitmap? _cover;
+    private const int CoverArtPx = 80;   // resolution to decode the bar cover at (drawn ~56px; headroom for DPI scaling)
+    private Bitmap? _coverPrev;          // outgoing cover, held during a track-change cross-dissolve
+    private float _coverFade = 1f;       // 0 = cover just changed (show _coverPrev), 1 = settled (show _cover)
+    private Tween? _coverTween;
     private Bitmap? _backdrop;     // a tiny, heavily-downsampled snapshot of the list above — stretched = a frosted blur
     private bool _playing;
+    private float _playMorph;      // play button: 0 = play triangle, 1 = pause bars (cross-faded on the click)
+    private Tween? _playTween;
+    private float _playTarget;     // the value the in-flight play-morph tween is animating toward (to detect a stale target)
+    // Cached per-paint fonts — Theme.UiFont allocates a fresh GDI Font each call, and OnPaint runs ~33fps while
+    // playing (the eq tween), so building them inline leaked a font handle every frame. Disposed in Dispose().
+    private readonly Font _fTitle = Theme.UiFont(10.5f, FontStyle.Bold);
+    private readonly Font _fSub = Theme.UiFont(8.75f);
+    private readonly Font _fTime = Theme.UiFont(8f);
     private double _volume = 1.0;
     private double _lastVol = 1.0; // last audible level, restored when unmuting from a dragged-to-zero slider
     private bool _muted;
@@ -83,7 +95,7 @@ internal sealed class NowPlayingBar : Panel
             if (!Application.MessageLoop) return;        // never block a headless/automation run
             var form = FindForm();
             if (form is null || !form.Visible) return;    // offscreen render form — don't pop an invisible modal
-            BeginInvoke(() => MessageBox.Show(form, msg, "Preview", MessageBoxButtons.OK, MessageBoxIcon.Information));
+            BeginInvoke(() => MessageDialog.Show(form, msg, "Preview", MessageBoxButtons.OK, MessageBoxIcon.Information));
         };
 
         MouseDown += OnDown;
@@ -226,6 +238,19 @@ internal sealed class NowPlayingBar : Panel
         Invalidate(); Changed?.Invoke();
     }
 
+    /// <summary>Abort an IN-FLIGHT sleep fade (the final 5 s ramp) when playback is (re)started or torn down — else
+    /// the fade would keep ramping the NEW track's gain to silence and FinishSleep would pause it. A sleep timer
+    /// that is still COUNTING DOWN (no fade yet) is intentionally left armed, so it survives normal track changes.</summary>
+    private void CancelSleepFade()
+    {
+        if (_sleepFade is null) return;
+        _sleepFade.Cancel(); _sleepFade = null;
+        _engine.SetSleepGain(1f);
+        _sleepMin = 0;
+        _proOn = _gaplessOn || _crossOn || _normalizeOn || _monoOn;
+        Invalidate();
+    }
+
     /// <summary>Pause playback (e.g. when a video preview opens) without clearing the bar. Returns true if it was playing.</summary>
     public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); Invalidate(); Changed?.Invoke(); return true; }
 
@@ -235,10 +260,10 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Load and play a track's file. <paramref name="cover"/> may be null (a gradient is used).</summary>
     public void Play(Track track, string filePath, Bitmap? cover)
     {
+        CancelSleepFade();   // a (re)start during the final fade means the user is still listening — don't fade/pause it
         _track = track;
         _path = filePath;
-        _cover?.Dispose();
-        _cover = cover is null ? null : new Bitmap(cover);
+        SwapCover(ResolveCover(track, filePath, cover));   // prefer the file's own embedded art; cross-dissolve in
         ClearPending();
         _engine.Volume = _muted ? 0 : _volume;
         if (_gaplessOn || _crossOn)
@@ -261,13 +286,50 @@ internal sealed class NowPlayingBar : Panel
         Changed?.Invoke();
     }
 
+    /// <summary>The cover to show for a track: its OWN embedded art (album-cached, rounded), or — only if the file
+    /// has none — the caller's bitmap (a song-row thumbnail), or null. The caller keeps ownership of
+    /// <paramref name="supplied"/>; the returned bitmap is always a fresh copy the bar owns. This is what stops the
+    /// bar from showing a generated ♪ placeholder while a track that actually has art is playing: the row thumbnail
+    /// the caller passes can still be an unreplaced placeholder (or null in text-only list mode).</summary>
+    private static Bitmap? ResolveCover(Track track, string? filePath, Bitmap? supplied)
+    {
+        if (!string.IsNullOrEmpty(filePath) && ArtworkService.Load(ArtworkService.KeyFor(track), filePath, CoverArtPx) is { } art)
+            return new Bitmap(art);   // ArtworkService returns a shared cached bitmap → clone so our Dispose() can't free it
+        return supplied is null ? null : new Bitmap(supplied);
+    }
+
+    /// <summary>Swap the bar cover, cross-dissolving from the outgoing one (same 220 ms art fade the header uses) so
+    /// a track change doesn't pop. TAKES OWNERSHIP of <paramref name="next"/>; disposes the outgoing when the fade ends.</summary>
+    private void SwapCover(Bitmap? next)
+    {
+        _coverTween?.Cancel(); _coverTween = null;
+        _coverPrev?.Dispose();
+        _coverPrev = _cover;     // hold the outgoing cover for the dissolve
+        _cover = next;
+        if (_coverPrev is null || !Anim.MotionEnabled)
+        {
+            _coverPrev?.Dispose(); _coverPrev = null; _coverFade = 1f;   // nothing to dissolve from (idle → first cover)
+        }
+        else
+        {
+            _coverFade = 0f;
+            _coverTween = Anim.Run(220,
+                v => { _coverFade = (float)v; if (!IsDisposed) Invalidate(CoverRect); },
+                () => { _coverTween = null; _coverPrev?.Dispose(); _coverPrev = null; _coverFade = 1f; if (!IsDisposed) Invalidate(CoverRect); },
+                Easings.OutCubic);
+        }
+        Invalidate(CoverRect);
+    }
+
     /// <summary>Stop playback and return the bar to its idle state (it stays visible).</summary>
     public void StopAndHide()
     {
+        CancelSleepFade();
         _engine.CloseMedia();
         ClearPending();
         _track = null;
         _path = null;
+        _coverTween?.Cancel(); _coverTween = null; _coverPrev?.Dispose(); _coverPrev = null; _coverFade = 1f;
         _cover?.Dispose(); _cover = null;
         _playing = false;
         _scrubFrac = -1;
@@ -322,8 +384,21 @@ internal sealed class NowPlayingBar : Panel
         if (_track is null) return;
         if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); }
         else { _engine.Play(); _playing = true; _smtc?.Playing(); StartEq(); }
-        Invalidate();
+        AnimatePlay();
         Changed?.Invoke();
+    }
+
+    /// <summary>Cross-fade the play button between the triangle and the pause bars when the user toggles it
+    /// (the most-clicked control). Other state changes are reflected instantly by DrawPlayButton.</summary>
+    private void AnimatePlay()
+    {
+        float to = _playing ? 1f : 0f;
+        _playTween?.Cancel(); _playTween = null;
+        _playTarget = to;
+        if (!Anim.MotionEnabled || _track is null) { _playMorph = to; Invalidate(); return; }
+        float from = _playMorph;
+        _playTween = Anim.Run(160, v => { _playMorph = from + (to - from) * (float)v; if (!IsDisposed) Invalidate(); },
+            () => { _playTween = null; _playMorph = to; if (!IsDisposed) Invalidate(); }, Easings.OutCubic);
     }
 
     // The animated equaliser bars (on the cover, while playing). A looping tween advances a phase and
@@ -385,7 +460,11 @@ internal sealed class NowPlayingBar : Panel
         catch { nx.Value.cover?.Dispose(); return; }   // a corrupt next file — don't latch, don't crash the UI tick
         _prefetched = true;                       // latch only AFTER a successful enqueue
         _pendingTrack = nx.Value.track; _pendingPath = nx.Value.path;
-        _pendingCover?.Dispose(); _pendingCover = nx.Value.cover;
+        // Same as Play: prefer the next file's own embedded art so a gapless/crossfade advance never flips to a
+        // placeholder. ResolveCover clones, so dispose the provider's bitmap afterwards.
+        _pendingCover?.Dispose();
+        _pendingCover = ResolveCover(nx.Value.track, nx.Value.path, nx.Value.cover);
+        nx.Value.cover?.Dispose();
     }
 
     // The gapless head crossed into the queued track (marshaled to the UI thread by AudioPlayer): flip the
@@ -395,8 +474,7 @@ internal sealed class NowPlayingBar : Panel
         if (_pendingTrack is null) { _prefetched = false; return; }   // unstaged switch — resync so prefetch can recover
         _track = _pendingTrack;
         _path = _pendingPath ?? path;
-        _cover?.Dispose();
-        _cover = _pendingCover;                    // take ownership of the prefetched cover
+        SwapCover(_pendingCover);                   // cross-dissolve to the prefetched cover (takes ownership)
         _pendingTrack = null; _pendingPath = null; _pendingCover = null;
         _prefetched = false;                       // prefetch the following track on the next tick
         _playing = true;
@@ -618,7 +696,15 @@ internal sealed class NowPlayingBar : Panel
                 // a quiet recessed tile (just above the bar's own shade), not a bright grey box
                 using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.SidebarBg, Color.White, 0.09), Theme.Blend(Theme.SidebarBg, Color.Black, 0.06), Theme.ArtAngle)) g.FillRectangle(ph, cr);
             else
-                g.DrawImage(_cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff)), cr);
+            {
+                var nv = _cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff));
+                if (_coverPrev is not null && _coverFade < 1f)
+                {
+                    g.DrawImage(_coverPrev, cr);                                                            // outgoing holds underneath
+                    Theme.DrawImageAlpha(g, nv, new RectangleF(cr.X, cr.Y, cr.Width, cr.Height), _coverFade); // incoming dissolves in
+                }
+                else g.DrawImage(nv, cr);
+            }
             g.Clip = saved;
         }
         if (idle) Theme.DrawNote(g, cr, Color.FromArgb(110, 255, 255, 255));   // crisp, optically-centred eighth note
@@ -628,15 +714,15 @@ internal sealed class NowPlayingBar : Panel
         // title / artist (hidden when the window is too narrow)
         if (l.ShowTitle)
         {
-            string title = idle ? "Nothing playing" : _track!.DisplayTitle;
-            string sub = idle ? "Pick a song to start"
+            string title = idle ? Loc.T("Nothing playing") : _track!.DisplayTitle;
+            string sub = idle ? Loc.T("Pick a song to start")
                               : string.Join("  •  ", new[] { _track!.Artist, _track.Album }.Where(x => !string.IsNullOrWhiteSpace(x)));
             // Sit the title/artist in the TOP band (aligned with the transport), not vertically centred —
             // otherwise the subtitle drops onto the seek bar + "0:00" times along the bottom.
-            TextRenderer.DrawText(g, title, Theme.UiFont(10.5f, FontStyle.Bold),
+            TextRenderer.DrawText(g, title, _fTitle,
                 new Rectangle(l.TextX, 12, l.TextW, 22), idle ? Theme.Subtle : Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(g, sub, Theme.UiFont(8.75f),
+            TextRenderer.DrawText(g, sub, _fSub,
                 new Rectangle(l.TextX, 34, l.TextW, 16), idle ? Theme.Faint : Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
@@ -658,8 +744,8 @@ internal sealed class NowPlayingBar : Panel
             if (l.ShowTimes)
             {
                 double shown = _scrubFrac >= 0 ? _scrubFrac * dur : pos;
-                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(shown), Theme.UiFont(8f), new Rectangle(l.Seek.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(dur), Theme.UiFont(8f), new Rectangle(l.Seek.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(shown), _fTime, new Rectangle(l.Seek.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(dur), _fTime, new Rectangle(l.Seek.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             }
         }
 
@@ -700,6 +786,7 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Four little accent equaliser bars bouncing in the cover's bottom-right corner — the
     /// universally-recognised "this is playing" cue. Driven by <see cref="_eqPhase"/>; a soft scrim keeps
     /// them legible over any artwork.</summary>
+    private static readonly double[] EqOff = { 0.0, 1.7, 3.3, 5.0 }, EqSpd = { 1.0, 1.35, 0.85, 1.15 };
     private void DrawEqBars(Graphics g, Rectangle cover)
     {
         const int n = 4, bw = 3, gap = 2, maxH = 16;
@@ -717,10 +804,9 @@ internal sealed class NowPlayingBar : Panel
             g.Clip = save;
         }
         using var b = new SolidBrush(Theme.AccentBright);
-        double[] off = { 0.0, 1.7, 3.3, 5.0 }, spd = { 1.0, 1.35, 0.85, 1.15 };
         for (int i = 0; i < n; i++)
         {
-            double idle = 0.18 + 0.14 * (0.5 + 0.5 * Math.Sin(_eqPhase * spd[i] + off[i]));  // gentle baseline so it stays alive
+            double idle = 0.18 + 0.14 * (0.5 + 0.5 * Math.Sin(_eqPhase * EqSpd[i] + EqOff[i]));  // gentle baseline so it stays alive
             double v = Math.Max(idle, _coverViz[i]);                                          // …but rises with the actual music
             float bh = (float)(maxH * Math.Clamp(v, 0.12, 1.0));
             g.FillRectangle(b, x0 + i * (bw + gap), baseY - bh, bw, bh);
@@ -734,18 +820,31 @@ internal sealed class NowPlayingBar : Panel
         using (var b = new SolidBrush(disc)) g.FillEllipse(b, r);
         var c = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
         Color fg = dim ? Theme.Faint : Theme.OnAccent;
-        if (_playing && !dim)
-        {
-            float bw = 3.5f, gap = 3.5f, bh = 13;
-            using var p = new SolidBrush(fg);
-            g.FillRectangle(p, c.X - gap / 2 - bw, c.Y - bh / 2, bw, bh);
-            g.FillRectangle(p, c.X + gap / 2, c.Y - bh / 2, bw, bh);
-        }
-        else
+        if (dim)   // idle → just the play triangle
         {
             using var p = new SolidBrush(fg);
             float s = 6.5f;
             g.FillPolygon(p, new[] { new PointF(c.X - s + 1.5f, c.Y - s), new PointF(c.X - s + 1.5f, c.Y + s), new PointF(c.X + s + 1.5f, c.Y) });
+            return;
+        }
+        // Keep the morph honest: snap to the current state when idle between tweens, and if a non-toggle path
+        // (media key, video preview, track switch) flipped _playing mid-tween, abandon the now-stale tween.
+        float want = _playing ? 1f : 0f;
+        if (_playTween is null) _playMorph = want;
+        else if (_playTarget != want) { _playTween.Cancel(); _playTween = null; _playMorph = want; }
+        float m = _playMorph;                                       // 0 = triangle, 1 = pause bars
+        if (m < 1f)   // play triangle fading out
+        {
+            using var p = new SolidBrush(Color.FromArgb(Math.Clamp((int)Math.Round((1f - m) * 255), 0, 255), fg));
+            float s = 6.5f;
+            g.FillPolygon(p, new[] { new PointF(c.X - s + 1.5f, c.Y - s), new PointF(c.X - s + 1.5f, c.Y + s), new PointF(c.X + s + 1.5f, c.Y) });
+        }
+        if (m > 0f)   // pause bars fading in
+        {
+            using var p = new SolidBrush(Color.FromArgb(Math.Clamp((int)Math.Round(m * 255), 0, 255), fg));
+            float bw = 3.5f, gap = 3.5f, bh = 13;
+            g.FillRectangle(p, c.X - gap / 2 - bw, c.Y - bh / 2, bw, bh);
+            g.FillRectangle(p, c.X + gap / 2, c.Y - bh / 2, bw, bh);
         }
     }
 
@@ -780,15 +879,20 @@ internal sealed class NowPlayingBar : Panel
         DrawModeGlyph(g, r, mode == RepeatMode.One ? "\uE8ED" : "\uE8EE", ModeColor(mode != RepeatMode.Off, hover));
     }
 
+    // Cached for the ~33fps repaint: the glyph rects are a fixed size, so the font is rebuilt only if the size
+    // ever changes, and the centre-format never changes. (Was a per-frame Font + StringFormat allocation.)
+    private static readonly StringFormat ModeGlyphFormat = new() { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+    private static Font? _modeGlyphFont;
+    private static float _modeGlyphSize = -1f;
     private static void DrawModeGlyph(Graphics g, RectangleF r, string glyph, Color c)
     {
         if (ModeFont is null) return;
-        using var f = new Font(ModeFont, Math.Min(r.Width, r.Height) * 0.5f, FontStyle.Regular, GraphicsUnit.Pixel);
+        float sz = Math.Min(r.Width, r.Height) * 0.5f;
+        if (_modeGlyphFont is null || _modeGlyphSize != sz) { _modeGlyphFont?.Dispose(); _modeGlyphFont = new Font(ModeFont, sz, FontStyle.Regular, GraphicsUnit.Pixel); _modeGlyphSize = sz; }
         using var b = new SolidBrush(c);
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
         var savedHint = g.TextRenderingHint;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
-        g.DrawString(glyph, f, b, r, sf);
+        g.DrawString(glyph, _modeGlyphFont, b, r, ModeGlyphFormat);
         g.TextRenderingHint = savedHint;
     }
 
@@ -886,7 +990,7 @@ internal sealed class NowPlayingBar : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _eqAnim?.Cancel(); _sleepFade?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _pendingCover?.Dispose(); _backdrop?.Dispose(); }
+        if (disposing) { _eqAnim?.Cancel(); _coverTween?.Cancel(); _playTween?.Cancel(); _sleepFade?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _coverPrev?.Dispose(); _pendingCover?.Dispose(); _backdrop?.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fTime.Dispose(); }
         base.Dispose(disposing);
     }
 }

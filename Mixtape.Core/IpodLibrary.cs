@@ -99,40 +99,55 @@ internal sealed class IpodLibrary
         }
     }
 
-    /// <summary>Delete a playlist but keep all its songs in the library. Does not save.</summary>
-    public void RemovePlaylist(Playlist pl) => Raw.RemovePlaylist(pl.PersistentId);
+    /// <summary>Delete a playlist but keep all its songs in the library. Does not save. Returns false if the
+    /// playlist couldn't be matched (e.g. an externally-authored list with no persistent id) — the DB is unchanged.</summary>
+    public bool RemovePlaylist(Playlist pl) => Raw.RemovePlaylist(pl.PersistentId);
 
-    /// <summary>Rename a playlist. Does not save.</summary>
-    public void RenamePlaylist(Playlist pl, string newName) => Raw.RenamePlaylist(pl.PersistentId, newName);
+    /// <summary>Rename a playlist. Does not save. Returns false if it couldn't be matched (unchanged DB).</summary>
+    public bool RenamePlaylist(Playlist pl, string newName) => Raw.RenamePlaylist(pl.PersistentId, newName);
 
-    /// <summary>Remove tracks from a playlist while keeping them in the library. Does not save.</summary>
-    public void RemoveFromPlaylist(Playlist pl, IEnumerable<uint> trackIds) =>
+    /// <summary>Remove tracks from a playlist while keeping them in the library. Does not save. Returns false if unchanged.</summary>
+    public bool RemoveFromPlaylist(Playlist pl, IEnumerable<uint> trackIds) =>
         Raw.RemoveTracksFromPlaylist(pl.PersistentId, new HashSet<uint>(trackIds));
 
     /// <summary>Edit a track's tags/rating in the database. Returns false if the track wasn't found. Does not save.</summary>
     public bool EditTrack(uint uniqueId, TrackEdit edit) => Raw.EditTrack(uniqueId, edit);
 
-    /// <summary>Reorder a playlist's tracks to the given unique-id order. Does not save.</summary>
-    public void ReorderPlaylist(Playlist pl, IList<uint> order) => Raw.ReorderPlaylist(pl.PersistentId, order);
+    /// <summary>Reorder a playlist's tracks to the given unique-id order. Does not save. Returns false if unchanged.</summary>
+    public bool ReorderPlaylist(Playlist pl, IList<uint> order) => Raw.ReorderPlaylist(pl.PersistentId, order);
 
     /// <summary>Create a new empty playlist; returns its persistent id. Does not save.</summary>
     public ulong CreatePlaylist(string name) => Raw.CreatePlaylist(name);
 
-    /// <summary>Add existing library tracks to a playlist. Does not save.</summary>
-    public void AddToPlaylist(ulong playlistPid, IEnumerable<uint> trackIds) => Raw.AddTracksToPlaylist(playlistPid, trackIds);
+    /// <summary>Add existing library tracks to a playlist. Does not save. Returns false if the playlist couldn't be matched.</summary>
+    public bool AddToPlaylist(ulong playlistPid, IEnumerable<uint> trackIds) => Raw.AddTracksToPlaylist(playlistPid, trackIds);
 
     public void Save()
     {
+        // Fold the on-device "Play Counts" into the DB so the save PERSISTS them (the iTunes-style sync). It
+        // returns a pre-fold snapshot so a failed write can undo ONLY the fold (keeping the user's staged edits),
+        // and the file is deleted only AFTER a successful write so plays are never added twice.
+        var fold = PlayCounts.FoldIntoRaw(this);
+
         byte[] bytes = Raw.Serialize();
-        ChecksumWriter.Apply(bytes, Device.Profile.Scheme, Device.Profile.FirewireGuid); // sign for hash58 devices; no-op for NONE
-        SafeDbWriter.Write(Device, bytes, Raw.TrackCount);
+        try
+        {
+            ChecksumWriter.Apply(bytes, Device.Profile.Scheme, Device.Profile.FirewireGuid); // sign for hash58 devices; no-op for NONE
+            SafeDbWriter.Write(Device, bytes, Raw.TrackCount);
+        }
+        catch
+        {
+            if (fold is { } undo) Raw = RawDb.Parse(undo.preFold); // roll the fold back so a retry won't double-count
+            throw;
+        }
         // The iTunesDB is now safely on disk. Write the ArtworkDB after it (best-effort: a failure here
         // leaves tracks flagged for art with no thumbnails — the iPod simply shows none, never corruption).
         try { Artwork?.Commit(); } catch { }
+        if (fold is { } done) { try { File.Delete(done.path); } catch { } } // folded + written → clear so plays aren't re-added
         byte[] fresh = File.ReadAllBytes(Device.ITunesDbPath);
         View = ITunesDbReader.Read(fresh);
         Raw = RawDb.Parse(fresh);
-        PlayCounts.Apply(this); // keep on-device play counts/ratings visible after a save+reload
+        PlayCounts.Apply(this); // keep any (now cleared) on-device play counts/ratings visible after a save+reload
     }
 
     private static ulong RandomDbid()

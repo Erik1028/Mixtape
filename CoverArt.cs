@@ -12,31 +12,57 @@ internal static class CoverArt
 {
     public const int Count = 24;
     private const int Styles = 8;
+    /// <summary>Reserved id for the "mixtape cassette" style (well clear of 0..23 and of -1 = automatic).
+    /// Persisted in settings like any other cover id; rendered via <see cref="GenerateTitled"/> with the
+    /// playlist/library name printed on the tape label.</summary>
+    public const int CassetteId = 100;
 
     private static readonly Dictionary<(int Id, int Size), Bitmap> Cache = new();
+    private static readonly Dictionary<(int Size, string Title), Bitmap> CassetteCache = new();
 
-    public static Bitmap Generate(int id, int size)
+    public static Bitmap Generate(int id, int size) => GenerateTitled(id, size, null);
+
+    /// <summary>Like <see cref="Generate"/>, but the cassette style (<see cref="CassetteId"/>) prints
+    /// <paramref name="title"/> on its label. Non-cassette ids ignore the title.</summary>
+    public static Bitmap GenerateTitled(int id, int size, string? title)
     {
+        if (id == CassetteId)
+        {
+            string t = title ?? "";
+            var ck = (size, t);
+            if (CassetteCache.TryGetValue(ck, out var ch)) return ch;
+            // Keyed by free-text title, so unlike the bounded style cache this could grow with renamed playlists.
+            // Cap it; callers clone (header) or hold their own ref (sidebar) so dropping cache refs is safe.
+            if (CassetteCache.Count >= 128) CassetteCache.Clear();
+            var cb = RenderInto(size, (g, s) => PaintCassette(g, s, t));
+            CassetteCache[ck] = cb;
+            return cb;
+        }
         id = ((id % Count) + Count) % Count;
         var key = (id, size);
         if (Cache.TryGetValue(key, out var hit)) return hit;
-
-        var bmp = new Bitmap(size, size);
-        using (var g = Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            double h = id * (360.0 / Count);
-            float r = Math.Max(3, size * Theme.TileFrac);
-            using var clip = Theme.RoundedRect(new RectangleF(0, 0, size - 1, size - 1), r);
-            g.SetClip(clip);
-            Paint(g, id % Styles, h, size);
-            g.ResetClip();
-            using var ip = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), r);
-            using var pen = new Pen(Color.FromArgb(34, 255, 255, 255));
-            g.DrawPath(pen, ip);
-        }
+        var bmp = RenderInto(size, (g, s) => Paint(g, id % Styles, id * (360.0 / Count), s));
         Cache[key] = bmp;
+        return bmp;
+    }
+
+    // Shared chrome for every cover: rounded-clip the body paint, then stroke a faint inner frame.
+    private static Bitmap RenderInto(int size, Action<Graphics, int> body)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        float r = Math.Max(3, size * Theme.TileFrac);
+        using (var clip = Theme.RoundedRect(new RectangleF(0, 0, size - 1, size - 1), r))
+        {
+            g.SetClip(clip);
+            body(g, size);
+            g.ResetClip();
+        }
+        using var ip = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), r);
+        using var pen = new Pen(Color.FromArgb(34, 255, 255, 255));
+        g.DrawPath(pen, ip);
         return bmp;
     }
 
@@ -118,5 +144,54 @@ internal static class CoverArt
         using var b = new SolidBrush(c);
         var pts = new[] { new PointF(-2, s), new PointF(s * 0.32f, s * (baseY - height)), new PointF(s * 0.66f, s * baseY), new PointF(s + 2, s * (baseY - height * 0.6f)), new PointF(s + 2, s) };
         g.FillPolygon(b, pts);
+    }
+
+    // The "mixtape" cassette: a cream shell with the title on the label, a dark tape window with two reels,
+    // and corner screws, over a tinted backdrop. Hue derives from the title so each playlist gets its own colour.
+    private static void PaintCassette(Graphics g, int s, string title)
+    {
+        double h = string.IsNullOrEmpty(title) ? 168 : (Theme.StableHash(title) % 360 + 360) % 360;
+        var full = new Rectangle(0, 0, s, s);
+        using (var b = new LinearGradientBrush(full, Theme.HsvToColor(h, 0.52, 0.44), Theme.HsvToColor(h + 16, 0.66, 0.22), Theme.ArtAngle)) g.FillRectangle(b, full);
+
+        float bw = s * 0.80f, bh = s * 0.54f, bx = (s - bw) / 2f, by = (s - bh) / 2f;
+        var body = new RectangleF(bx, by, bw, bh);
+        Color shell = Theme.HsvToColor(h, 0.10, 0.93);
+        using (var sb = new SolidBrush(shell)) using (var bp = Theme.RoundedRect(body, s * 0.045f)) g.FillPath(sb, bp);
+
+        // label
+        float lx = bx + bw * 0.09f, ly = by + bh * 0.09f, lw = bw * 0.82f, lh = bh * 0.30f;
+        var label = new RectangleF(lx, ly, lw, lh);
+        using (var lb = new SolidBrush(Color.White)) using (var lp = Theme.RoundedRect(label, s * 0.018f)) g.FillPath(lb, lp);
+        Color accent = Theme.HsvToColor(h, 0.78, 0.72);
+        using (var st = new SolidBrush(accent)) g.FillRectangle(st, lx, ly, lw, Math.Max(2f, lh * 0.20f));
+        if (s >= 44 && !string.IsNullOrEmpty(title))
+        {
+            using var f = Theme.UiFont(Math.Max(7f, s * 0.052f), FontStyle.Bold);
+            var tr = Rectangle.Round(new RectangleF(lx + lw * 0.05f, ly + lh * 0.24f, lw * 0.90f, lh * 0.74f));
+            TextRenderer.DrawText(g, title, f, tr, Theme.HsvToColor(h, 0.55, 0.24),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordEllipsis | TextFormatFlags.NoPrefix);
+        }
+
+        // tape window + reels
+        float ww = bw * 0.74f, wh = bh * 0.34f, wx = bx + (bw - ww) / 2f, wy = by + bh * 0.52f;
+        using (var wb = new SolidBrush(Theme.HsvToColor(h, 0.42, 0.13))) using (var wp = Theme.RoundedRect(new RectangleF(wx, wy, ww, wh), s * 0.02f)) g.FillPath(wb, wp);
+        float reelR = wh * 0.36f, ry = wy + wh / 2f;
+        Reel(g, wx + ww * 0.27f, ry, reelR, shell);
+        Reel(g, wx + ww * 0.73f, ry, reelR, shell);
+
+        // corner screws
+        using var sc = new SolidBrush(Theme.HsvToColor(h, 0.08, 0.66));
+        float sr = Math.Max(1.2f, s * 0.009f);
+        foreach (var (px, py) in new[] { (bx + bw * 0.05f, by + bh * 0.08f), (bx + bw * 0.95f, by + bh * 0.08f), (bx + bw * 0.05f, by + bh * 0.92f), (bx + bw * 0.95f, by + bh * 0.92f) })
+            g.FillEllipse(sc, px - sr, py - sr, sr * 2, sr * 2);
+    }
+
+    private static void Reel(Graphics g, float cx, float cy, float r, Color hub)
+    {
+        using (var b = new SolidBrush(Color.FromArgb(255, 66, 60, 54))) g.FillEllipse(b, cx - r, cy - r, r * 2, r * 2);
+        using var pen = new Pen(Color.FromArgb(130, 28, 26, 23), Math.Max(1f, r * 0.16f));
+        for (int i = 0; i < 6; i++) { double a = i * Math.PI / 3; g.DrawLine(pen, cx, cy, cx + (float)Math.Cos(a) * r * 0.92f, cy + (float)Math.Sin(a) * r * 0.92f); }
+        using (var hb = new SolidBrush(hub)) g.FillEllipse(hb, cx - r * 0.36f, cy - r * 0.36f, r * 0.72f, r * 0.72f);
     }
 }

@@ -18,7 +18,7 @@ internal sealed class VideoPreviewDialog : Form
 
     public VideoPreviewDialog(string filePath, string title)
     {
-        Text = string.IsNullOrWhiteSpace(title) ? "Video" : title;
+        Text = string.IsNullOrWhiteSpace(title) ? Loc.T("Video") : title;
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.Black;
         ClientSize = new Size(720, 480 + TransportBar.H);
@@ -37,7 +37,7 @@ internal sealed class VideoPreviewDialog : Form
         _engine.Opened += OnOpened;
         _engine.PositionTick += OnTick;
         _engine.Ended += () => { _playing = false; Refresh(); _bar.Set(1, _engine.Duration.TotalSeconds, _engine.Duration.TotalSeconds, false); };
-        _engine.Failed += msg => { if (Application.MessageLoop && Visible) MessageBox.Show(this, msg, "Video", MessageBoxButtons.OK, MessageBoxIcon.Information); BeginInvoke(Close); };
+        _engine.Failed += msg => { if (Application.MessageLoop && Visible) MessageDialog.Show(this, msg, Loc.T("Video"), MessageBoxButtons.OK, MessageBoxIcon.Information); BeginInvoke(Close); };
 
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Close(); else if (e.KeyCode == Keys.Space) TogglePlay(); };
 

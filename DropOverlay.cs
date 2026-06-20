@@ -9,7 +9,7 @@ namespace iPodCommander;
 /// </summary>
 internal sealed class DropOverlay : Panel
 {
-    private string _caption = "Drop to add";
+    private string _caption = Loc.T("Drop to add");
     public string Caption
     {
         get => _caption;
@@ -64,7 +64,7 @@ internal sealed class DropOverlay : Panel
         TextRenderer.DrawText(g, _caption, Theme.DisplayFont(15f, FontStyle.Bold), title, Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         var sub = new Rectangle(card.Left + 12, title.Bottom + 2, card.Width - 24, 22);
-        TextRenderer.DrawText(g, "Release to add them", Theme.UiFont(9.5f), sub, Theme.Subtle,
+        TextRenderer.DrawText(g, Loc.T("Release to add them"), Theme.UiFont(9.5f), sub, Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
     }
 }

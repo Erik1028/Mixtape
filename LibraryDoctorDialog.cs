@@ -14,7 +14,7 @@ internal sealed class LibraryDoctorDialog : Form
     private readonly DoctorReport _r;
     public DoctorPlan? Plan { get; private set; }
 
-    private ToggleSwitch? _tMissing, _tOrphan, _tDupes;
+    private ToggleSwitch? _tMissing, _tOrphan, _tDupes, _tPhotoDupes;
     private ThemedButton _apply = null!;
 
     private const int W = 620, Pad = 24;
@@ -23,7 +23,7 @@ internal sealed class LibraryDoctorDialog : Form
     public LibraryDoctorDialog(DoctorReport report)
     {
         _r = report;
-        Text = "Library Doctor";
+        Text = Loc.T("Library Doctor");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -41,14 +41,15 @@ internal sealed class LibraryDoctorDialog : Form
 
         Controls.Add(new Label
         {
-            Text = "Library Doctor", Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol,
+            Text = Loc.T("Library Doctor"), Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol,
             AutoSize = false, Left = Pad + 2, Top = y, Width = CardW, Height = 30, TextAlign = ContentAlignment.MiddleLeft,
         });
         y += 34;
 
+        string scanned = _r.TotalPhotos > 0 ? Loc.T("{0} songs and {1} photos", _r.TotalTracks, _r.TotalPhotos) : Loc.T("{0} songs", _r.TotalTracks);
         string summary = _r.Clean
-            ? $"Scanned {_r.TotalTracks} songs — everything looks healthy."
-            : $"Scanned {_r.TotalTracks} songs. Tick what you'd like Mixtape to tidy up:";
+            ? Loc.T("Scanned {0} — everything looks healthy.", scanned)
+            : Loc.T("Scanned {0}. Tick what you'd like Mixtape to tidy up:", scanned);
         Controls.Add(new Label
         {
             Text = summary, Font = Theme.UiFont(9.5f), ForeColor = Theme.Subtle,
@@ -59,8 +60,8 @@ internal sealed class LibraryDoctorDialog : Form
         if (_r.Clean)
         {
             var card = new CardPanel(CardW) { Left = Pad, Top = y };
-            const string cleanDesc = "Your library and the files on the iPod are consistent — no missing files, no duplicates, no stray files.";
-            card.AddRow("✓  No problems found", cleanDesc, null, RowHFor(cleanDesc, null));
+            string cleanDesc = Loc.T("Your library and the files on the iPod are consistent — no missing files, no duplicates, no stray files.");
+            card.AddRow(Loc.T("✓  No problems found"), cleanDesc, null, RowHFor(cleanDesc, null));
             card.Finish(); Controls.Add(card); y += card.Height + 12;
         }
         else
@@ -71,22 +72,29 @@ internal sealed class LibraryDoctorDialog : Form
             if (_r.MissingFiles.Count > 0)
             {
                 _tMissing = MakeToggle(true);
-                string d = $"{_r.MissingFiles.Count} song(s) point to a file that's no longer on the iPod. Remove these dead entries.";
-                fixes.AddRow("Missing files", d, _tMissing, RowHFor(d, _tMissing));
+                string d = Loc.T("{0} song(s) point to a file that's no longer on the iPod. Remove these dead entries.", _r.MissingFiles.Count);
+                fixes.AddRow(Loc.T("Missing files"), d, _tMissing, RowHFor(d, _tMissing));
                 any = true;
             }
             if (_r.DuplicateExtras > 0)
             {
                 _tDupes = MakeToggle(false);
-                string d = $"{_r.DuplicateExtras} duplicate copy(ies) across {_r.DuplicateGroups.Count} song(s). Delete the extras, keeping the best copy of each.";
-                fixes.AddRow("Duplicates", d, _tDupes, RowHFor(d, _tDupes));
+                string d = Loc.T("{0} duplicate copy(ies) across {1} song(s). Delete the extras, keeping the best copy of each.", _r.DuplicateExtras, _r.DuplicateGroups.Count);
+                fixes.AddRow(Loc.T("Duplicates"), d, _tDupes, RowHFor(d, _tDupes));
+                any = true;
+            }
+            if (_r.DuplicatePhotoExtras > 0)
+            {
+                _tPhotoDupes = MakeToggle(false);
+                string d = Loc.T("{0} duplicate photo(s) across {1} set(s). Remove the extra copies, keeping one of each.", _r.DuplicatePhotoExtras, _r.DuplicatePhotoGroups.Count);
+                fixes.AddRow(Loc.T("Duplicate photos"), d, _tPhotoDupes, RowHFor(d, _tPhotoDupes));
                 any = true;
             }
             if (_r.OrphanFiles.Count > 0)
             {
                 _tOrphan = MakeToggle(false);
-                string d = $"{_r.OrphanFiles.Count} file(s) on the iPod ({HumanSize(_r.OrphanBytes)}) aren't in your library. Delete them to reclaim space.";
-                fixes.AddRow("Stray files", d, _tOrphan, RowHFor(d, _tOrphan));
+                string d = Loc.T("{0} file(s) on the iPod ({1}) aren't in your library. Delete them to reclaim space.", _r.OrphanFiles.Count, HumanSize(_r.OrphanBytes));
+                fixes.AddRow(Loc.T("Stray files"), d, _tOrphan, RowHFor(d, _tOrphan));
                 any = true;
             }
             if (any) { fixes.Finish(); Controls.Add(fixes); y += fixes.Height + 12; }
@@ -95,13 +103,13 @@ internal sealed class LibraryDoctorDialog : Form
             if (_r.IncompleteTags > 0 || _r.AlbumGaps > 0)
             {
                 var info = new CardPanel(CardW) { Left = Pad, Top = y };
-                if (_r.IncompleteTags > 0) info.AddInfoRow("Incomplete tags", $"{_r.IncompleteTags} song(s) missing title/artist/album");
-                if (_r.AlbumGaps > 0) info.AddInfoRow("Possibly incomplete albums", $"{_r.AlbumGaps} album(s) with a track-number gap");
+                if (_r.IncompleteTags > 0) info.AddInfoRow(Loc.T("Incomplete tags"), Loc.T("{0} song(s) missing title/artist/album", _r.IncompleteTags));
+                if (_r.AlbumGaps > 0) info.AddInfoRow(Loc.T("Possibly incomplete albums"), Loc.T("{0} album(s) with a track-number gap", _r.AlbumGaps));
                 info.Finish(); Controls.Add(info); y += info.Height + 6;
 
                 Controls.Add(new Label
                 {
-                    Text = "These are shown for awareness — fix them with the upcoming tag editor.",
+                    Text = Loc.T("These are shown for awareness — fix them with the upcoming tag editor."),
                     Font = Theme.UiFont(8.5f), ForeColor = Theme.Faint,
                     AutoSize = false, Left = Pad + 2, Top = y, Width = CardW, Height = 18, TextAlign = ContentAlignment.MiddleLeft,
                 });
@@ -111,14 +119,14 @@ internal sealed class LibraryDoctorDialog : Form
 
         // ---- buttons ----
         y += 6;
-        var close = new ThemedButton { Text = _r.Clean ? "Close" : "Cancel", Pill = true, Width = 100, Height = 32 };
+        var close = new ThemedButton { Text = _r.Clean ? Loc.T("Close") : Loc.T("Cancel"), Pill = true, Width = 100, Height = 32 };
         close.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         close.Left = W - Pad - close.Width; close.Top = y;
         Controls.Add(close);
 
         if (!_r.Clean)
         {
-            _apply = new ThemedButton { Text = "Apply fixes", Pill = true, Primary = true, Width = 130, Height = 32, Enabled = false };
+            _apply = new ThemedButton { Text = Loc.T("Apply fixes"), Pill = true, Primary = true, Width = 130, Height = 32, Enabled = false };
             _apply.Click += OnApply;
             _apply.Left = close.Left - 10 - _apply.Width; _apply.Top = y;
             Controls.Add(_apply);
@@ -151,7 +159,8 @@ internal sealed class LibraryDoctorDialog : Form
     private void UpdateApply()
     {
         if (_apply is null) return;
-        _apply.Enabled = (_tMissing?.Checked ?? false) || (_tDupes?.Checked ?? false) || (_tOrphan?.Checked ?? false);
+        _apply.Enabled = (_tMissing?.Checked ?? false) || (_tDupes?.Checked ?? false)
+                         || (_tPhotoDupes?.Checked ?? false) || (_tOrphan?.Checked ?? false);
     }
 
     private void OnApply(object? sender, EventArgs e)
@@ -162,6 +171,9 @@ internal sealed class LibraryDoctorDialog : Form
         if (_tDupes?.Checked == true)
             foreach (var grp in _r.DuplicateGroups)
                 plan.DeleteDupTracks.AddRange(grp.Skip(1).Select(t => t.UniqueId));   // keep grp[0] (the best)
+        if (_tPhotoDupes?.Checked == true)
+            foreach (var grp in _r.DuplicatePhotoGroups)
+                plan.DeletePhotoIds.AddRange(grp.Skip(1).Select(p => p.ImageId));     // keep grp[0] (the earliest)
         if (_tOrphan?.Checked == true)
             plan.DeleteFiles.AddRange(_r.OrphanFiles.Select(o => o.Path));
         Plan = plan;

@@ -35,6 +35,8 @@ internal sealed class MainForm : Form, IMessageFilter
     private int _artGen;          // bumped each ShowCurrent; cancels stale background art loads
     private int _sidebarArtGen;   // same, for sidebar playlist covers
     private int _photoArtGen;     // same, for the photo grid's background thumbnail decode
+    private PhotoLibrary? _photoShownLib;   // which library the photo grid currently holds decoded thumbs for…
+    private int _photoShownGen = -1;        // …at which Generation, so a revisit can reuse it instead of re-decoding
     private int _sortCol = -1;    // -1 = playlist order; 1=Song 2=Artist 3=Album 4=Rating 5=Plays 6=Added 7=Time
     private bool _sortAsc = true;
     private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "RATING", "PLAYS", "ADDED", "TIME" };
@@ -45,13 +47,15 @@ internal sealed class MainForm : Form, IMessageFilter
     private SidebarRowKind _viewKind = SidebarRowKind.AllSongs; // which top-level view is active
     private PhotoLibrary? _photos;
     private readonly PhotoGridView _photoView = new() { Dock = DockStyle.Fill, Visible = false };
+    private MiniSlider _photoSize = null!;   // photo-grid size slider in the header (Photos view only)
     private readonly Panel _deviceView = new() { Dock = DockStyle.Fill, Visible = false, BackColor = Color.FromArgb(29, 30, 34) };           // clipping viewport
     private readonly Panel _deviceScrollPanel = new() { BackColor = Color.FromArgb(29, 30, 34), Location = new Point(0, 0) }; // scrolled content (moved by its Top; no native bar)
     private readonly ThinScrollBar _deviceScroll = new();                                                                                       // the app's slim dark scrollbar
     private WallpaperPanel? _root;             // gradient shell + caption strip (custom title bar)
     private TableLayoutPanel? _content;        // kept so a theme-variant change can recolour it
-    private Panel? _center;                     // the swappable centre region (cross-dissolved on view switches)
-    private bool _viewTransitionBusy;          // guards against overlapping centre cross-dissolves
+    private Panel? _center;                     // the swappable centre region (animated on view switches)
+    private bool _viewTransitionBusy;          // guards against overlapping centre transitions
+    private const ViewTransition ViewStyle = ViewTransition.Slide;   // the motion for view switches — flip to Fade / Scale to restyle
     // Auto-detect on plug/unplug: WM_DEVICECHANGE kicks this; it fires once after the burst settles + the
     // volume has finished mounting, then re-scans for iPods.
     private readonly System.Windows.Forms.Timer _deviceChangeTimer = new() { Interval = 900 };
@@ -64,6 +68,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private readonly NowPlayingBar _nowPlaying = new() { Dock = DockStyle.Fill, Margin = Padding.Empty };   // no cell margin → reaches the card's bottom corners (and gets its full H=88, not H-6)
     private Track? _playingTrack; // the track in the now-playing bar (for prev/next within the visible list)
     private readonly BrowseGridView _browseView = new() { Dock = DockStyle.Fill, Visible = false };
+    private Panel _gridHost = null!;          // the song-list host (a Dock=Fill centre sibling); set in BuildLayout
     private Func<Track, bool>? _browseFilter; // when set, the song grid is drilled into one album/artist
     private CoverFlowView? _coverFlow;        // immersive album browser overlay (lazily created)
     private UpNextFlyout? _upNext;            // "Up Next" queue popover (floating, rounded; open while non-null)
@@ -78,6 +83,18 @@ internal sealed class MainForm : Form, IMessageFilter
     private const int SidebarIconPx = 36; // render playlist icons at 2× then downscale crisply into the 18px tile
     private DropOverlay? _dropOverlay; // "drop to add" card shown over the content while files are dragged in
     private readonly System.Windows.Forms.Timer _dropHideTimer = new() { Interval = 130 }; // debounce hiding it between controls
+    private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 140 }; // collapse a burst of keystrokes into one grid rebuild
+    // A whisper-faint row divider, reused across every row + paint (was allocated per row, per repaint, during scroll).
+    private readonly Pen _rowDividerPen = new(Theme.Blend(Theme.Bg, Color.White, 0.03));
+    // Inline click-to-rate in the RATING column (col 4): owner-drawn stars with a ghost hover preview.
+    private const int RatingCol = 4, RatingPadX = 8, RatingStarW = 16;
+    private int _ratingHotRow = -1, _ratingHotStar = -1;   // row + star slot (0=clear, 1-5) under the cursor
+    private readonly Font _ratingFont = Theme.UiFont(11.5f);
+    // Drag selected songs from the grid onto a sidebar playlist (reuses AddSelectedToPlaylist).
+    private const string SongDragFormat = "MixtapeSongIds";
+    private bool _songDragArmed;
+    private Point _songDragStart;
+    private int _songDragRow = -1;
 
     public MainForm(bool autoDetect = true)
     {
@@ -105,6 +122,11 @@ internal sealed class MainForm : Form, IMessageFilter
         _sidebar.PlayFileClicked += OnPlayLocalFile;
         _sidebar.RowRightClicked += OnSidebarRightClick;
         _sidebar.PlaylistAreaRightClicked += OnPlaylistAreaRightClick;
+        _sidebar.AllowDrop = true;                            // accept songs dragged from the grid
+        _sidebar.DragEnter += OnSidebarDragOver;
+        _sidebar.DragOver += OnSidebarDragOver;
+        _sidebar.DragLeave += (_, _) => _sidebar.SetDropHighlight(null);
+        _sidebar.DragDrop += OnSidebarDragDrop;
         _header.AddButton.Click += (_, _) => OnAddClicked();
         _header.DeleteButton.Click += (_, _) => OnDeleteClicked();
         _header.CoverButton.Click += (_, _) => OpenCoverFlow();
@@ -177,25 +199,45 @@ internal sealed class MainForm : Form, IMessageFilter
         // The shell floats two rounded cards (sidebar + content) over a themed gradient wallpaper, with
         // our own caption strip on top (the native title bar is removed in WndProc). Manual layout in
         // LayoutShell() positions the cards + window buttons so the wallpaper shows through the gaps.
-        var root = _root = new WallpaperPanel { Dock = DockStyle.Fill, CaptionHeight = CaptionH, ResizeBorder = ResizeBorder };
+        // No empty title strip any more — the cards float right up under a thin draggable wallpaper gap, and the
+        // window buttons live in the header's top-right. CaptionHeight = that top gap (still native-draggable).
+        var root = _root = new WallpaperPanel { Dock = DockStyle.Fill, CaptionHeight = Gap, ResizeBorder = ResizeBorder };
 
         var content = _content = new TableLayoutPanel { Dock = DockStyle.None, ColumnCount = 1, RowCount = 3, BackColor = Theme.Bg, Margin = new Padding(0) };
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));   // compact content header (art · title · actions · status)
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 142));   // content header — now also hosts the window buttons (top-right), so it's a touch taller
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, NowPlayingBar.H));   // now-playing bar — always the bottom row (idle state when nothing plays)
 
         SetupTrackGrid();
         ApplyColumns();
         var gridHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(22, 10, 8, 8) };
+        _gridHost = gridHost;
         // The search box now lives in the header (top-right, left of the action-button stack).
         _search.Dock = DockStyle.None;
         _header.Search = _search;
         _header.Controls.Add(_search);
+
+        // Photo-grid size slider (shown only on the Photos view, above the Add/Delete buttons).
+        _photoView.TileSize = Math.Clamp(_settings.PhotoTileSize, 96, 240);
+        _photoSize = new MiniSlider { Minimum = 96, Maximum = 240, Value = _photoView.TileSize, Width = 150, Height = 28, Visible = false };
+        _photoSize.Changed += v => { _photoView.TileSize = v; _settings.PhotoTileSize = v; };   // live resize
+        _photoSize.Committed += _ => _settings.Save();                                            // persist on release
+        _header.SizeSlider = _photoSize;
+        _header.Controls.Add(_photoSize);
         _search.Changed += q =>
         {
             _searchQuery = q.Trim();
             if (_navigating) return;
-            if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();   // filter the cached list — don't re-scan disk per keystroke
+            // Debounce: each rebuild re-filters the whole library + tears down and repopulates the grid, so a
+            // burst of keystrokes should collapse into ONE rebuild (on a big library this is the search lag).
+            _searchDebounce.Stop();
+            _searchDebounce.Start();
+        };
+        _searchDebounce.Tick += (_, _) =>
+        {
+            _searchDebounce.Stop();
+            if (_navigating) return;
+            if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();   // filter the cached list — don't re-scan disk
             else if (_viewKind != SidebarRowKind.Photos && _viewKind != SidebarRowKind.Device) ShowCurrent();
         };
         // Song list: a fixed custom header on top + a clipping viewport holding the full-height grid,
@@ -274,10 +316,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _sidebar.Dock = DockStyle.None;
         root.Controls.Add(_sidebar);
         root.Controls.Add(content);
-        root.Controls.Add(_btnMini);
-        root.Controls.Add(_btnMin);
-        root.Controls.Add(_btnMax);
-        root.Controls.Add(_btnClose);
+        _header.SetWindowButtons(_btnMini, _btnMin, _btnMax, _btnClose);   // hosted in the header's top-right now
 
         _btnMini.Click += (_, _) => OpenMiniPlayer();
         _btnMin.Click += (_, _) => WindowState = FormWindowState.Minimized;
@@ -308,7 +347,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (w <= 0 || h <= 0) return;
 
         const int sideW = 236;
-        int top = CaptionH, bottom = h - Gap;
+        int top = Gap, bottom = h - Gap;
         _sidebar.Bounds = new Rectangle(Gap, top, sideW, Math.Max(1, bottom - top));
         int cx = Gap + sideW + Gap;
         _content.Bounds = new Rectangle(cx, top, Math.Max(1, w - cx - Gap), Math.Max(1, bottom - top));
@@ -317,13 +356,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _root.InvalidateWallpaper();   // card bounds moved → re-bake the wallpaper + shadow the carving samples
         if (_coverFlow is { Visible: true }) { LayoutCoverFlow(); _coverFlow.BringToFront(); }
 
-        const int bw = 46, bh = CaptionH;
-        _btnClose.Bounds = new Rectangle(w - bw, 0, bw, bh);
-        _btnMax.Bounds = new Rectangle(w - bw * 2, 0, bw, bh);
-        _btnMin.Bounds = new Rectangle(w - bw * 3, 0, bw, bh);
-        _btnMini.Bounds = new Rectangle(w - bw * 4, 0, bw, bh);
-        _btnMini.BringToFront(); _btnMin.BringToFront(); _btnMax.BringToFront(); _btnClose.BringToFront();
-        _btnMax.Maximized = WindowState == FormWindowState.Maximized;
+        _btnMax.Maximized = WindowState == FormWindowState.Maximized;   // window buttons are positioned by the header now
         ScheduleBarBackdrop();   // size changed → refresh the frosted bar
     }
 
@@ -391,17 +424,28 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.Columns.Add(time);
 
         _tracks.ColumnHeadersVisible = false;              // a fixed TrackHeader strip replaces it (so the grid can scroll whole)
-        _tracks.RowsAdded += (_, _) => SizeTracks();       // keep the full-content height current as rows change
-        _tracks.RowsRemoved += (_, _) => SizeTracks();
+        // Keep the full-content height current as rows change — but NOT once per row during a bulk populate
+        // (that fired SizeTracks N times per view switch, each re-setting Height + re-clamping scroll). The
+        // populate paths call SizeTracks() once after the loop instead.
+        _tracks.RowsAdded += (_, _) => { if (!_populatingGrid) SizeTracks(); };
+        _tracks.RowsRemoved += (_, _) => { if (!_populatingGrid) SizeTracks(); };
+        _tracks.RowPrePaint += OnRowPrePaint;
         _tracks.RowPostPaint += OnRowPostPaint;
         _tracks.SelectionChanged += (_, _) => OnTrackSelectionChanged();
         _tracks.CellMouseEnter += (_, e) => SetHotRow(e.RowIndex);
-        _tracks.MouseLeave += (_, _) => SetHotRow(-1);
+        _tracks.MouseLeave += (_, _) => { SetHotRow(-1); ClearRatingHover(); };
         _tracks.MouseDown += OnTrackMouseDown;
         _tracks.MouseDown += OnReorderMouseDown;
+        _tracks.MouseDown += OnSongDragMouseDown;              // arm a drag of the selection onto a playlist
         _tracks.MouseMove += OnReorderMouseMove;
+        _tracks.MouseMove += OnSongDragMouseMove;
         _tracks.MouseUp += OnReorderMouseUp;
-        _tracks.CellMouseDoubleClick += (_, e) => { if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count) ActivateTrackRow(e.RowIndex); };
+        _tracks.MouseUp += (_, _) => _songDragArmed = false;
+        _tracks.CellPainting += OnRatingCellPainting;          // owner-draw the RATING column (stars + hover preview)
+        _tracks.CellMouseMove += OnRatingCellMouseMove;        // ghost-star hover preview
+        _tracks.CellMouseClick += OnRatingCellClick;           // click a star to set the rating inline
+        _tracks.CellMouseLeave += (_, e) => { if (e.ColumnIndex == RatingCol) ClearRatingHover(); };
+        _tracks.CellMouseDoubleClick += (_, e) => { if (e.ColumnIndex != RatingCol && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count) ActivateTrackRow(e.RowIndex); };
         _tracks.Paint += (_, e) =>
         {
             // friendly empty-state when the list has no rows (the grid fills the viewport when empty)
@@ -428,6 +472,20 @@ internal sealed class MainForm : Form, IMessageFilter
         };
     }
 
+    private void OnRowPrePaint(object? sender, DataGridViewRowPrePaintEventArgs e)
+    {
+        // Fill the FULL row width with its background BEFORE the cells paint. In the live (double-buffered)
+        // paint, DataGridView's per-cell fill leaves a 1px sliver of the un-cleared (black) buffer at the
+        // fractional Fill-column boundaries — that sliver reads as a faint vertical "grid" seam (Bg darkened
+        // ~26%). DrawToBitmap tiles columns exactly so it never shows there. An opaque base fill turns those
+        // slivers into Bg instead of black, killing the seam without touching the (intentional) row dividers.
+        if (e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
+        Color bg = _tracks.Rows[e.RowIndex].Selected ? Theme.Blend(Theme.Bg, Theme.Accent, 0.12)
+            : e.RowIndex == _hotRow ? Theme.RowHover : Theme.Bg;
+        using var b = new SolidBrush(bg);
+        e.Graphics.FillRectangle(b, e.RowBounds);
+    }
+
     private void OnRowPostPaint(object? sender, DataGridViewRowPostPaintEventArgs e)
     {
         var b = e.RowBounds;
@@ -437,7 +495,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int x0 = b.X + (artCol.Visible ? artCol.Width : 0);
         // A whisper-faint row divider — just enough to separate tracks without reading as a grid.
         // Draw it FIRST on integer bounds with AA off so it stays a true crisp 1px.
-        using (var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.03))) e.Graphics.DrawLine(pen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
+        e.Graphics.DrawLine(_rowDividerPen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
         // Selection is carried by one crisp, bright accent bar (the row fill itself only whispers a tint).
         if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
         {
@@ -446,6 +504,94 @@ internal sealed class MainForm : Form, IMessageFilter
             using var bp = Theme.RoundedRect(new RectangleF(b.X, b.Y + 1, 4, b.Height - 2), 2);
             e.Graphics.FillPath(bar, bp);
         }
+    }
+
+    // ---- inline click-to-rate (RATING column) ----
+
+    private bool CanEditRatings => _lib is not null && _device is not null && _device.Profile.CanWrite;
+
+    private void ClearRatingHover()
+    {
+        if (_ratingHotRow < 0) return;
+        int row = _ratingHotRow; _ratingHotRow = -1; _ratingHotStar = -1;
+        if (row < _tracks.Rows.Count) _tracks.InvalidateCell(RatingCol, row);
+    }
+
+    /// <summary>Which star (1-5) a cell-relative X falls on; 0 = the clear zone left of the first star.</summary>
+    private static int RatingStarFromX(int xInCell)
+    {
+        int rel = xInCell - RatingPadX;
+        return rel < 0 ? 0 : Math.Clamp(rel / RatingStarW + 1, 0, 5);
+    }
+
+    private void OnRatingCellMouseMove(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.ColumnIndex != RatingCol || e.RowIndex < 0 || !CanEditRatings) { ClearRatingHover(); return; }
+        int star = RatingStarFromX(e.X);
+        if (_ratingHotRow == e.RowIndex && _ratingHotStar == star) return;
+        int prev = _ratingHotRow;
+        _ratingHotRow = e.RowIndex; _ratingHotStar = star;
+        if (prev >= 0 && prev != e.RowIndex && prev < _tracks.Rows.Count) _tracks.InvalidateCell(RatingCol, prev);
+        _tracks.InvalidateCell(RatingCol, e.RowIndex);
+    }
+
+    private void OnRatingCellClick(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || e.ColumnIndex != RatingCol || e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
+        if (_tracks.Rows[e.RowIndex].Tag is not Track t) return;
+        if (!CanEditRatings) { if (_device is not null) SetStatus(Loc.T("This iPod is read-only — {0}", _device.Profile.WriteBlockReason)); return; }
+        int star = RatingStarFromX(e.X);
+        int curStars = Math.Min(5, t.Rating / 20);
+        byte newRating = star == 0 || star == curStars ? (byte)0 : (byte)(star * 20);  // click the current level (or left of ★1) to clear
+        if (newRating == t.Rating) return;
+        SetRatingInline(t, e.RowIndex, newRating);
+    }
+
+    /// <summary>Owner-draw the RATING cell: filled stars for the saved rating, a ghost-star preview on hover.
+    /// Fixed star geometry (RatingPadX + i·RatingStarW) so the hit-test in <see cref="RatingStarFromX"/> lines up.</summary>
+    private void OnRatingCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (e.ColumnIndex != RatingCol || e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
+        if (_tracks.Rows[e.RowIndex].Tag is not Track t) return;
+        var g = e.Graphics!;
+        // Background already painted by OnRowPrePaint (full-row fill) — just draw stars over it.
+        int curStars = Math.Min(5, t.Rating / 20);
+        bool hovering = CanEditRatings && e.RowIndex == _ratingHotRow;
+        int shown = hovering ? _ratingHotStar : curStars;     // how many filled stars
+        bool ghosts = hovering || curStars > 0;               // empty slots only when rated or hovering
+        bool selected = _tracks.Rows[e.RowIndex].Selected;
+        Color fill = hovering ? Theme.AccentBright : selected ? Color.White : Theme.Accent;
+        var cb = e.CellBounds;
+        for (int i = 0; i < 5; i++)
+        {
+            if (i >= shown && !ghosts) break;
+            var slot = new Rectangle(cb.X + RatingPadX + i * RatingStarW, cb.Y, RatingStarW, cb.Height);
+            TextRenderer.DrawText(g, i < shown ? "★" : "☆", _ratingFont, slot, i < shown ? fill : Theme.Faint,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>Apply a rating to one track through the verified write path, then refresh just its cell so the
+    /// list keeps its scroll + selection (no full rebuild). UniqueId is stable across a simple rewrite.</summary>
+    private void SetRatingInline(Track t, int rowIndex, byte rating)
+    {
+        if (!CanEditRatings || !ConfirmWriteOnce()) return;
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            _lib!.EditTrack(t.UniqueId, new TrackEdit { Rating = rating });
+            _lib.Save();
+        }
+        catch (Exception ex)
+        {
+            MessageDialog.Show(this, Loc.T("Saving failed (a backup was kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        finally { Cursor = Cursors.Default; }
+        t.Rating = rating;   // keep the grid's track object in sync for display
+        if (rowIndex >= 0 && rowIndex < _tracks.Rows.Count) { _tracks.Rows[rowIndex].Cells[RatingCol].Value = RatingStars(rating); _tracks.InvalidateRow(rowIndex); }
+        SetStatus(rating > 0 ? Loc.T("Rated “{0}” {1}★.", t.DisplayTitle, rating / 20) : Loc.T("Cleared the rating for “{0}”.", t.DisplayTitle));
     }
 
     /// <summary>Sort by a clicked header column (asc → desc → off), like the old grid header click.</summary>
@@ -532,6 +678,63 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void ScrollGrid(int dir) => _tracks.ScrollByPixels(dir * Math.Max(1, _tracks.RowTemplate.Height));
 
+    // ---- drag selected songs from the grid onto a sidebar playlist ----
+
+    private void OnSongDragMouseDown(object? sender, MouseEventArgs e)
+    {
+        _songDragArmed = false;
+        // Reorder owns the left-drag inside a reorderable playlist; elsewhere a left-drag means "add to a playlist".
+        if (e.Button != MouseButtons.Left || CanReorderPlaylist) return;
+        if (_lib is null || _device is null || !_device.Profile.CanWrite) return;   // nothing to add to without a writable iPod
+        int row = _tracks.HitTest(e.X, e.Y).RowIndex;
+        if (row < 0) return;
+        _songDragRow = row; _songDragStart = e.Location; _songDragArmed = true;
+    }
+
+    private void OnSongDragMouseMove(object? sender, MouseEventArgs e)
+    {
+        if (!_songDragArmed || (e.Button & MouseButtons.Left) == 0) return;
+        if (Math.Abs(e.X - _songDragStart.X) < 5 && Math.Abs(e.Y - _songDragStart.Y) < 5) return; // a click, not a drag
+        _songDragArmed = false;
+        var ids = SongDragIds(_songDragRow);
+        if (ids.Count == 0) return;
+        try { _tracks.DoDragDrop(new DataObject(SongDragFormat, ids), DragDropEffects.Copy); } catch { }
+    }
+
+    /// <summary>Track ids for a song-drag: the whole pre-click selection if the grabbed row was part of it, else just it.</summary>
+    private List<uint> SongDragIds(int grabbedRow)
+    {
+        var snap = _tracks.PreClickSelection;
+        var rows = snap.Count > 1 && snap.Contains(grabbedRow) ? snap : new List<int> { grabbedRow };
+        var ids = new List<uint>();
+        foreach (int i in rows) if (i >= 0 && i < _tracks.Rows.Count && _tracks.Rows[i].Tag is Track t) ids.Add(t.UniqueId);
+        return ids;
+    }
+
+    /// <summary>The valid playlist drop target for the current sidebar drag (writable user playlist), or null.</summary>
+    private Playlist? SidebarDropTarget(DragEventArgs e)
+    {
+        if (e.Data?.GetDataPresent(SongDragFormat) != true || _db is null || _device is null || !_device.Profile.CanWrite) return null;
+        var pl = _sidebar.PlaylistAtPoint(_sidebar.PointToClient(new Point(e.X, e.Y)));
+        if (pl is null || ReferenceEquals(pl, _db.Master) || pl.IsPodcast || pl.PersistentId == 0) return null;
+        return pl;
+    }
+
+    private void OnSidebarDragOver(object? sender, DragEventArgs e)
+    {
+        var pl = SidebarDropTarget(e);
+        e.Effect = pl is not null ? DragDropEffects.Copy : DragDropEffects.None;
+        _sidebar.SetDropHighlight(pl);
+    }
+
+    private void OnSidebarDragDrop(object? sender, DragEventArgs e)
+    {
+        var pl = SidebarDropTarget(e);
+        _sidebar.SetDropHighlight(null);
+        if (pl is null || e.Data?.GetData(SongDragFormat) is not List<uint> ids || ids.Count == 0) return;
+        AddSelectedToPlaylist(pl, ids);
+    }
+
     /// <summary>Queue a (debounced) recapture of the frosted now-playing-bar backdrop — coalesces bursts of
     /// scroll/layout events into one capture once things settle.</summary>
     private void ScheduleBarBackdrop() { _backdropTimer.Stop(); _backdropTimer.Start(); }
@@ -574,11 +777,13 @@ internal sealed class MainForm : Form, IMessageFilter
         order.Insert(to, moved);
 
         if (!ConfirmWriteOnce()) return;
-        try { Cursor = Cursors.WaitCursor; _lib.ReorderPlaylist(_current, order); _lib.Save(); }
-        catch (Exception ex) { MessageBox.Show(this, "Write failed (a backup was kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        bool ok;
+        try { Cursor = Cursors.WaitCursor; ok = _lib.ReorderPlaylist(_current, order); if (ok) _lib.Save(); }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Write failed (a backup was kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         finally { Cursor = Cursors.Default; }
+        if (!ok) { ShowPlaylistNotEditable(); return; }
         ReloadAfterEdit();
-        SetStatus("Playlist order updated.");
+        SetStatus(Loc.T("Playlist order updated."));
     }
 
     private void SetHotRow(int row)
@@ -598,7 +803,7 @@ internal sealed class MainForm : Form, IMessageFilter
         string? path = ResolvePlayPath(t);
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
         {
-            MessageBox.Show(this, "The file for this item can't be found, so it can't be played.", "Play", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("The file for this item can't be found, so it can't be played."), Loc.T("Play"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         if (MediaType.IsVideo(t.MediaType)) OpenVideoPreview(t, path);
@@ -739,7 +944,7 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     private static string PhotoCaption(Photo p, int index) =>
-        p.Date is DateTime d && d.Year > 1970 ? d.ToString("yyyy. MM. dd. HH:mm") : $"Photo {index + 1}";
+        p.Date is DateTime d && d.Year > 1970 ? d.ToString("yyyy. MM. dd. HH:mm") : Loc.T("Photo {0}", index + 1);
 
     /// <summary>The selected track rows as Track objects, in visible (top-to-bottom) order.</summary>
     private List<Track> SelectedTracks()
@@ -755,10 +960,10 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         var sel = SelectedTracks();
         if (sel.Count == 0) return;
-        var pn = new ToolStripMenuItem(sel.Count > 1 ? $"Play next   ({sel.Count})" : "Play next");
+        var pn = new ToolStripMenuItem(sel.Count > 1 ? Loc.T("Play next   ({0})", sel.Count) : Loc.T("Play next"));
         pn.Click += (_, _) => _queue.PlayNext(sel);
         m.Items.Add(pn);
-        var aq = new ToolStripMenuItem(sel.Count > 1 ? $"Add to queue   ({sel.Count})" : "Add to queue");
+        var aq = new ToolStripMenuItem(sel.Count > 1 ? Loc.T("Add to queue   ({0})", sel.Count) : Loc.T("Add to queue"));
         aq.Click += (_, _) => _queue.Add(sel);
         m.Items.Add(aq);
     }
@@ -768,20 +973,23 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_lib is null || _device is null || !_device.Profile.CanWrite) return;
         var sel = SelectedTracks();
-        if (sel.Count == 0) { SetStatus("Select a song to edit."); return; }
-        var t = sel[0];
+        if (sel.Count == 0) { SetStatus(Loc.T("Select a song to edit.")); return; }
 
-        using var dlg = new TrackInfoDialog(t);
+        using var dlg = new TrackInfoDialog(sel);   // one song, or the whole selection (shared fields applied to all)
         if (dlg.ShowDialog(this) != DialogResult.OK || !dlg.HasChanges) return;
         if (!ConfirmWriteOnce()) return;
 
+        var edit = dlg.Edit;
         Exception? error = null;
-        using (var prog = new CopyProgressDialog("Saving song info", 1, (report, cancelled) =>
+        using (var prog = new CopyProgressDialog(Loc.T("Saving song info"), sel.Count, (report, cancelled) =>
         {
-            report(0, "Updating “" + t.DisplayTitle + "”");
-            _lib!.EditTrack(t.UniqueId, dlg.Edit);
+            for (int i = 0; i < sel.Count; i++)
+            {
+                report(i, sel.Count == 1 ? Loc.T("Updating “{0}”", sel[i].DisplayTitle) : Loc.T("Updating {0} of {1} songs…", i + 1, sel.Count));
+                _lib!.EditTrack(sel[i].UniqueId, edit);
+            }
             _lib!.Save();
-            report(1, "Done");
+            report(sel.Count, Loc.T("Done"));
         }))
         {
             prog.ShowDialog(this);
@@ -789,9 +997,9 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         ReloadAfterEdit();
         if (error is not null)
-            MessageBox.Show(this, "Saving failed (a backup was kept as iTunesDB.bak):\n\n" + error.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageDialog.Show(this, Loc.T("Saving failed (a backup was kept as iTunesDB.bak):\n\n{0}", error.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
         else
-            SetStatus($"Updated “{dlg.Edit.Title ?? t.DisplayTitle}”.");
+            SetStatus(sel.Count == 1 ? Loc.T("Updated “{0}”.", edit.Title ?? sel[0].DisplayTitle) : Loc.T("Updated {0} songs.", sel.Count));
     }
 
     /// <summary>Copy the selected songs off the iPod to a folder on the PC (Artist/Album/NN Title), retagged.</summary>
@@ -799,30 +1007,30 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_device is null) return;
         var tracks = SelectedTracks();
-        if (tracks.Count == 0) { SetStatus("Select one or more songs to copy to the PC."); return; }
-        using var dlg = new FolderBrowserDialog { Description = $"Copy {tracks.Count} song(s) from the iPod into this folder", ShowNewFolderButton = true };
+        if (tracks.Count == 0) { SetStatus(Loc.T("Select one or more songs to copy to the PC.")); return; }
+        using var dlg = new FolderBrowserDialog { Description = Loc.T("Copy {0} song(s) from the iPod into this folder", tracks.Count), ShowNewFolderButton = true };
         if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath)) return;
         string dest = dlg.SelectedPath, mount = _device.MountRoot;
 
         int ok = 0, missing = 0;
         var errors = new List<string>();
-        using var prog = new CopyProgressDialog("Copying songs to your PC", tracks.Count, (report, cancelled) =>
+        using var prog = new CopyProgressDialog(Loc.T("Copying songs to your PC"), tracks.Count, (report, cancelled) =>
         {
             for (int i = 0; i < tracks.Count; i++)
             {
                 if (cancelled()) break;
                 var t = tracks[i];
-                report(i, $"Copying {i + 1} of {tracks.Count}   ·   {t.DisplayTitle}");
+                report(i, Loc.T("Copying {0} of {1}   ·   {2}", i + 1, tracks.Count, t.DisplayTitle));
                 try { if (MusicExporter.ExportOne(t, mount, dest, organize: true, applyTags: true) is null) missing++; else ok++; }
                 catch (Exception ex) { errors.Add($"{t.DisplayTitle}: {ex.Message}"); }
             }
         });
         prog.ShowDialog(this);
 
-        string msg = prog.WasCancelled ? $"Stopped — copied {ok} song(s)." : $"Copied {ok} song(s) to:\n{dest}";
-        if (missing > 0) msg += $"\n\n{missing} had no file on the iPod (skipped).";
-        if (errors.Count > 0) msg += $"\n\n{errors.Count} failed:\n• " + string.Join("\n• ", errors.Take(8));
-        MessageBox.Show(this, msg, "Copy to PC", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        string msg = prog.WasCancelled ? Loc.T("Stopped — copied {0} song(s).", ok) : Loc.T("Copied {0} song(s) to:\n{1}", ok, dest);
+        if (missing > 0) msg += Loc.T("\n\n{0} had no file on the iPod (skipped).", missing);
+        if (errors.Count > 0) msg += Loc.T("\n\n{0} failed:\n• ", errors.Count) + string.Join("\n• ", errors.Take(8));
+        MessageDialog.Show(this, msg, Loc.T("Copy to PC"), MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 
     // ---- detection / device load ----
@@ -846,7 +1054,7 @@ internal sealed class MainForm : Form, IMessageFilter
             if (_devices.Count > 0) LoadDevice(_devices[0]);
             else ShowNoDevice();
         }
-        catch (Exception ex) { if (!IsDisposed) { SetStatus("Detection error: " + ex.Message); ShowNoDevice(); } }
+        catch (Exception ex) { if (!IsDisposed) { SetStatus(Loc.T("Detection error: {0}", ex.Message)); ShowNoDevice(); } }
         finally { _scanning = false; }
     }
 
@@ -858,7 +1066,7 @@ internal sealed class MainForm : Form, IMessageFilter
         SetCenter();
         _tracks.Rows.Clear();
         _emptyMsg = "";
-        _header.SetInfo("", "Looking for your iPod…", "Scanning for a connected iPod.", 0);
+        _header.SetInfo("", Loc.T("Looking for your iPod…"), Loc.T("Scanning for a connected iPod."), 0);
         SetActionButtons();
         BuildSidebar();
     }
@@ -872,7 +1080,7 @@ internal sealed class MainForm : Form, IMessageFilter
         SetCenter();
         _tracks.Rows.Clear();
         _emptyMsg = ""; // the header already says "No iPod connected" — don't also draw a stale grid message
-        _header.SetInfo("", "No iPod connected", "Plug in your iPod — Mixtape detects it automatically. Or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows.", 0);
+        _header.SetInfo("", Loc.T("No iPod connected"), Loc.T("Plug in your iPod — Mixtape detects it automatically. Or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows."), 0);
         SetActionButtons(); // recompute visibility + the "No iPod is connected" blocked reason
         BuildSidebar();
         SetStatus("");   // the header already says "No iPod connected" — don't echo it at the bottom too
@@ -885,7 +1093,7 @@ internal sealed class MainForm : Form, IMessageFilter
         string root = _device.MountRoot;
         if (root.Length < 2 || root[1] != ':')
         {
-            MessageBox.Show(this, "This iPod isn't on a drive letter, so it can't be ejected from here. Use Windows' “Safely Remove Hardware”.", "Eject", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("This iPod isn't on a drive letter, so it can't be ejected from here. Use Windows' “Safely Remove Hardware”."), Loc.T("Eject"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         char drive = root[0];
@@ -900,11 +1108,11 @@ internal sealed class MainForm : Form, IMessageFilter
             _ejectedRoot = root;        // don't let auto-detect re-adopt it until it's physically replugged
             _deviceChangeTimer.Stop();
             ShowNoDevice();
-            SetStatus("Ejected — safe to unplug your iPod.");
+            SetStatus(Loc.T("Ejected — safe to unplug your iPod."));
         }
         else
         {
-            MessageBox.Show(this, "Couldn't eject the iPod:\n\n" + result.msg, "Eject", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageDialog.Show(this, Loc.T("Couldn't eject the iPod:\n\n{0}", result.msg), Loc.T("Eject"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
@@ -939,7 +1147,7 @@ internal sealed class MainForm : Form, IMessageFilter
                     if (string.Equals(found[i].MountRoot, _device!.MountRoot, StringComparison.OrdinalIgnoreCase)) found[i] = _device!;
                 _devices.Clear(); _devices.AddRange(found);
                 BuildSidebar();
-                SetStatus($"{found.Count} iPod{(found.Count == 1 ? "" : "s")} connected.");
+                SetStatus(found.Count == 1 ? Loc.T("{0} iPod connected.", found.Count) : Loc.T("{0} iPods connected.", found.Count));
             }
             return;
         }
@@ -952,12 +1160,12 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void OpenFolder()
     {
-        using var dlg = new FolderBrowserDialog { Description = "Select the iPod's drive root (the folder that contains iPod_Control)" };
+        using var dlg = new FolderBrowserDialog { Description = Loc.T("Select the iPod's drive root (the folder that contains iPod_Control)") };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         var device = DeviceDetector.Build(dlg.SelectedPath);
         if (device is null)
         {
-            MessageBox.Show(this, "That folder has no iPod_Control directory, so it isn't an iPod root.", "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("That folder has no iPod_Control directory, so it isn't an iPod root."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         LoadDevice(device);
@@ -1000,8 +1208,8 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch (Exception ex)
         {
-            SetStatus("Failed to read iTunesDB: " + ex.Message);
-            MessageBox.Show(this, "Could not read this iPod's database:\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            SetStatus(Loc.T("Failed to read iTunesDB: {0}", ex.Message));
+            MessageDialog.Show(this, Loc.T("Could not read this iPod's database:\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -1050,7 +1258,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void BuildSidebar()
     {
         _sidebar.Begin();
-        _sidebar.AddSection("DEVICE");
+        _sidebar.AddSection(Loc.T("DEVICE"));
         foreach (var d in _devices)
             // Clicking the device opens its info page; the row is highlighted when that page is shown.
             _sidebar.AddItem(SidebarRowKind.Device, d.Profile.ModelName ?? d.Profile.ModelNumber ?? "iPod", d,
@@ -1060,33 +1268,33 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_db is not null)
         {
             var master = _db.Master;
-            _sidebar.AddSection("LIBRARY");
-            _sidebar.AddItem(SidebarRowKind.AllSongs, "All songs", "all", _viewKind == SidebarRowKind.AllSongs);
-            _sidebar.AddItem(SidebarRowKind.Albums, "Albums", "albums", _viewKind == SidebarRowKind.Albums);
-            _sidebar.AddItem(SidebarRowKind.Artists, "Artists", "artists", _viewKind == SidebarRowKind.Artists);
+            _sidebar.AddSection(Loc.T("LIBRARY"));
+            _sidebar.AddItem(SidebarRowKind.AllSongs, Loc.T("All songs"), "all", _viewKind == SidebarRowKind.AllSongs);
+            _sidebar.AddItem(SidebarRowKind.Albums, Loc.T("Albums"), "albums", _viewKind == SidebarRowKind.Albums);
+            _sidebar.AddItem(SidebarRowKind.Artists, Loc.T("Artists"), "artists", _viewKind == SidebarRowKind.Artists);
             if (_device?.Profile.SupportsVideo == true && _settings.ShowVideos)
-                _sidebar.AddItem(SidebarRowKind.Videos, "Videos", "videos", _viewKind == SidebarRowKind.Videos);
+                _sidebar.AddItem(SidebarRowKind.Videos, Loc.T("Videos"), "videos", _viewKind == SidebarRowKind.Videos);
             if (_device?.Profile.SupportsPhotos == true && _settings.ShowPhotos)
-                _sidebar.AddItem(SidebarRowKind.Photos, "Photos", "photos", _viewKind == SidebarRowKind.Photos);
+                _sidebar.AddItem(SidebarRowKind.Photos, Loc.T("Photos"), "photos", _viewKind == SidebarRowKind.Photos);
 
             others = _shownPlaylists.Where(p => !ReferenceEquals(p, master)).ToList();
             // Always show the PLAYLISTS section so the area is discoverable; when empty, a faint hint
             // tells the user they can right-click to make one.
-            _sidebar.AddSection("PLAYLISTS");
+            _sidebar.AddSection(Loc.T("PLAYLISTS"));
             if (others.Count > 0)
                 foreach (var pl in others)
                     _sidebar.AddItem(SidebarRowKind.Playlist, pl.Name, pl, _viewKind == SidebarRowKind.Playlist && ReferenceEquals(pl, _current));
             else if (_device?.Profile.CanWrite == true)
-                _sidebar.AddHint("Right-click here to add one");
+                _sidebar.AddHint(Loc.T("Right-click here to add one"));
         }
 
         // Always available, with or without an iPod: music that lives on this PC.
-        _sidebar.AddSection("ON THIS PC");
-        _sidebar.AddItem(SidebarRowKind.LocalMusic, "Local Music", "local", _viewKind == SidebarRowKind.LocalMusic);
+        _sidebar.AddSection(Loc.T("ON THIS PC"));
+        _sidebar.AddItem(SidebarRowKind.LocalMusic, Loc.T("Local Music"), "local", _viewKind == SidebarRowKind.LocalMusic);
         foreach (var lp in _settings.LocalPlaylists)
-            _sidebar.AddItem(SidebarRowKind.LocalPlaylist, lp.Name.Length == 0 ? "Untitled" : lp.Name, lp,
+            _sidebar.AddItem(SidebarRowKind.LocalPlaylist, lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name, lp,
                 _viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(lp, _currentLocalPlaylist));
-        if (_settings.LocalPlaylists.Count == 0) _sidebar.AddHint("Right-click to add a playlist");
+        if (_settings.LocalPlaylists.Count == 0) _sidebar.AddHint(Loc.T("Right-click to add a playlist"));
 
         _sidebar.End();
         // Playlists with a chosen cover get it as their sidebar icon instantly; the rest fall back to
@@ -1097,7 +1305,17 @@ internal sealed class MainForm : Form, IMessageFilter
             string? k = CoverKeyFor(SidebarRowKind.Playlist, pl);
             if (k is null) continue;
             int cid = _settings.GetCover(k);
-            if (cid >= 0) { _sidebar.SetIcon(pl, CoverArt.Generate(cid, SidebarIconPx)); custom.Add(pl); }
+            if (cid >= 0) { _sidebar.SetIcon(pl, cid == CoverArt.CassetteId ? CoverArt.GenerateTitled(cid, SidebarIconPx, pl.Name) : CoverArt.Generate(cid, SidebarIconPx)); custom.Add(pl); }
+        }
+        // Local (PC-side) playlists with a chosen cover get it as their sidebar icon too (keyed by their stable id).
+        foreach (var lp in _settings.LocalPlaylists)
+        {
+            if (LocalCoverKey(lp) is not { } lk) continue;
+            int cid = _settings.GetCover(lk);
+            // Normalise the empty name to "Untitled" — the SAME label the header + picker use — so a cassette cover's
+            // title-derived hue matches across the sidebar, header and the picker the user just chose it in.
+            string lpName = lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name;
+            if (cid >= 0) _sidebar.SetIcon(lp, cid == CoverArt.CassetteId ? CoverArt.GenerateTitled(cid, SidebarIconPx, lpName) : CoverArt.Generate(cid, SidebarIconPx));
         }
         LoadSidebarIconsAsync(others.Where(p => !custom.Contains(p)).ToList());
     }
@@ -1126,6 +1344,7 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Reset the search box so a query never silently carries over to another view.</summary>
     private void ClearSearch()
     {
+        _searchDebounce.Stop();   // a view switch supersedes any pending search rebuild
         if (_searchQuery.Length == 0) return;
         _navigating = true;
         try { _search.ClearQuery(); _searchQuery = ""; } finally { _navigating = false; }
@@ -1196,7 +1415,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch { oldBmp.Dispose(); newBmp?.Dispose(); return; }
 
-        var overlay = new CrossfadePanel(oldBmp, newBmp) { Bounds = new Rectangle(0, 0, center.Width, center.Height) };
+        var overlay = new TransitionPanel(oldBmp, newBmp, ViewStyle) { Bounds = new Rectangle(0, 0, center.Width, center.Height) };
         _viewTransitionBusy = true;
         center.Controls.Add(overlay);
         overlay.BringToFront();
@@ -1208,25 +1427,30 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Show exactly one of the centre panels (track grid / photo grid / album-artist grid / device page).</summary>
     private void SetCenter()
     {
+        // Switching views cancels any in-flight song-list art decode: its header callback checks `_artGen == gen`,
+        // so bumping here stops a stale first-track cover from slamming over the Device/Albums/Artists/Photos header.
+        _artGen++;
         bool photos = _viewKind == SidebarRowKind.Photos;
         bool device = _viewKind == SidebarRowKind.Device;
         bool browse = _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists && _browseFilter is null; // the grid, not a drill-in
-        Control? gh = _tracks.Parent;
-        if (gh is not null) gh.Visible = !photos && !device && !browse;
+        bool songs = !photos && !device && !browse;
+        // The four centre panels are all Dock=Fill siblings. Only ONE must be Visible at a time — otherwise two
+        // visible Fill siblings compete and only the back-most gets real size, so the front one collapses to zero.
+        // (Previously this toggled _tracks.Parent — the INNER viewport — and left the gridHost itself always
+        // visible, so Albums/Artists/Photos rendered for a frame then "went away" when a later layout pass flipped
+        // which Fill won.) Hide the whole song-list host instead, and keep only the active panel visible + at back.
+        _gridHost.Visible = songs;
         _photoView.Visible = photos;
         _deviceView.Visible = device;
         _browseView.Visible = browse;
-        // The four centre panels are all Dock=Fill siblings; with several Fill siblings only the back-most one
-        // actually receives the full size, so push the ACTIVE panel to the back. Without this, Albums/Artists
-        // (and Photos) collapsed to zero size and rendered completely blank — only the track grid (added last,
-        // already at the back) ever got laid out.
-        Control? active = photos ? _photoView : device ? _deviceView : browse ? _browseView : gh;
-        active?.SendToBack();
+        Control active = photos ? _photoView : device ? _deviceView : browse ? _browseView : _gridHost;
+        active.SendToBack();
         ScheduleBarBackdrop();   // the view behind the bar changed → refresh the frosted backdrop
     }
 
     private void ShowCurrent()
     {
+        _header.SetBadge("", false);   // cleared for every view; the song list re-sets it below when the DB has warnings
         if (_viewKind == SidebarRowKind.LocalPlaylist) { ShowLocalPlaylist(); return; }
         if (_viewKind == SidebarRowKind.LocalMusic) { ShowLocalMusic(); return; }
         if (_viewKind == SidebarRowKind.Photos) { ShowPhotos(); return; }
@@ -1245,24 +1469,24 @@ internal sealed class MainForm : Form, IMessageFilter
         string kicker, title;
         if (_browseFilter is not null && _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists)
         {
-            kicker = _browseKicker; title = _browseTitle;
+            kicker = Loc.T(_browseKicker); title = _browseTitle;
             list = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).Where(_browseFilter).ToList();
         }
         else if (isPlaylist)
         {
-            kicker = "PLAYLIST";
-            title = _current!.Name.Length == 0 ? "Untitled playlist" : _current.Name;
+            kicker = Loc.T("PLAYLIST");
+            title = _current!.Name.Length == 0 ? Loc.T("Untitled playlist") : _current.Name;
             list = new List<Track>();
             foreach (uint id in _current.TrackIds) { var t = _db.FindByUniqueId(id); if (t is not null) list.Add(t); }
         }
         else if (isVideos)
         {
-            kicker = "LIBRARY"; title = "Videos";
+            kicker = Loc.T("LIBRARY"); title = Loc.T("Videos");
             list = _db.Tracks.Where(t => MediaType.IsVideo(t.MediaType)).ToList();
         }
         else
         {
-            kicker = "LIBRARY"; title = "All songs";
+            kicker = Loc.T("LIBRARY"); title = Loc.T("All songs");
             list = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
         }
 
@@ -1270,10 +1494,10 @@ internal sealed class MainForm : Form, IMessageFilter
             list = list.Where(t => Match(t, _searchQuery)).ToList();
 
         _emptyMsg = list.Count > 0 ? ""
-            : _searchQuery.Length > 0 ? $"No results for “{_searchQuery}”"
-            : isPlaylist ? "This playlist is empty."
-            : isVideos ? "No videos on this iPod."
-            : "No songs on this iPod.";
+            : _searchQuery.Length > 0 ? Loc.T("No results for “{0}”", _searchQuery)
+            : isPlaylist ? Loc.T("This playlist is empty.")
+            : isVideos ? Loc.T("No videos on this iPod.")
+            : Loc.T("No songs on this iPod.");
 
         long totalMs = 0;
         foreach (var t in list) totalMs += t.LengthMs;
@@ -1292,20 +1516,23 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         _populatingGrid = false;
         _tracks.ResumeLayout();
+        SizeTracks();   // once, after the bulk populate (the per-row handler is suppressed during it)
 
         string noun = isVideos ? "video" : "song";
         _header.SetInfo(kicker, title, Summary(list.Count, totalMs, noun), Theme.StableHash(title));
         int coverId = CurrentViewCover();
         _currentHasCustomCover = coverId >= 0;
-        if (_currentHasCustomCover) _header.SetArt(CoverArt.Generate(coverId, 150)); // chosen art wins over the song thumbnail
+        if (_currentHasCustomCover) _header.SetArt(coverId == CoverArt.CassetteId ? CoverArt.GenerateTitled(coverId, 150, title) : CoverArt.Generate(coverId, 150)); // chosen art wins over the song thumbnail
         _header.ArtClickable = _viewKind is SidebarRowKind.AllSongs or SidebarRowKind.Playlist; // click the cover to choose art
-        // The count lives in the header subtitle now; the under-button line carries only warnings + read-only note.
+        // The count lives in the header subtitle. The DB warning gets its own amber badge under the subtitle;
+        // the under-button line carries only the read-only note (and transient feedback).
         bool warn = _db.Warnings.Count > 0;
-        string st = warn ? $"⚠ {_db.Warnings.Count} warning(s)" : "";
+        _header.SetBadge(warn ? Loc.T("⚠ {0} warning(s)", _db.Warnings.Count) : "", warn);
+        string st = "";
         if (_device is not null && !_device.Profile.CanWrite)
-            st = (st.Length > 0 ? st + "   ·   " : "") + "Read-only — " + _device.Profile.WriteBlockReason;
-        _baseStatus = st; _baseStatusClickable = warn;
-        SetStatus(st, warn);
+            st = Loc.T("Read-only — {0}", _device.Profile.WriteBlockReason);
+        _baseStatus = st; _baseStatusClickable = false;
+        SetStatus(st);
         SetActionButtons();
         if (_settings.ListArtwork) LoadArtworkAsync(list, artSize);   // skip cover loading when text-only
     }
@@ -1315,9 +1542,9 @@ internal sealed class MainForm : Form, IMessageFilter
     private const int BrowseCover = 150;
     private static string AlbumKey(Track t) => (t.Album ?? "").Trim().ToLowerInvariant() + "" + DisplayAlbumArtist(t).ToLowerInvariant();
     private static string ArtistKey(Track t) => (t.AlbumArtist ?? t.Artist ?? "").Trim();
-    private static string DisplayAlbum(Track t) => string.IsNullOrWhiteSpace(t.Album) ? "Unknown Album" : t.Album!;
+    private static string DisplayAlbum(Track t) => string.IsNullOrWhiteSpace(t.Album) ? Loc.T("Unknown Album") : t.Album!;
     private static string DisplayAlbumArtist(Track t) =>
-        !string.IsNullOrWhiteSpace(t.AlbumArtist) ? t.AlbumArtist! : !string.IsNullOrWhiteSpace(t.Artist) ? t.Artist! : "Unknown Artist";
+        !string.IsNullOrWhiteSpace(t.AlbumArtist) ? t.AlbumArtist! : !string.IsNullOrWhiteSpace(t.Artist) ? t.Artist! : Loc.T("Unknown Artist");
 
     /// <summary>Build the Albums or Artists cover grid from the library; covers load in the background.</summary>
     private void ShowBrowse()
@@ -1328,8 +1555,8 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.ArtClickable = false;
 
         bool albums = _viewKind == SidebarRowKind.Albums;
-        string title = albums ? "Albums" : "Artists";
-        if (_db is null) { _browseView.SetItems(Array.Empty<(string, string, string)>(), "—"); _header.SetInfo("LIBRARY", title, "", 0); SetActionButtons(); return; }
+        string title = albums ? Loc.T("Albums") : Loc.T("Artists");
+        if (_db is null) { _browseView.SetItems(Array.Empty<(string, string, string)>(), "—"); _header.SetInfo(Loc.T("LIBRARY"), title, "", 0); SetActionButtons(); return; }
 
         var audio = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
         var cards = new List<(string Key, string Title, string Subtitle)>();
@@ -1349,7 +1576,7 @@ internal sealed class MainForm : Form, IMessageFilter
             {
                 int albumCount = grp.Select(AlbumKey).Distinct().Count();
                 int songs = grp.Count();
-                cards.Add((grp.Key, grp.Key.Length > 0 ? grp.Key : "Unknown Artist", $"{albumCount} album{(albumCount == 1 ? "" : "s")}  ·  {songs} song{(songs == 1 ? "" : "s")}"));
+                cards.Add((grp.Key, grp.Key.Length > 0 ? grp.Key : Loc.T("Unknown Artist"), $"{CountNoun(albumCount, "album")}  ·  {CountNoun(songs, "song")}"));
                 reps[grp.Key] = grp.First();
             }
         }
@@ -1363,9 +1590,9 @@ internal sealed class MainForm : Form, IMessageFilter
             foreach (var k in reps.Keys.Where(k => !keep.Contains(k)).ToList()) reps.Remove(k);
         }
 
-        _browseView.SetItems(cards, albums ? "No albums on this iPod." : "No artists on this iPod.");
-        string sub = $"{cards.Count} {(albums ? "album" : "artist")}{(cards.Count == 1 ? "" : "s")}";
-        _header.SetInfo("LIBRARY", title, sub, Theme.StableHash(title));
+        _browseView.SetItems(cards, albums ? Loc.T("No albums on this iPod.") : Loc.T("No artists on this iPod."));
+        string sub = CountNoun(cards.Count, albums ? "album" : "artist");
+        _header.SetInfo(Loc.T("LIBRARY"), title, sub, Theme.StableHash(albums ? "Albums" : "Artists"));
         _header.SetArt(null); // the header uses its generated gradient for these overview pages
         _baseStatus = ""; _baseStatusClickable = false; SetStatus("");  // count shows in the subtitle
         SetActionButtons();
@@ -1383,13 +1610,13 @@ internal sealed class MainForm : Form, IMessageFilter
             {
                 _browseFilter = t => AlbumKey(t) == key;
                 var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
-                _browseTitle = first is not null ? DisplayAlbum(first) : "Album";
+                _browseTitle = first is not null ? DisplayAlbum(first) : Loc.T("Album");
                 _browseKicker = "ALBUM";
             }
             else
             {
                 _browseFilter = t => ArtistKey(t) == key;
-                _browseTitle = key.Length > 0 ? key : "Unknown Artist";
+                _browseTitle = key.Length > 0 ? key : Loc.T("Unknown Artist");
                 _browseKicker = "ARTIST";
             }
             ShowCurrent();
@@ -1402,9 +1629,20 @@ internal sealed class MainForm : Form, IMessageFilter
         int gen = ++_browseArtGen;
         string mount = _device.MountRoot;
         var jobs = reps.Select(kv => (kv.Key, Path: kv.Value.ResolveFilePath(mount), ArtKey: ArtworkService.KeyFor(kv.Value))).ToList();
+        // Apply ALREADY-CACHED covers synchronously + instantly first, so they're present when the view-switch
+        // snapshot is taken (revisits show real covers sliding in, instead of placeholders that pop after the
+        // transition). Only genuinely-uncached covers go to the background decode + cross-dissolve in.
+        var pending = new List<(string Key, string? Path, string ArtKey)>();
+        foreach (var j in jobs)
+        {
+            var hit = ArtworkService.TryGet("br:" + j.ArtKey, BrowseCover);
+            if (hit != null) _browseView.SetCover(j.Key, hit, animate: false);
+            else pending.Add(j);
+        }
+        if (pending.Count == 0) return;
         Task.Run(() =>
         {
-            foreach (var j in jobs)
+            foreach (var j in pending)
             {
                 if (_browseArtGen != gen) return;
                 var art = ArtworkService.Load("br:" + j.ArtKey, j.Path, BrowseCover);
@@ -1484,8 +1722,8 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void PushMiniProgress()
     {
-        if (_mini is not { Visible: true }) return;
-        _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted, _nowPlaying.Shuffle, _nowPlaying.Repeat);
+        if (_mini is { Visible: true })
+            _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted, _nowPlaying.Shuffle, _nowPlaying.Repeat);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -1494,7 +1732,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_mini is not null) { _mini.Dispose(); _mini = null; }
         // App-lifetime timers aren't in a components container — dispose them so repeated show/close
         // (test harness / --render reuse) doesn't leak Win32 timer registrations.
-        _deviceChangeTimer.Dispose(); _backdropTimer.Dispose(); _dropHideTimer.Dispose();
+        _deviceChangeTimer.Dispose(); _backdropTimer.Dispose(); _dropHideTimer.Dispose(); _searchDebounce.Dispose(); _rowDividerPen.Dispose(); _ratingFont.Dispose();
         base.OnFormClosed(e);
     }
 
@@ -1577,8 +1815,8 @@ internal sealed class MainForm : Form, IMessageFilter
             {
                 var rep = grp.First();
                 int albums = grp.Select(AlbumKey).Distinct().Count(), songs = grp.Count();
-                string title = grp.Key.Length > 0 ? grp.Key : "Unknown Artist";
-                items.Add(new CoverFlowView.Item(_cfPlaceholder, title, $"{albums} album{(albums == 1 ? "" : "s")}   ·   {songs} song{(songs == 1 ? "" : "s")}", grp.Key));
+                string title = grp.Key.Length > 0 ? grp.Key : Loc.T("Unknown Artist");
+                items.Add(new CoverFlowView.Item(_cfPlaceholder, title, $"{CountNoun(albums, "album")}   ·   {CountNoun(songs, "song")}", grp.Key));
                 reps.Add((idx++, rep));
             }
         }
@@ -1588,7 +1826,7 @@ internal sealed class MainForm : Form, IMessageFilter
             {
                 var rep = grp.First();
                 int n = grp.Count();
-                items.Add(new CoverFlowView.Item(_cfPlaceholder, DisplayAlbum(rep), $"{DisplayAlbumArtist(rep)}   ·   {n} song{(n == 1 ? "" : "s")}", grp.Key));
+                items.Add(new CoverFlowView.Item(_cfPlaceholder, DisplayAlbum(rep), $"{DisplayAlbumArtist(rep)}   ·   {CountNoun(n, "song")}", grp.Key));
                 reps.Add((idx++, rep));
             }
         }
@@ -1684,7 +1922,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var now = _nowPlaying.NowTrack;
         var nowArt = now is not null ? QueueCover(now) : null;
         var items = _queue.Items.Select(t => (t, QueueCover(t))).ToList();
-        string? hint = _queue.Count > 0 && _nowPlaying.Repeat == NowPlayingBar.RepeatMode.One ? "Repeat One is on — queue advances on Next" : null;
+        string? hint = _queue.Count > 0 && _nowPlaying.Repeat == NowPlayingBar.RepeatMode.One ? Loc.T("Repeat One is on — queue advances on Next") : null;
         _upNext.SetData(now, nowArt, items, hint);
     }
 
@@ -1751,7 +1989,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _viewKind = SidebarRowKind.Albums;
         _browseFilter = t => AlbumKey(t) == key;
         var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
-        _browseTitle = first is not null ? DisplayAlbum(first) : "Album";
+        _browseTitle = first is not null ? DisplayAlbum(first) : Loc.T("Album");
         _browseKicker = "ALBUM";
         ShowCurrent();
     }
@@ -1763,7 +2001,7 @@ internal sealed class MainForm : Form, IMessageFilter
         ClearSearch();
         _viewKind = SidebarRowKind.Artists;
         _browseFilter = t => ArtistKey(t) == key;
-        _browseTitle = key.Length > 0 ? key : "Unknown Artist";
+        _browseTitle = key.Length > 0 ? key : Loc.T("Unknown Artist");
         _browseKicker = "ARTIST";
         ShowCurrent();
     }
@@ -1805,25 +2043,32 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.ArtClickable = false; // covers are for music lists, not the photo library
         if (_photos is null)
         {
-            _photoView.SetPhotos(Array.Empty<(uint, Bitmap?)>(), "This iPod can't display photos.");
-            _header.SetInfo("LIBRARY", "Photos", "", Theme.StableHash("Photos"));
+            _photoView.SetPhotos(Array.Empty<(uint, Bitmap?)>(), Loc.T("This iPod can't display photos."));
+            _header.SetInfo(Loc.T("LIBRARY"), Loc.T("Photos"), "", Theme.StableHash("Photos"));
             SetActionButtons();
             return;
         }
 
         var photos = _photos.Photos.ToList();
-        string empty = _photos.SafeToWrite ? "No photos yet — click “Add photos”." : (_photos.BlockReason ?? "Photos are read-only.");
+        long pb = PhotoBytes();
+        string sub = PhotoSummary(photos.Count) + (pb > 0 ? "  ·  " + CapacityBar.Human(pb) : "");
+        _header.SetInfo(Loc.T("LIBRARY"), Loc.T("Photos"), sub, Theme.StableHash("Photos"));
+        using (var hb = photos.Count > 0 ? _photos.RenderThumb(photos[0]) : null)
+            _header.SetArt(hb); // header clones it; dispose our fresh copy
+        SetActionButtons();
+        UpdatePhotoStatus();
+
+        // Revisiting Photos with the same, unchanged library AND a fully-decoded grid? Keep the existing tiles:
+        // re-decoding the whole library (1500+ Ithmb decodes) on every open is the heaviest avoidable cost here.
+        if (ReferenceEquals(_photos, _photoShownLib) && _photos.Generation == _photoShownGen
+            && _photoView.Count == photos.Count && _photoView.AllThumbsLoaded)
+            return;
+        _photoShownLib = _photos; _photoShownGen = _photos.Generation;
+
+        string empty = _photos.SafeToWrite ? Loc.T("No photos yet — click “Add photos”.") : (_photos.BlockReason ?? Loc.T("Photos are read-only."));
         // Show the tiles immediately (placeholders); decode the thumbnails in the background so a
         // large library (the user's has 1500+) doesn't freeze the UI on open.
         _photoView.SetPhotos(photos.Select(p => (p.ImageId, (Bitmap?)null)), empty);
-        long pb = PhotoBytes();
-        string sub = PhotoSummary(photos.Count) + (pb > 0 ? "  ·  " + CapacityBar.Human(pb) : "");
-        _header.SetInfo("LIBRARY", "Photos", sub, Theme.StableHash("Photos"));
-        using (var hb = photos.Count > 0 ? _photos.RenderThumb(photos[0]) : null)
-            _header.SetArt(hb); // header clones it; dispose our fresh copy
-
-        SetActionButtons();
-        UpdatePhotoStatus();
 
         int gen = ++_photoArtGen;
         var lib = _photos;
@@ -1846,6 +2091,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         // Search lives in the header; show it for the library/list views, not the device or photo pages.
         _search.Visible = _viewKind is not (SidebarRowKind.Device or SidebarRowKind.Photos);
+        if (_photoSize is not null) _photoSize.Visible = _viewKind == SidebarRowKind.Photos;   // the size slider takes the search row on Photos
+        _header.Invalidate();   // re-layout the header cluster for the changed search/slider visibility
 
         // Cover Flow is available wherever an audio library is on screen (iPod views use the iPod DB; the
         // Local-Music views use the PC library). Not on the device/photos/videos pages.
@@ -1865,9 +2112,9 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_viewKind == SidebarRowKind.LocalMusic)
         {
             _header.AddButton.Visible = _header.DeleteButton.Visible = true;
-            _header.AddButton.Text = "Add folder"; _header.AddButton.BlockedReason = null;
-            _header.DeleteButton.Text = "Manage…"; _header.DeleteButton.Danger = false; // Manage isn't destructive
-            _header.DeleteButton.BlockedReason = _settings.LocalMusicFolders.Count == 0 ? "Add a folder first." : null;
+            _header.AddButton.Text = Loc.T("Add folder"); _header.AddButton.BlockedReason = null;
+            _header.DeleteButton.Text = Loc.T("Manage…"); _header.DeleteButton.Danger = false; // Manage isn't destructive
+            _header.DeleteButton.BlockedReason = _settings.LocalMusicFolders.Count == 0 ? Loc.T("Add a folder first.") : null;
             return;
         }
         bool canAudio = _device?.Profile.CanWrite == true;
@@ -1880,12 +2127,12 @@ internal sealed class MainForm : Form, IMessageFilter
         bool photos = _viewKind == SidebarRowKind.Photos;
         bool allowed = photos ? canPhotos : canAudio;
         string reason = photos ? PhotoBlockReason() : AudioBlockReason();
-        _header.DeleteButton.Text = "Delete"; _header.DeleteButton.Danger = true; // restore destructive identity after Local Music
+        _header.DeleteButton.Text = Loc.T("Delete"); _header.DeleteButton.Danger = true; // restore destructive identity after Local Music
         _header.AddButton.Text = _viewKind switch
         {
-            SidebarRowKind.Videos => "Add video",
-            SidebarRowKind.Photos => "Add photos",
-            _ => "Add music",
+            SidebarRowKind.Videos => Loc.T("Add video"),
+            SidebarRowKind.Photos => Loc.T("Add photos"),
+            _ => Loc.T("Add music"),
         };
         _header.AddButton.BlockedReason = allowed ? null : reason;
         _header.DeleteButton.BlockedReason = allowed ? null : reason;
@@ -1893,68 +2140,68 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private string AudioBlockReason()
     {
-        if (_device is null) return "No iPod is connected.";
+        if (_device is null) return Loc.T("No iPod is connected.");
         var r = _device.Profile.WriteBlockReason;
-        return r.Length > 0 ? r : "This iPod is read-only.";
+        return r.Length > 0 ? r : Loc.T("This iPod is read-only.");
     }
 
     private string PhotoBlockReason()
     {
-        if (_device is null) return "No iPod is connected.";
-        if (_device.Profile.SupportsPhotos != true) return "This iPod doesn't have a colour screen, so it can't store photos.";
-        return _photos?.BlockReason ?? "Photos can't be written to this iPod.";
+        if (_device is null) return Loc.T("No iPod is connected.");
+        if (_device.Profile.SupportsPhotos != true) return Loc.T("This iPod doesn't have a colour screen, so it can't store photos.");
+        return _photos?.BlockReason ?? Loc.T("Photos can't be written to this iPod.");
     }
 
     /// <summary>Explain why the greyed Add/Delete button is unavailable, and how to fix it — offering to
     /// jump to the device page (where Read device ID / Restore live) when that's the fix.</summary>
     private void ShowActionBlockedHelp()
     {
-        const string title = "Why is this greyed out?";
+        string title = Loc.T("Why is this greyed out?");
         string reason, fix;
         bool offerDevicePage = false;
 
         if (_device is null)
         {
-            reason = "No iPod is connected.";
-            fix = "Plug in your iPod (in disk mode) and press Refresh, or use Open folder to point at its drive. A Mac-formatted (HFS+) iPod can't be read on Windows.";
+            reason = Loc.T("No iPod is connected.");
+            fix = Loc.T("Plug in your iPod (in disk mode) and press Refresh, or use Open folder to point at its drive. A Mac-formatted (HFS+) iPod can't be read on Windows.");
         }
         else if (_viewKind == SidebarRowKind.Photos)
         {
             var p = _device.Profile;
             if (p.SupportsPhotos != true)
             {
-                reason = "This iPod doesn't have a colour screen, so it can't store photos.";
-                fix = "Photos work on the iPod photo, 5G (video), Classic, and nano 3G and later.";
+                reason = Loc.T("This iPod doesn't have a colour screen, so it can't store photos.");
+                fix = Loc.T("Photos work on the iPod photo, 5G (video), Classic, and nano 3G and later.");
             }
             else
             {
-                reason = _photos?.BlockReason ?? "Photos can't be written to this iPod right now.";
-                fix = "Check the iPod isn't read-only on its device page, then try again.";
+                reason = _photos?.BlockReason ?? Loc.T("Photos can't be written to this iPod right now.");
+                fix = Loc.T("Check the iPod isn't read-only on its device page, then try again.");
                 offerDevicePage = !p.CanWrite;
             }
         }
         else // music / video
         {
             var p = _device.Profile;
-            reason = p.WriteBlockReason.Length > 0 ? p.WriteBlockReason : "This iPod is read-only.";
+            reason = p.WriteBlockReason.Length > 0 ? p.WriteBlockReason : Loc.T("This iPod is read-only.");
             switch (p.Scheme)
             {
                 case ChecksumScheme.Hash58 when string.IsNullOrEmpty(p.FirewireGuid):
-                    fix = "Open this iPod's device page and click “Read device ID” — a safe, read-only query that reads the iPod's hardware ID (the same thing iTunes does) so music can be written.";
+                    fix = Loc.T("Open this iPod's device page and click “Read device ID” — a safe, read-only query that reads the iPod's hardware ID (the same thing iTunes does) so music can be written.");
                     offerDevicePage = true;
                     break;
                 case ChecksumScheme.Hash58: // GUID is known, but Mixtape's signature didn't match this iPod's
-                    fix = "Mixtape's signature for this iPod didn't match the one already on it, so writing stays disabled to avoid corrupting its library. Open the device page and use “Save report…” so this can be looked into.";
+                    fix = Loc.T("Mixtape's signature for this iPod didn't match the one already on it, so writing stays disabled to avoid corrupting its library. Open the device page and use “Save report…” so this can be looked into.");
                     offerDevicePage = true;
                     break;
                 case ChecksumScheme.Hash72:
-                    fix = "This iPod's signature (hash72, used by the nano 5G / Touch) can't be reproduced yet, so writing isn't possible. You can still browse, play, and copy music off the iPod.";
+                    fix = Loc.T("This iPod's signature (hash72, used by the nano 5G / Touch) can't be reproduced yet, so writing isn't possible. You can still browse, play, and copy music off the iPod.");
                     break;
                 case ChecksumScheme.HashAB:
-                    fix = "This iPod uses the experimental hashAB signature (nano 6G/7G), which isn't enabled yet. Browsing and copying off still work.";
+                    fix = Loc.T("This iPod uses the experimental hashAB signature (nano 6G/7G), which isn't enabled yet. Browsing and copying off still work.");
                     break;
                 default:
-                    fix = "See the device page for details on this iPod's signature.";
+                    fix = Loc.T("See the device page for details on this iPod's signature.");
                     offerDevicePage = true;
                     break;
             }
@@ -1962,10 +2209,10 @@ internal sealed class MainForm : Form, IMessageFilter
 
         string body = reason + "\n\n" + fix;
         if (offerDevicePage && _device is not null
-            && MessageBox.Show(this, body + "\n\nOpen the device page now?", title, MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+            && MessageDialog.Show(this, body + Loc.T("\n\nOpen the device page now?"), title, MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
             GoToDevicePage();
         else if (!offerDevicePage || _device is null)
-            MessageBox.Show(this, body, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, body, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     /// <summary>Navigate to the connected iPod's device page (Read device ID / Restore / Save report live there).</summary>
@@ -1979,10 +2226,10 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         int sel = _photoView.SelectedIds.Count;
         int total = _photos?.Photos.Count ?? 0;
-        SetStatus(sel > 0 ? $"{sel} selected   ·   {total} photo{(total == 1 ? "" : "s")}" : $"{total} photo{(total == 1 ? "" : "s")}");
+        SetStatus(sel > 0 ? Loc.T("{0} selected   ·   {1}", sel, PhotoSummary(total)) : PhotoSummary(total));
     }
 
-    private static string PhotoSummary(int count) => $"{count} photo{(count == 1 ? "" : "s")}";
+    private static string PhotoSummary(int count) => CountNoun(count, "photo");
 
     /// <summary>Case-insensitive match of a track against the search query (title / artist / album).</summary>
     private static bool Match(Track t, string q) =>
@@ -2022,6 +2269,11 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Clicking the big header cover opens the picker for the current music view.</summary>
     private void OnHeaderArtClicked()
     {
+        if (_viewKind == SidebarRowKind.LocalPlaylist)
+        {
+            if (_currentLocalPlaylist is { } lp) ChooseLocalCover(lp);
+            return;
+        }
         string? key = _viewKind switch
         {
             SidebarRowKind.AllSongs => CoverKeyFor(SidebarRowKind.AllSongs, null),
@@ -2029,13 +2281,27 @@ internal sealed class MainForm : Form, IMessageFilter
             _ => null,
         };
         if (key is null) return;
-        string title = _viewKind == SidebarRowKind.AllSongs ? "Cover for All songs" : $"Cover for “{_current?.Name}”";
+        string title = _viewKind == SidebarRowKind.AllSongs ? Loc.T("Cover for All songs") : Loc.T("Cover for “{0}”", _current?.Name);
         ChooseCover(key, title);
+    }
+
+    /// <summary>The settings key a local (PC-side) playlist's chosen cover is stored under, or null if it never got
+    /// one (no id assigned yet). Read-only — never mints an id (so just listing the sidebar doesn't churn settings).</summary>
+    private static string? LocalCoverKey(LocalPlaylistData lp) => string.IsNullOrEmpty(lp.Id) ? null : "lpl:" + lp.Id;
+
+    /// <summary>Open the cover picker for a local playlist, minting its stable id on first use so the choice persists
+    /// across renames. Mirrors the iPod-playlist cover flow (<see cref="OnHeaderArtClicked"/> / the sidebar menu).</summary>
+    private void ChooseLocalCover(LocalPlaylistData lp)
+    {
+        if (string.IsNullOrEmpty(lp.Id)) { lp.Id = Guid.NewGuid().ToString("N"); _settings.Save(); }
+        ChooseCover("lpl:" + lp.Id, Loc.T("Cover for “{0}”", lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name));
     }
 
     private void ChooseCover(string key, string title)
     {
-        using var dlg = new CoverPickerDialog(title, _settings.GetCover(key));
+        // Derive the bare name from the "Cover for X" caption so the cassette tile shows the real label.
+        string sample = title.StartsWith("Cover for ", StringComparison.Ordinal) ? title["Cover for ".Length..].Trim('“', '”', '"', ' ') : title;
+        using var dlg = new CoverPickerDialog(title, _settings.GetCover(key), sample);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         _settings.SetCover(key, dlg.SelectedCoverId); // -1 reverts to automatic
         BuildSidebar();
@@ -2044,7 +2310,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void AddCoverItem(ContextMenuStrip m, string key, string title)
     {
-        var cover = new ToolStripMenuItem("Choose cover…");
+        var cover = new ToolStripMenuItem(Loc.T("Choose cover…"));
         cover.Click += (_, _) => ChooseCover(key, title);
         m.Items.Add(cover);
     }
@@ -2056,12 +2322,12 @@ internal sealed class MainForm : Form, IMessageFilter
         var m = ThemedMenu.New();
         if (!_device.Profile.CanWrite)
         {
-            string why = _device.Profile.WriteBlockReason is { Length: > 0 } w ? w : "This iPod is read-only.";
-            m.Items.Add(new ToolStripMenuItem("Read-only — " + why) { Enabled = false });
+            string why = _device.Profile.WriteBlockReason is { Length: > 0 } w ? w : Loc.T("This iPod is read-only.");
+            m.Items.Add(new ToolStripMenuItem(Loc.T("Read-only — {0}", why)) { Enabled = false });
             m.Show(screen);
             return;
         }
-        var nu = new ToolStripMenuItem("New playlist…");
+        var nu = new ToolStripMenuItem(Loc.T("New playlist…"));
         nu.Click += (_, _) => CreatePlaylistWithTracks(new List<uint>());
         m.Items.Add(nu);
         m.Show(screen);
@@ -2088,8 +2354,8 @@ internal sealed class MainForm : Form, IMessageFilter
         int photoCount = _photos?.Photos.Count ?? 0;
         long other = Math.Max(0, total - free - music - video - photoBytes);
 
-        string cap = total > 0 ? $"{CapacityBar.Human(total - free)} of {CapacityBar.Human(total)} used" : "Connected";
-        _header.SetInfo("DEVICE", p.ModelName ?? p.ModelNumber ?? "iPod", cap, Theme.StableHash(p.ModelName ?? "iPod"));
+        string cap = total > 0 ? Loc.T("{0} of {1} used", CapacityBar.Human(total - free), CapacityBar.Human(total)) : Loc.T("Connected");
+        _header.SetInfo(Loc.T("DEVICE"), p.ModelName ?? p.ModelNumber ?? "iPod", cap, Theme.StableHash(p.ModelName ?? "iPod"));
         using (var art = IpodArt.Render(p.Generation, 150, p.ModelNumber)) _header.SetArt(art); // a picture of THIS iPod, in its real colour
         _header.ArtClickable = false;
 
@@ -2097,10 +2363,10 @@ internal sealed class MainForm : Form, IMessageFilter
         SetActionButtons();
         // The device name is already the header title + the sidebar row — don't echo it at the bottom.
         // Show a useful at-a-glance summary instead (consistent with the song views' status line).
-        var bits = new List<string> { $"{songCount} song{(songCount == 1 ? "" : "s")}" };
-        if (videoCount > 0) bits.Add($"{videoCount} video{(videoCount == 1 ? "" : "s")}");
-        if (photoCount > 0) bits.Add($"{photoCount} photo{(photoCount == 1 ? "" : "s")}");
-        if (total > 0) bits.Add($"{CapacityBar.Human(free)} free");
+        var bits = new List<string> { CountNoun(songCount, "song") };
+        if (videoCount > 0) bits.Add(CountNoun(videoCount, "video"));
+        if (photoCount > 0) bits.Add(CountNoun(photoCount, "photo"));
+        if (total > 0) bits.Add(Loc.T("{0} free", CapacityBar.Human(free)));
         SetStatus(string.Join("   ·   ", bits));
     }
 
@@ -2132,35 +2398,35 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (total > 0)
         {
-            SectionLabel("STORAGE");
-            var bar = new CapacityBar { Width = cardW };
-            bar.Set(total,
-                new CapacityBar.Seg("Audio", music, Theme.Accent),
-                new CapacityBar.Seg("Video", video, Color.FromArgb(255, 149, 56)),
-                new CapacityBar.Seg("Photos", photo, Color.FromArgb(54, 200, 110)),
-                new CapacityBar.Seg("Other", other, Theme.Faint),
-                new CapacityBar.Seg("Free", free, Theme.Blend(Theme.Bg, Color.White, 0.07))); // matches the recessed track
-            Add(bar);
+            SectionLabel(Loc.T("STORAGE"));
+            var hero = new DeviceHero { Width = cardW };
+            // No iPod picture here — the page header already shows one; the hero centres its capacity donut instead.
+            hero.Set(null, total, free,
+                new DeviceHero.Seg(Loc.T("Music"), music, Theme.Accent),
+                new DeviceHero.Seg(Loc.T("Video"), video, Color.FromArgb(255, 149, 56)),
+                new DeviceHero.Seg(Loc.T("Photos"), photo, Color.FromArgb(54, 200, 110)),
+                new DeviceHero.Seg(Loc.T("Free"), free + other, Theme.Blend(Theme.Bg, Color.White, 0.07))); // "other" folded into free
+            Add(hero);
         }
 
-        SectionLabel("ABOUT");
+        SectionLabel(Loc.T("ABOUT"));
         var about = new CardPanel(cardW);
-        about.AddInfoRow("Model", p.ModelName ?? p.ModelNumber ?? "iPod");
-        about.AddInfoRow("Generation", p.GenerationDisplay);
-        if (total > 0) about.AddInfoRow("Capacity", $"{CapacityBar.Human(total)}  ·  {CapacityBar.Human(free)} free");
-        about.AddInfoRow("Songs", songCount.ToString());
-        if (p.SupportsVideo) about.AddInfoRow("Videos", videoCount.ToString());
-        if (p.SupportsPhotos) about.AddInfoRow("Photos", photoCount.ToString());
-        about.AddInfoRow("Signature", p.SchemeLabel);
-        about.AddInfoRow("Writable", p.CanWrite ? "Yes" : "No");
-        if (!string.IsNullOrEmpty(p.SerialNumber)) about.AddInfoRow("Serial", p.SerialNumber!);
-        if (!string.IsNullOrEmpty(p.FirewireGuid)) about.AddInfoRow("FireWire GUID", p.FirewireGuid!);
+        about.AddInfoRow(Loc.T("Model"), p.ModelName ?? p.ModelNumber ?? "iPod");
+        about.AddInfoRow(Loc.T("Generation"), p.GenerationDisplay);
+        if (total > 0) about.AddInfoRow(Loc.T("Capacity"), Loc.T("{0}  ·  {1} free", CapacityBar.Human(total), CapacityBar.Human(free)));
+        about.AddInfoRow(Loc.T("Songs"), songCount.ToString());
+        if (p.SupportsVideo) about.AddInfoRow(Loc.T("Videos"), videoCount.ToString());
+        if (p.SupportsPhotos) about.AddInfoRow(Loc.T("Photos"), photoCount.ToString());
+        about.AddInfoRow(Loc.T("Signature"), p.SchemeLabel);
+        about.AddInfoRow(Loc.T("Writable"), p.CanWrite ? Loc.T("Yes") : Loc.T("No"));
+        if (!string.IsNullOrEmpty(p.SerialNumber)) about.AddInfoRow(Loc.T("Serial"), p.SerialNumber!);
+        if (!string.IsNullOrEmpty(p.FirewireGuid)) about.AddInfoRow(Loc.T("FireWire GUID"), p.FirewireGuid!);
         about.Finish(); Add(about);
 
         if (!p.CanWrite && p.WriteBlockReason.Length > 0)
         {
             var ro = new CardPanel(cardW);
-            ro.AddRow("Why read-only", p.WriteBlockReason, null, 72);
+            ro.AddRow(Loc.T("Why read-only"), p.WriteBlockReason, null, 72);
             ro.Finish(); Add(ro);
         }
 
@@ -2169,49 +2435,49 @@ internal sealed class MainForm : Form, IMessageFilter
             && dev.MountRoot.Length > 1 && dev.MountRoot[1] == ':')
         {
             var fix = new CardPanel(cardW);
-            var fixBtn = new ThemedButton { Text = "Read device ID", Pill = true, Primary = true, Width = 150, Height = 32 };
+            var fixBtn = new ThemedButton { Text = Loc.T("Read device ID"), Pill = true, Primary = true, Width = 150, Height = 32 };
             fixBtn.Click += (_, _) => EnableWritingByReadingDeviceId(dev);
-            fix.AddRow("Enable writing", "Read this iPod's hardware ID directly from the device (a safe, read-only query — the same thing iTunes does) so music can be written. No iTunes needed.", fixBtn, 76);
+            fix.AddRow(Loc.T("Enable writing"), Loc.T("Read this iPod's hardware ID directly from the device (a safe, read-only query — the same thing iTunes does) so music can be written. No iTunes needed."), fixBtn, 76);
             fix.Finish(); Add(fix);
         }
 
-        SectionLabel("BACKUPS");
+        SectionLabel(Loc.T("BACKUPS"));
         var backups = new CardPanel(cardW);
         string db = dev.ITunesDbPath, bak = db + ".bak", orig = db + ".original";
-        string status = File.Exists(bak) ? $"Last automatic backup: {File.GetLastWriteTime(bak):g}." : File.Exists(orig) ? "Original database kept." : "No backup yet.";
+        string status = File.Exists(bak) ? Loc.T("Last automatic backup: {0}.", File.GetLastWriteTime(bak).ToString("g")) : File.Exists(orig) ? Loc.T("Original database kept.") : Loc.T("No backup yet.");
         // No manual "back up now": Mixtape already snapshots iTunesDB.original once and rolls iTunesDB.bak
         // before every write, so a manual copy here would only risk overwriting that good rollback point.
-        var restoreBtn = new ThemedButton { Text = "Restore…", Pill = true, Width = 110, Height = 30, Enabled = File.Exists(bak) || File.Exists(orig) };
+        var restoreBtn = new ThemedButton { Text = Loc.T("Restore…"), Pill = true, Width = 110, Height = 30, Enabled = File.Exists(bak) || File.Exists(orig) };
         restoreBtn.Click += (_, _) => RestoreDatabaseBackup();
-        backups.AddRow("Automatic backup", status + " Mixtape backs up before every change and verifies the result.", restoreBtn, 64);
+        backups.AddRow(Loc.T("Automatic backup"), status + Loc.T(" Mixtape backs up before every change and verifies the result."), restoreBtn, 64);
         backups.Finish(); Add(backups);
 
-        SectionLabel("OPTIONS");
+        SectionLabel(Loc.T("OPTIONS"));
         var options = new CardPanel(cardW);
-        var ejectBtn = new ThemedButton { Text = "⏏  Eject", Pill = true, Primary = true, Width = 120, Height = 30 };
+        var ejectBtn = new ThemedButton { Text = Loc.T("⏏  Eject"), Pill = true, Primary = true, Width = 120, Height = 30 };
         ejectBtn.Click += (_, _) => EjectDevice();
-        options.AddRow("Safely remove", "Flush changes and eject so you can unplug the iPod safely.", ejectBtn, 56);
-        var settingsBtn = new ThemedButton { Text = "Open Settings", Pill = true, Width = 130, Height = 30 };
+        options.AddRow(Loc.T("Safely remove"), Loc.T("Flush changes and eject so you can unplug the iPod safely."), ejectBtn, 56);
+        var settingsBtn = new ThemedButton { Text = Loc.T("Open Settings"), Pill = true, Width = 130, Height = 30 };
         settingsBtn.Click += (_, _) => OpenSettings();
-        options.AddRow("All settings", "Appearance, library, video, photos and safety.", settingsBtn, 56);
-        var explorerBtn = new ThemedButton { Text = "Show in Explorer", Pill = true, Width = 150, Height = 30 };
+        options.AddRow(Loc.T("All settings"), Loc.T("Appearance, library, video, photos and safety."), settingsBtn, 56);
+        var explorerBtn = new ThemedButton { Text = Loc.T("Show in Explorer"), Pill = true, Width = 150, Height = 30 };
         explorerBtn.Click += (_, _) =>
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{dev.MountRoot}\"") { UseShellExecute = true }); } catch { }
         };
-        options.AddRow("Files", "Open the iPod's drive in File Explorer.", explorerBtn, 56);
-        var reportBtn = new ThemedButton { Text = "Save report…", Pill = true, Width = 130, Height = 30 };
+        options.AddRow(Loc.T("Files"), Loc.T("Open the iPod's drive in File Explorer."), explorerBtn, 56);
+        var reportBtn = new ThemedButton { Text = Loc.T("Save report…"), Pill = true, Width = 130, Height = 30 };
         reportBtn.Click += (_, _) => SaveDeviceReport(dev);
-        options.AddRow("Device report", "Save a diagnostic file (model, signature, why it's read-only) to send for support.", reportBtn, 56);
+        options.AddRow(Loc.T("Device report"), Loc.T("Save a diagnostic file (model, signature, why it's read-only) to send for support."), reportBtn, 56);
         if (dev.Profile.SupportsArtwork)
         {
-            var artBtn = new ThemedButton { Text = "Rebuild artwork", Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
+            var artBtn = new ThemedButton { Text = Loc.T("Rebuild artwork"), Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
             artBtn.Click += (_, _) => RebuildArtwork(dev);
-            options.AddRow("Album artwork", "Write cover art onto every song already on the iPod (from each file's embedded cover). Handy after copying songs from an older version.", artBtn, 64);
+            options.AddRow(Loc.T("Album artwork"), Loc.T("Write cover art onto every song already on the iPod (from each file's embedded cover). Handy after copying songs from an older version."), artBtn, 64);
         }
-        var docBtn = new ThemedButton { Text = "Check library", Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
+        var docBtn = new ThemedButton { Text = Loc.T("Check library"), Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
         docBtn.Click += (_, _) => OpenLibraryDoctor();
-        options.AddRow("Library Doctor", "Scan for missing files, duplicate songs and stray files left on the iPod — then fix them safely in one click.", docBtn, 64);
+        options.AddRow(Loc.T("Library Doctor"), Loc.T("Scan for missing files, duplicate songs and stray files left on the iPod — then fix them safely in one click."), docBtn, 64);
         options.Finish(); Add(options);
 
         _deviceScrollPanel.Top = 0;        // start at the top
@@ -2243,12 +2509,11 @@ internal sealed class MainForm : Form, IMessageFilter
     private async void RebuildArtwork(IPodDevice dev)
     {
         if (!dev.Profile.CanWrite) return;
-        if (MessageBox.Show(this,
-            "This writes album art onto every song already on the iPod, reading the cover embedded in each music file.\n\n" +
-            "Songs whose files have no embedded cover are left without art. Mixtape backs up the database first. Continue?",
-            "Rebuild artwork", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+        if (MessageDialog.Show(this,
+            Loc.T("This writes album art onto every song already on the iPod, reading the cover embedded in each music file.\n\nSongs whose files have no embedded cover are left without art. Mixtape backs up the database first. Continue?"),
+            Loc.T("Rebuild artwork"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
 
-        SetStatus("Rebuilding artwork…");
+        SetStatus(Loc.T("Rebuilding artwork…"));
         UseWaitCursor = true;
         (int added, int noFile, int noArt, string? error) result;
         try
@@ -2261,7 +2526,7 @@ internal sealed class MainForm : Form, IMessageFilter
                     var art = ArtworkLibrary.Load(dev);
                     art.Force = true;
                     lib.Artwork = art;
-                    if (!art.SupportsArtwork) return (0, 0, 0, "This iPod's artwork database can't be written safely.");
+                    if (!art.SupportsArtwork) return (0, 0, 0, Loc.T("This iPod's artwork database can't be written safely."));
                     art.StartCleanRebuild();
                     lib.Raw.ClearAllTrackArtwork();
                     int added = 0, noFile = 0, noArt = 0;
@@ -2283,34 +2548,34 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (result.error is { } err)
         {
-            SetStatus("Rebuild artwork failed.");
-            MessageBox.Show(this, "Couldn't rebuild artwork:\n\n" + err, "Rebuild artwork", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus(Loc.T("Rebuild artwork failed."));
+            MessageDialog.Show(this, Loc.T("Couldn't rebuild artwork:\n\n{0}", err), Loc.T("Rebuild artwork"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
-        SetStatus($"Artwork rebuilt for {result.added} song(s).");
+        SetStatus(Loc.T("Artwork rebuilt for {0} song(s).", result.added));
         if (ReferenceEquals(_device, dev)) LoadDevice(dev); // refresh from the rewritten database
-        MessageBox.Show(this,
-            $"Wrote cover art for {result.added} song(s)." +
-            (result.noArt > 0 ? $"\n{result.noArt} song(s) had no embedded cover in the file." : "") +
-            "\n\nEject the iPod, then check the Now Playing screen.",
-            "Rebuild artwork", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageDialog.Show(this,
+            Loc.T("Wrote cover art for {0} song(s).", result.added) +
+            (result.noArt > 0 ? Loc.T("\n{0} song(s) had no embedded cover in the file.", result.noArt) : "") +
+            Loc.T("\n\nEject the iPod, then check the Now Playing screen."),
+            Loc.T("Rebuild artwork"), MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     /// <summary>Library Doctor: scan the library for problems (off the UI thread), let the user pick safe
     /// fixes, then apply them through the normal delete+save path and reload the device.</summary>
     private async void OpenLibraryDoctor()
     {
-        var lib = _lib; var dev = _device;
+        var lib = _lib; var dev = _device; var photoLib = _photos;
         if (lib is null || dev is null) return;
 
-        SetStatus("Checking library…");
+        SetStatus(Loc.T("Checking library…"));
         UseWaitCursor = true;
         DoctorReport report;
-        try { report = await System.Threading.Tasks.Task.Run(() => LibraryDoctor.Scan(lib)); }
+        try { report = await System.Threading.Tasks.Task.Run(() => LibraryDoctor.Scan(lib, photoLib)); }
         catch (Exception ex)
         {
             UseWaitCursor = false; SetStatus("");
-            MessageBox.Show(this, "Couldn't scan the library:\n\n" + ex.Message, "Library Doctor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageDialog.Show(this, Loc.T("Couldn't scan the library:\n\n{0}", ex.Message), Loc.T("Library Doctor"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
         UseWaitCursor = false; SetStatus("");
@@ -2335,9 +2600,9 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (!string.IsNullOrEmpty(p)) { try { survivors.Add(Path.GetFullPath(p)); } catch { } }
             }
 
-        SetStatus("Fixing library…");
+        SetStatus(Loc.T("Fixing library…"));
         UseWaitCursor = true;
-        int rows = 0, dupes = 0, files = 0; string? error = null;
+        int rows = 0, dupes = 0, files = 0, photoDupes = 0; string? error = null;
         try
         {
             await System.Threading.Tasks.Task.Run(() =>
@@ -2359,6 +2624,13 @@ internal sealed class MainForm : Form, IMessageFilter
                         try { string fp = Path.GetFullPath(p); if (!survivors.Contains(fp) && File.Exists(fp)) { File.Delete(fp); files++; } }
                         catch { /* a leftover file is harmless; the DB no longer points at it */ }
                     }
+                    // Duplicate photos: separate DB (no iTunesDB link), so removed via the photo library's own save.
+                    if (plan.DeletePhotoIds.Count > 0 && photoLib is { SafeToWrite: true })
+                    {
+                        photoLib.DeletePhotos(plan.DeletePhotoIds);
+                        photoLib.Save();
+                        photoDupes = plan.DeletePhotoIds.Count;
+                    }
                 }
                 catch (Exception ex) { error = ex.Message; }
             });
@@ -2367,17 +2639,18 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (error is not null)
         {
-            SetStatus("Library fix failed.");
-            MessageBox.Show(this, "Couldn't apply the fixes:\n\n" + error, "Library Doctor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus(Loc.T("Library fix failed."));
+            MessageDialog.Show(this, Loc.T("Couldn't apply the fixes:\n\n{0}", error), Loc.T("Library Doctor"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
-        SetStatus("Library cleaned up.");
+        SetStatus(Loc.T("Library cleaned up."));
         if (ReferenceEquals(_device, dev)) LoadDevice(dev);   // refresh from the rewritten database
         var lines = new List<string>();
-        if (rows > 0) lines.Add($"• Removed {rows} dead entr{(rows == 1 ? "y" : "ies")}");
-        if (dupes > 0) lines.Add($"• Removed {dupes} duplicate{(dupes == 1 ? "" : "s")}");
-        if (files > 0) lines.Add($"• Cleared {files} stray file{(files == 1 ? "" : "s")}");
-        MessageBox.Show(this, "Library cleaned up.\n\n" + string.Join("\n", lines), "Library Doctor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (rows > 0) lines.Add(Loc.T("• Removed {0} dead entries", rows));
+        if (dupes > 0) lines.Add(Loc.T("• Removed {0} duplicates", dupes));
+        if (photoDupes > 0) lines.Add(Loc.T("• Removed {0} duplicate photos", photoDupes));
+        if (files > 0) lines.Add(Loc.T("• Cleared {0} stray files", files));
+        MessageDialog.Show(this, Loc.T("Library cleaned up.") + "\n\n" + string.Join("\n", lines), Loc.T("Library Doctor"), MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     /// <summary>
@@ -2389,9 +2662,9 @@ internal sealed class MainForm : Form, IMessageFilter
     /// </summary>
     private async void SaveDeviceReport(IPodDevice dev)
     {
-        if (MessageBox.Show(this,
-            "This saves a diagnostic text file containing your iPod's identifiers (serial number and FireWire GUID).\n\nOnly share it with someone helping you fix the app. Continue?",
-            "Save device report", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+        if (MessageDialog.Show(this,
+            Loc.T("This saves a diagnostic text file containing your iPod's identifiers (serial number and FireWire GUID).\n\nOnly share it with someone helping you fix the app. Continue?"),
+            Loc.T("Save device report"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
 
         // BuildDeviceReportText does a blocking SCSI INQUIRY — run it off the UI thread so the window
         // never freezes, and only after the user confirmed (so a stalled device can't hang on cancel).
@@ -2403,14 +2676,14 @@ internal sealed class MainForm : Form, IMessageFilter
 
         using var dlg = new SaveFileDialog
         {
-            Title = "Save device report",
+            Title = Loc.T("Save device report"),
             FileName = "Mixtape device report.txt",
-            Filter = "Text file|*.txt",
+            Filter = Loc.T("Text file") + "|*.txt",
             InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        try { File.WriteAllText(dlg.FileName, report); SetStatus("Device report saved."); }
-        catch (Exception ex) { MessageBox.Show(this, "Couldn't save the report:\n\n" + ex.Message, "Save report", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        try { File.WriteAllText(dlg.FileName, report); SetStatus(Loc.T("Device report saved.")); }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Couldn't save the report:\n\n{0}", ex.Message), Loc.T("Save report"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 
     /// <summary>Builds the diagnostic report text (pure; reused by the device-page button and --devreport).</summary>
@@ -2522,11 +2795,11 @@ internal sealed class MainForm : Form, IMessageFilter
     private void EnableWritingByReadingDeviceId(IPodDevice dev)
     {
         string root = dev.MountRoot;
-        if (root.Length < 2 || root[1] != ':') { MessageBox.Show(this, "This only works for an iPod mounted on a drive letter.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        if (root.Length < 2 || root[1] != ':') { MessageDialog.Show(this, Loc.T("This only works for an iPod mounted on a drive letter."), Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
         char drive = root[0];
-        if (MessageBox.Show(this,
-            "Mixtape will read this iPod's hardware ID directly from the device — a safe, read-only query (the same one iTunes uses) — and save it to the iPod so music can be written. Nothing on the iPod is changed except adding the standard device-info file.\n\nContinue?",
-            "Enable writing", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+        if (MessageDialog.Show(this,
+            Loc.T("Mixtape will read this iPod's hardware ID directly from the device — a safe, read-only query (the same one iTunes uses) — and save it to the iPod so music can be written. Nothing on the iPod is changed except adding the standard device-info file.\n\nContinue?"),
+            Loc.T("Enable writing"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
 
         byte[]? doc = null; string? err = null;
         var prev = Cursor; Cursor = Cursors.WaitCursor;
@@ -2543,10 +2816,10 @@ internal sealed class MainForm : Form, IMessageFilter
         string? guid = doc is { Length: > 0 } ? IpodGuidReader.ExtractFireWireGuid(doc) : null;
         if (guid is null)
         {
-            MessageBox.Show(this,
-                "Couldn't read a hardware ID from this iPod.\n\n" + (err ?? "The device didn't return a FireWire GUID.") +
-                "\n\nYou can still use the iPod read-only (browse, play, copy music off). Use \"Save report…\" to capture details.",
-                "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageDialog.Show(this,
+                Loc.T("Couldn't read a hardware ID from this iPod.\n\n") + (err ?? Loc.T("The device didn't return a FireWire GUID.")) +
+                Loc.T("\n\nYou can still use the iPod read-only (browse, play, copy music off). Use \"Save report…\" to capture details."),
+                Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -2554,9 +2827,9 @@ internal sealed class MainForm : Form, IMessageFilter
         // happened to regex-match but DeviceDetector can't actually re-read into a GUID.
         if (SysInfoExtended.TryParse(doc!)?.FirewireGuid is null)
         {
-            MessageBox.Show(this,
-                $"Read the device ID ({guid}), but the device-info document the iPod returned isn't in a form Mixtape can reliably re-read, so it was NOT saved to the iPod.\n\nPlease use \"Save report…\" and send it.",
-                "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageDialog.Show(this,
+                Loc.T("Read the device ID ({0}), but the device-info document the iPod returned isn't in a form Mixtape can reliably re-read, so it was NOT saved to the iPod.\n\nPlease use \"Save report…\" and send it.", guid),
+                Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -2568,7 +2841,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Read the device ID ({guid}) but couldn't save it to the iPod:\n\n{ex.Message}", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageDialog.Show(this, Loc.T("Read the device ID ({0}) but couldn't save it to the iPod:\n\n{1}", guid, ex.Message), Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
@@ -2578,13 +2851,13 @@ internal sealed class MainForm : Form, IMessageFilter
 
         var p = _device?.Profile;
         if (p?.CanWrite == true && p.Hash58Verified == true)
-            MessageBox.Show(this, $"Success — read device ID {guid} and verified the signature against this iPod's database. Writing is now enabled.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("Success — read device ID {0} and verified the signature against this iPod's database. Writing is now enabled.", guid), Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         else if (p?.CanWrite == true)
-            MessageBox.Show(this, $"Read device ID {guid}. Writing is now enabled.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("Read device ID {0}. Writing is now enabled.", guid), Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         else if (p?.Scheme == ChecksumScheme.Hash58 && p.Hash58Verified == false)
-            MessageBox.Show(this, $"Read the device ID ({guid}), but Mixtape's hash58 signature didn't match this iPod's existing one, so writing stays disabled to avoid corrupting its database.\n\nThis iPod is the first real-world test of hash58 signing — please use \"Save report…\" and send it so the signing can be fixed.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageDialog.Show(this, Loc.T("Read the device ID ({0}), but Mixtape's hash58 signature didn't match this iPod's existing one, so writing stays disabled to avoid corrupting its database.\n\nThis iPod is the first real-world test of hash58 signing — please use \"Save report…\" and send it so the signing can be fixed.", guid), Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         else
-            MessageBox.Show(this, $"Read the device ID ({guid}). Writing is still disabled — see the reason on this page.", "Enable writing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageDialog.Show(this, Loc.T("Read the device ID ({0}). Writing is still disabled — see the reason on this page.", guid), Loc.T("Enable writing"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void RestoreDatabaseBackup()
@@ -2592,13 +2865,13 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_device is null) return;
         string db = _device.ITunesDbPath, bak = db + ".bak", orig = db + ".original";
         string? source = File.Exists(bak) ? bak : File.Exists(orig) ? orig : null;
-        if (source is null) { MessageBox.Show(this, "No database backup was found on this iPod yet.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-        string which = source == bak ? "the state before the last change (iTunesDB.bak)" : "the original database from before Mixtape first wrote to it";
-        if (MessageBox.Show(this, $"Restore {which}?\n\nThe current database will be replaced.", "Restore database", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        if (source is null) { MessageDialog.Show(this, Loc.T("No database backup was found on this iPod yet."), Loc.T("Restore"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        string which = source == bak ? Loc.T("the state before the last change (iTunesDB.bak)") : Loc.T("the original database from before Mixtape first wrote to it");
+        if (MessageDialog.Show(this, Loc.T("Restore {0}?\n\nThe current database will be replaced.", which), Loc.T("Restore database"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         try { File.Copy(source, db, overwrite: true); }
-        catch (Exception ex) { MessageBox.Show(this, "Restore failed:\n\n" + ex.Message, "Restore", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Restore failed:\n\n{0}", ex.Message), Loc.T("Restore"), MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         ReloadCurrentDevice();
-        SetStatus("Database restored.");
+        SetStatus(Loc.T("Database restored."));
     }
 
     /// <summary>Star rating as glyphs (rating is stars×20). Unrated → blank, like iTunes.</summary>
@@ -2617,8 +2890,8 @@ internal sealed class MainForm : Form, IMessageFilter
         if (d is not { } dt || dt.Year <= 1970) return "";
         var today = DateTime.Today;
         var day = dt.Date;
-        if (day == today) return "Today";
-        if (day == today.AddDays(-1)) return "Yesterday";
+        if (day == today) return Loc.T("Today");
+        if (day == today.AddDays(-1)) return Loc.T("Yesterday");
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         return dt.Year == today.Year ? dt.ToString("MMM d", ci) : dt.ToString("MMM d, yyyy", ci);  // Mar 27 / Mar 27, 2025
     }
@@ -2633,15 +2906,15 @@ internal sealed class MainForm : Form, IMessageFilter
         long ms = 0, bytes = 0;
         foreach (DataGridViewRow row in _tracks.SelectedRows)
             if (row.Tag is Track t) { ms += t.LengthMs; bytes += t.FileSize; }
-        SetStatus($"{n} selected   ·   {FormatDur(ms)}   ·   {CapacityBar.Human(bytes)}");
+        SetStatus(Loc.T("{0} selected   ·   {1}   ·   {2}", n, FormatDur(ms), CapacityBar.Human(bytes)));
     }
 
     private static string FormatDur(long ms)
     {
         var t = TimeSpan.FromMilliseconds(ms);
-        return t.TotalHours >= 1 ? $"{(int)t.TotalHours} hr {t.Minutes} min"
-            : t.TotalMinutes >= 1 ? $"{t.Minutes} min {t.Seconds} s"
-            : $"{t.Seconds} s";
+        return t.TotalHours >= 1 ? Loc.T("{0} hr {1} min", (int)t.TotalHours, t.Minutes)
+            : t.TotalMinutes >= 1 ? Loc.T("{0} min {1} s", t.Minutes, t.Seconds)
+            : Loc.T("{0} s", t.Seconds);
     }
 
     /// <summary>Soft pre-flight space check before copying files on. Over-estimates for files that will be
@@ -2657,10 +2930,9 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch { return true; } // can't tell → don't get in the way
         if (need <= free) return true;
-        return MessageBox.Show(this,
-            $"These files are about {CapacityBar.Human(need)}, but the iPod has only {CapacityBar.Human(free)} free.\n\n" +
-            "They might not all fit. (Anything converted to AAC ends up smaller, so it may still work.)\n\nTry anyway?",
-            "Not enough space?", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+        return MessageDialog.Show(this,
+            Loc.T("These files are about {0}, but the iPod has only {1} free.\n\nThey might not all fit. (Converted media usually ends up smaller, so it may still work.)\n\nTry anyway?", CapacityBar.Human(need), CapacityBar.Human(free)),
+            Loc.T("Not enough space?"), MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
     }
 
     private void SortTracks(List<Track> list)
@@ -2727,9 +2999,18 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         var span = TimeSpan.FromMilliseconds(totalMs);
         string dur = span.TotalHours >= 1
-            ? (span.Minutes == 0 ? $"{(int)span.TotalHours} hr" : $"{(int)span.TotalHours} hr {span.Minutes} min")
-            : $"{span.Minutes} min";
-        return $"{count} {noun}{(count == 1 ? "" : "s")}  ·  {dur}";
+            ? (span.Minutes == 0 ? Loc.T("{0} hr", (int)span.TotalHours) : Loc.T("{0} hr {1} min", (int)span.TotalHours, span.Minutes))
+            : Loc.T("{0} min", span.Minutes);
+        return $"{CountNoun(count, noun)}  ·  {dur}";
+    }
+
+    /// <summary>"185 songs" / "1 video" — English pluralizes with "s"; Hungarian (and other no-count-plural
+    /// languages) use a single translated "{0} songs"/"{0} videos" template that reads right for any count.</summary>
+    private static string CountNoun(int count, string noun)
+    {
+        if (Loc.Lang != "en")
+            return Loc.T(noun switch { "video" => "{0} videos", "album" => "{0} albums", "artist" => "{0} artists", "photo" => "{0} photos", _ => "{0} songs" }, count);
+        return $"{count} {noun}{(count == 1 ? "" : "s")}";
     }
 
     // ---- mutations ----
@@ -2740,8 +3021,8 @@ internal sealed class MainForm : Form, IMessageFilter
         using var dlg = new OpenFileDialog
         {
             Multiselect = true,
-            Title = "Select music to copy onto the iPod",
-            Filter = "Audio files|*.mp3;*.m4a;*.aac;*.wav;*.aif;*.aiff;*.m4b;*.flac;*.ogg;*.oga;*.opus;*.wma;*.ape;*.wv;*.mpc|All files|*.*",
+            Title = Loc.T("Select music to copy onto the iPod"),
+            Filter = Loc.T("Audio files") + "|*.mp3;*.m4a;*.aac;*.wav;*.aif;*.aiff;*.m4b;*.flac;*.ogg;*.oga;*.opus;*.wma;*.ape;*.wv;*.mpc|" + Loc.T("All files") + "|*.*",
         };
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.FileNames.Length == 0) return;
         AddMusicFiles(dlg.FileNames);
@@ -2752,7 +3033,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_lib is null || _device is null || !_device.Profile.CanWrite || files.Length == 0) return;
 
-        files = FilterAlreadyOnIpod(files, "songs", isVideo: false); // skip/keep duplicates already on the iPod
+        files = FilterAlreadyOnIpod(files, Loc.T("songs"), isVideo: false); // skip/keep duplicates already on the iPod
         if (files.Length == 0) return;
 
         // FLAC/OGG/Opus/WMA (or "always re-encode") need ffmpeg → AAC; mp3/m4a/wav/aiff copy as-is.
@@ -2760,11 +3041,9 @@ internal sealed class MainForm : Form, IMessageFilter
         bool anyNeedsTranscode = files.Any(f => !IsNativeAudio(f)); // only non-native files truly require ffmpeg
         if (ffmpeg is null && anyNeedsTranscode)
         {
-            var r = MessageBox.Show(this,
-                "Some of these need converting to an iPod format (e.g. FLAC / OGG / Opus / WMA), but ffmpeg wasn't found.\n\n" +
-                "• Install ffmpeg (`winget install Gyan.FFmpeg`) and it's picked up automatically, or set its path in Settings ▸ Video.\n\n" +
-                "Continue and copy just the already-compatible files (mp3, m4a, wav, aiff)?",
-                "ffmpeg not found", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            var r = MessageDialog.Show(this,
+                Loc.T("Some of these need converting to an iPod format (e.g. FLAC / OGG / Opus / WMA), but ffmpeg wasn't found.\n\n• Install ffmpeg (`winget install Gyan.FFmpeg`) and it's picked up automatically, or set its path in Settings ▸ Video.\n\nContinue and copy just the already-compatible files (mp3, m4a, wav, aiff)?"),
+                Loc.T("ffmpeg not found"), MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
             if (r != DialogResult.OK) return;
         }
         if (!SpaceOkToAdd(files)) return;
@@ -2775,7 +3054,7 @@ internal sealed class MainForm : Form, IMessageFilter
         string tempDir = Path.Combine(Path.GetTempPath(), "mixtape-audio");
 
         // *100 scale so transcoding shows a percentage; copy-only files just jump to the next step.
-        using (var prog = new CopyProgressDialog("Adding music to your iPod", files.Length * 100, (report, cancelled) =>
+        using (var prog = new CopyProgressDialog(Loc.T("Adding music to your iPod"), files.Length * 100, (report, cancelled) =>
         {
             Directory.CreateDirectory(tempDir);
             for (int i = 0; i < files.Length; i++)
@@ -2791,22 +3070,22 @@ internal sealed class MainForm : Form, IMessageFilter
                     // only genuinely non-native files are skipped.
                     bool transcode = (!IsNativeAudio(src) || _settings.AlwaysTranscode) && ffmpeg is not null;
                     if (!transcode && !IsNativeAudio(src))
-                        throw new InvalidOperationException("needs ffmpeg to convert — skipped.");
+                        throw new InvalidOperationException(Loc.T("needs ffmpeg to convert — skipped."));
                     if (transcode)
                     {
                         double dur = ffmpeg!.Probe(src)?.DurationSec ?? 0;
                         temp = Path.Combine(tempDir, Guid.NewGuid().ToString("N") + ".m4a");
-                        report(baseP, $"Converting {i + 1} of {files.Length}   ·   {name}"); // advance even when duration is unknown
+                        report(baseP, Loc.T("Converting {0} of {1}   ·   {2}", i + 1, files.Length, name)); // advance even when duration is unknown
                         ffmpeg.TranscodeAudio(src, temp, 256, dur,
-                            frac => report(baseP + (int)(frac * 98), $"Converting {i + 1} of {files.Length}   ·   {(int)(frac * 100)}%   ·   {name}"),
+                            frac => report(baseP + (int)(frac * 98), Loc.T("Converting {0} of {1}   ·   {2}%   ·   {3}", i + 1, files.Length, (int)(frac * 100), name)),
                             cancelled);
-                        report(baseP + 99, $"Copying {i + 1} of {files.Length}   ·   {name}");
+                        report(baseP + 99, Loc.T("Copying {0} of {1}   ·   {2}", i + 1, files.Length, name));
                         // ffmpeg preserved the tags into the .m4a; keep the source's title as a safety net.
                         _lib!.AddMediaFile(temp, MediaType.Audio, MetadataExtractor.Read(src).Title, dur);
                     }
                     else
                     {
-                        report(baseP, $"Copying {i + 1} of {files.Length}   ·   {name}");
+                        report(baseP, Loc.T("Copying {0} of {1}   ·   {2}", i + 1, files.Length, name));
                         _lib!.AddFile(src);
                     }
                     ok++;
@@ -2815,7 +3094,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 catch (Exception ex) { errors.Add($"{name}: {ex.Message}"); }
                 finally { if (temp is not null) { try { File.Delete(temp); } catch { } } }
             }
-            if (ok > 0) { report(files.Length * 100, "Saving the iPod database…"); _lib!.Save(); }
+            if (ok > 0) { report(files.Length * 100, Loc.T("Saving the iPod database…")); _lib!.Save(); }
             try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
         }))
         {
@@ -2824,12 +3103,12 @@ internal sealed class MainForm : Form, IMessageFilter
 
             if (prog.Error is not null)
             {
-                MessageBox.Show(this, "Writing the database failed (a backup was kept as iTunesDB.bak):\n\n" + prog.Error.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageDialog.Show(this, Loc.T("Writing the database failed (a backup was kept as iTunesDB.bak):\n\n{0}", prog.Error.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-            string msg = prog.WasCancelled ? $"Stopped — added {ok} song(s)." : $"Added {ok} song(s).";
-            if (errors.Count > 0) msg += $"\n\n{errors.Count} could not be added:\n• " + string.Join("\n• ", errors);
-            MessageBox.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            string msg = prog.WasCancelled ? Loc.T("Stopped — added {0} song(s).", ok) : Loc.T("Added {0} song(s).", ok);
+            if (errors.Count > 0) msg += Loc.T("\n\n{0} could not be added:\n• ", errors.Count) + string.Join("\n• ", errors);
+            MessageDialog.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         }
     }
 
@@ -2882,17 +3161,14 @@ internal sealed class MainForm : Form, IMessageFilter
         if (dups.Count == 0) return files; // nothing already present → add them all, no prompt
 
         string preview = string.Join("\n• ", dups.Take(8).Select(Path.GetFileName));
-        if (dups.Count > 8) preview += $"\n• …and {dups.Count - 8} more";
-        var r = MessageBox.Show(this,
-            $"{dups.Count} of these {files.Length} {mediaWord} look like they're already on your iPod:\n\n• {preview}\n\n" +
-            "Yes   —   Skip the duplicates, add only what's new   (recommended)\n" +
-            "No    —   Add everything anyway (you'll get duplicates)\n" +
-            "Cancel —  Don't add anything",
-            "Already on your iPod", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        if (dups.Count > 8) preview += Loc.T("\n• …and {0} more", dups.Count - 8);
+        var r = MessageDialog.Show(this,
+            Loc.T("{0} of these {1} {2} look like they're already on your iPod:\n\n• {3}\n\nYes   —   Skip the duplicates, add only what's new   (recommended)\nNo    —   Add everything anyway (you'll get duplicates)\nCancel —  Don't add anything", dups.Count, files.Length, mediaWord, preview),
+            Loc.T("Already on your iPod"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
         if (r == DialogResult.No) return files;                 // add anyway
         if (r == DialogResult.Cancel) return Array.Empty<string>();
-        if (fresh.Count == 0) SetStatus($"All {dups.Count} {mediaWord} are already on your iPod — nothing to add.");
+        if (fresh.Count == 0) SetStatus(Loc.T("All {0} {1} are already on your iPod — nothing to add.", dups.Count, mediaWord));
         return fresh.ToArray();                                 // skip the duplicates
     }
 
@@ -2902,11 +3178,11 @@ internal sealed class MainForm : Form, IMessageFilter
         var ids = new List<uint>();
         foreach (DataGridViewRow row in _tracks.SelectedRows)
             if (row.Tag is Track t) ids.Add(t.UniqueId);
-        if (ids.Count == 0) { SetStatus("Select one or more songs to delete."); return; }
+        if (ids.Count == 0) { SetStatus(Loc.T("Select one or more songs to delete.")); return; }
 
-        var confirm = MessageBox.Show(this,
-            $"Delete {ids.Count} song(s) from the iPod, including the audio file(s)?\n\nThis can't be undone, but a backup of the database is kept (iTunesDB.bak).",
-            "Delete songs", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        var confirm = MessageDialog.Show(this,
+            Loc.T("Delete {0} song(s) from the iPod, including the audio file(s)?\n\nThis can't be undone, but a backup of the database is kept (iTunesDB.bak).", ids.Count),
+            Loc.T("Delete songs"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (confirm != DialogResult.Yes) return;
         if (!ConfirmWriteOnce()) return;
 
@@ -2918,13 +3194,13 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "Writing the database failed (a backup was kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageDialog.Show(this, Loc.T("Writing the database failed (a backup was kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
         finally { Cursor = Cursors.Default; }
 
         ReloadAfterEdit();
-        SetStatus($"Deleted {ids.Count} song(s).");
+        SetStatus(Loc.T("Deleted {0} song(s).", ids.Count));
     }
 
     // ---- action dispatch (the header buttons adapt to the active view) ----
@@ -2944,12 +3220,15 @@ internal sealed class MainForm : Form, IMessageFilter
     private void ShowPhotoAddMenu()
     {
         if (_photos is null || _device is null) return;
-        if (!_photos.SafeToWrite) { MessageBox.Show(this, _photos.BlockReason ?? "Photos are read-only on this iPod.", "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        if (!_photos.SafeToWrite) { MessageDialog.Show(this, _photos.BlockReason ?? Loc.T("Photos are read-only on this iPod."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
         var m = ThemedMenu.New();
-        var files = new ToolStripMenuItem("Add photos…"); files.Click += (_, _) => OnAddPhotos();
-        var folder = new ToolStripMenuItem("Add folder…   (includes subfolders)"); folder.Click += (_, _) => OnAddPhotoFolder();
+        var files = new ToolStripMenuItem(Loc.T("Add photos…")); files.Click += (_, _) => OnAddPhotos();
+        var folder = new ToolStripMenuItem(Loc.T("Add folder…   (includes subfolders)")); folder.Click += (_, _) => OnAddPhotoFolder();
+        var wall = new ToolStripMenuItem(Loc.T("Add wallpapers…")); wall.Click += (_, _) => OnAddWallpapers();
         m.Items.Add(files);
         m.Items.Add(folder);
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add(wall);
         var b = _header.AddButton;
         m.Show(b.PointToScreen(new Point(0, b.Height + 2)));
     }
@@ -2958,7 +3237,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void OnAddPhotoFolder()
     {
         if (_photos is null || _device is null || !_photos.SafeToWrite) return;
-        using var dlg = new FolderBrowserDialog { Description = "Select a folder — every photo inside it and its subfolders will be added", ShowNewFolderButton = false };
+        using var dlg = new FolderBrowserDialog { Description = Loc.T("Select a folder — every photo inside it and its subfolders will be added"), ShowNewFolderButton = false };
         if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath)) return;
 
         string[] images;
@@ -2967,11 +3246,11 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (images.Length == 0)
         {
-            MessageBox.Show(this, "No photos (jpg, png, …) were found in that folder or its subfolders.", "Add folder", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("No photos (jpg, png, …) were found in that folder or its subfolders."), Loc.T("Add folder"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        if (MessageBox.Show(this, $"Found {images.Length} photo(s) in “{Path.GetFileName(dlg.SelectedPath.TrimEnd(Path.DirectorySeparatorChar))}” (including subfolders).\n\nAdd them all to the iPod?",
-                "Add folder", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        if (MessageDialog.Show(this, Loc.T("Found {0} photo(s) in “{1}” (including subfolders).\n\nAdd them all to the iPod?", images.Length, Path.GetFileName(dlg.SelectedPath.TrimEnd(Path.DirectorySeparatorChar))),
+                Loc.T("Add folder"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         AddPhotoFiles(images);
     }
 
@@ -3023,18 +3302,19 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         _populatingGrid = false;
         _tracks.ResumeLayout();
+        SizeTracks();   // once, after the bulk populate
         if (_settings.ListArtwork) LoadArtworkAsync(shown, artSize);   // replace placeholder thumbs with real covers (skipped when text-only)
 
         int folders = _settings.LocalMusicFolders.Count;
-        _emptyMsg = folders == 0 ? "Click “Add folder” to add music from your PC."
-            : _searchQuery.Length > 0 ? $"No results for “{_searchQuery}”"
-            : shown.Count == 0 ? "No playable audio found in your folders."
+        _emptyMsg = folders == 0 ? Loc.T("Click “Add folder” to add music from your PC.")
+            : _searchQuery.Length > 0 ? Loc.T("No results for “{0}”", _searchQuery)
+            : shown.Count == 0 ? Loc.T("No playable audio found in your folders.")
             : "";
-        _header.SetInfo("ON THIS PC", "Local Music",
-            folders == 0 ? "Music from folders on your PC" : Summary(shown.Count, totalMs, "song"), Theme.StableHash("Local Music"));
+        _header.SetInfo(Loc.T("ON THIS PC"), Loc.T("Local Music"),
+            folders == 0 ? Loc.T("Music from folders on your PC") : Summary(shown.Count, totalMs, "song"), Theme.StableHash("Local Music"));
         // Song count is in the subtitle; the under-button line carries only the folder count (or the empty hint).
-        string st = folders == 0 ? "No folders added yet — click “Add folder”."
-            : $"{folders} folder{(folders == 1 ? "" : "s")}";
+        string st = folders == 0 ? Loc.T("No folders added yet — click “Add folder”.")
+            : folders == 1 ? Loc.T("{0} folder", folders) : Loc.T("{0} folders", folders);
         _baseStatus = st; _baseStatusClickable = false; SetStatus(st);
         SetActionButtons();
     }
@@ -3044,7 +3324,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int gen = ++_localGen;
         var folders = _settings.LocalMusicFolders.ToList();
         if (folders.Count == 0) { _localTracks.Clear(); return; }
-        if (_localTracks.Count == 0) SetStatus("Scanning your music…");
+        if (_localTracks.Count == 0) SetStatus(Loc.T("Scanning your music…"));
         Task.Run(() =>
         {
             var found = new List<Track>();
@@ -3089,7 +3369,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void ShowLocalPlaylist()
     {
         SetCenter();
-        _hotRow = -1; _header.ArtClickable = false; _header.SetArt(null); _currentHasCustomCover = false;
+        _hotRow = -1;   // the header art (cover + clickability) is set by FillLocalPlaylistGrid / ShowLocalMusic below
         var lp = _currentLocalPlaylist;
         if (lp is null) { _viewKind = SidebarRowKind.LocalMusic; ShowLocalMusic(); return; }
 
@@ -3140,25 +3420,32 @@ internal sealed class MainForm : Form, IMessageFilter
                 RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.DurationStr);
             _tracks.Rows[r].Tag = t;
         }
-        _populatingGrid = false; _tracks.ResumeLayout();
+        _populatingGrid = false; _tracks.ResumeLayout(); SizeTracks();
         if (_settings.ListArtwork) LoadArtworkAsync(list, artSize);   // skip cover loading when text-only
-        string name = lp.Name.Length == 0 ? "Untitled" : lp.Name;
-        _emptyMsg = list.Count == 0 ? "This playlist is empty — right-click songs in Local Music to add them." : "";
-        _header.SetInfo("PLAYLIST · ON THIS PC", name, Summary(list.Count, totalMs, "song"), Theme.StableHash(name));
+        string name = lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name;
+        _emptyMsg = list.Count == 0 ? Loc.T("This playlist is empty — right-click songs in Local Music to add them.") : "";
+        _header.SetInfo(Loc.T("PLAYLIST · ON THIS PC"), name, Summary(list.Count, totalMs, "song"), Theme.StableHash(name));
+        // A chosen cover wins over the auto (name-derived) header tile; either way the tile is clickable to pick one.
+        int coverId = LocalCoverKey(lp) is { } lk ? _settings.GetCover(lk) : -1;
+        _currentHasCustomCover = coverId >= 0;
+        _header.SetArt(_currentHasCustomCover
+            ? (coverId == CoverArt.CassetteId ? CoverArt.GenerateTitled(coverId, 150, name) : CoverArt.Generate(coverId, 150))
+            : null);
+        _header.ArtClickable = true;
         _baseStatus = ""; _baseStatusClickable = false; SetStatus("");   // count shows in the subtitle
         SetActionButtons();
     }
 
     private void CreateLocalPlaylist(List<string>? initialPaths)
     {
-        string? name = PromptDialog.Show(this, "New playlist", "Playlist name:", "New Playlist");
+        string? name = PromptDialog.Show(this, Loc.T("New playlist"), Loc.T("Playlist name:"), Loc.T("New Playlist"));
         if (string.IsNullOrWhiteSpace(name)) return;
         var lp = new LocalPlaylistData { Name = name.Trim() };
         if (initialPaths is not null) lp.Paths.AddRange(initialPaths.Where(p => !string.IsNullOrEmpty(p)));
         _settings.LocalPlaylists.Add(lp); _settings.Save();
         _viewKind = SidebarRowKind.LocalPlaylist; _currentLocalPlaylist = lp;
         BuildSidebar(); ShowCurrent();
-        SetStatus($"Created playlist “{lp.Name}”" + (lp.Paths.Count > 0 ? $" with {lp.Paths.Count} song(s)." : "."));
+        SetStatus(lp.Paths.Count > 0 ? Loc.T("Created playlist “{0}” with {1} song(s).", lp.Name, lp.Paths.Count) : Loc.T("Created playlist “{0}”.", lp.Name));
     }
 
     private void AddPathsToLocalPlaylist(LocalPlaylistData lp, List<string> paths)
@@ -3167,27 +3454,28 @@ internal sealed class MainForm : Form, IMessageFilter
         foreach (var p in paths) if (!lp.Paths.Any(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase))) { lp.Paths.Add(p); added++; }
         _settings.Save(); BuildSidebar();
         if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) ShowCurrent();
-        SetStatus(added == 0 ? $"Already in “{lp.Name}”." : $"Added {added} song(s) to “{lp.Name}”.");
+        SetStatus(added == 0 ? Loc.T("Already in “{0}”.", lp.Name) : Loc.T("Added {0} song(s) to “{1}”.", added, lp.Name));
     }
 
     private void RenameLocalPlaylist(LocalPlaylistData lp)
     {
-        string? name = PromptDialog.Show(this, "Rename playlist", "New name:", lp.Name);
+        string? name = PromptDialog.Show(this, Loc.T("Rename playlist"), Loc.T("New name:"), lp.Name);
         if (string.IsNullOrWhiteSpace(name) || name.Trim() == lp.Name) return;
         lp.Name = name.Trim(); _settings.Save(); BuildSidebar();
         if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) ShowCurrent();
-        SetStatus($"Renamed playlist to “{lp.Name}”.");
+        SetStatus(Loc.T("Renamed playlist to “{0}”.", lp.Name));
     }
 
     private void DeleteLocalPlaylist(LocalPlaylistData lp)
     {
-        string label = lp.Name.Length == 0 ? "Untitled" : lp.Name;
-        if (MessageBox.Show(this, $"Delete the playlist “{label}”?\n\nThis only removes the playlist — your music files on the PC are untouched.",
-                "Delete playlist", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        string label = lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name;
+        if (MessageDialog.Show(this, Loc.T("Delete the playlist “{0}”?\n\nThis only removes the playlist — your music files on the PC are untouched.", label),
+                Loc.T("Delete playlist"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        if (LocalCoverKey(lp) is { } ck) _settings.SetCover(ck, -1);   // drop the chosen-cover entry (its random id is never reused)
         _settings.LocalPlaylists.Remove(lp); _settings.Save();
         if (ReferenceEquals(_currentLocalPlaylist, lp)) { _currentLocalPlaylist = null; _viewKind = SidebarRowKind.LocalMusic; }
         BuildSidebar(); ShowCurrent();
-        SetStatus($"Deleted playlist “{label}”.");
+        SetStatus(Loc.T("Deleted playlist “{0}”.", label));
     }
 
     private void RemoveFromLocalPlaylist(LocalPlaylistData lp, List<string> paths)
@@ -3195,7 +3483,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int n = lp.Paths.RemoveAll(p => paths.Any(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase)));
         _settings.Save(); BuildSidebar();
         if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(_currentLocalPlaylist, lp)) ShowCurrent();
-        SetStatus($"Removed {n} song(s) from “{lp.Name}”.");
+        SetStatus(Loc.T("Removed {0} song(s) from “{1}”.", n, lp.Name));
     }
 
     private List<string> SelectedLocalPaths()
@@ -3214,27 +3502,27 @@ internal sealed class MainForm : Form, IMessageFilter
 
         int firstRow = -1;
         foreach (DataGridViewRow r in _tracks.SelectedRows) if (firstRow < 0 || r.Index < firstRow) firstRow = r.Index;
-        if (firstRow >= 0) { int fr = firstRow; var play = new ToolStripMenuItem("Play"); play.Click += (_, _) => ActivateTrackRow(fr); m.Items.Add(play); }
+        if (firstRow >= 0) { int fr = firstRow; var play = new ToolStripMenuItem(Loc.T("Play")); play.Click += (_, _) => ActivateTrackRow(fr); m.Items.Add(play); }
         AddQueueMenuItems(m);
         m.Items.Add(new ToolStripSeparator());
 
-        var addTo = new ToolStripMenuItem("Add to playlist");
+        var addTo = new ToolStripMenuItem(Loc.T("Add to playlist"));
         foreach (var lp in _settings.LocalPlaylists)
         {
             if (_viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(lp, _currentLocalPlaylist)) continue; // already here
-            var r = lp; var it = new ToolStripMenuItem(lp.Name.Length == 0 ? "Untitled" : lp.Name);
+            var r = lp; var it = new ToolStripMenuItem(lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name);
             it.Click += (_, _) => AddPathsToLocalPlaylist(r, paths);
             addTo.DropDownItems.Add(it);
         }
         if (addTo.DropDownItems.Count > 0) addTo.DropDownItems.Add(new ToolStripSeparator());
-        var nu = new ToolStripMenuItem("New playlist…"); nu.Click += (_, _) => CreateLocalPlaylist(paths);
+        var nu = new ToolStripMenuItem(Loc.T("New playlist…")); nu.Click += (_, _) => CreateLocalPlaylist(paths);
         addTo.DropDownItems.Add(nu);
         m.Items.Add(addTo); // the submenu is themed automatically by RoundContextMenu
 
         if (_viewKind == SidebarRowKind.LocalPlaylist && _currentLocalPlaylist is { } cur)
         {
             m.Items.Add(new ToolStripSeparator());
-            var rem = new ToolStripMenuItem($"Remove from “{(cur.Name.Length == 0 ? "Untitled" : cur.Name)}”   ({paths.Count})");
+            var rem = new ToolStripMenuItem(Loc.T("Remove from “{0}”   ({1})", cur.Name.Length == 0 ? Loc.T("Untitled") : cur.Name, paths.Count));
             rem.Click += (_, _) => RemoveFromLocalPlaylist(cur, paths);
             m.Items.Add(rem);
         }
@@ -3243,7 +3531,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void AddLocalFolder()
     {
-        using var dlg = new FolderBrowserDialog { Description = "Choose a folder of music on your PC" };
+        using var dlg = new FolderBrowserDialog { Description = Loc.T("Choose a folder of music on your PC") };
         if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath)) return;
         if (!_settings.LocalMusicFolders.Any(p => string.Equals(p, dlg.SelectedPath, StringComparison.OrdinalIgnoreCase)))
         {
@@ -3260,17 +3548,17 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_settings.LocalMusicFolders.Count == 0) { AddLocalFolder(); return; }
         var m = ThemedMenu.New();
-        var add = new ToolStripMenuItem("Add folder…"); add.Click += (_, _) => AddLocalFolder();
+        var add = new ToolStripMenuItem(Loc.T("Add folder…")); add.Click += (_, _) => AddLocalFolder();
         m.Items.Add(add);
         m.Items.Add(new ToolStripSeparator());
         foreach (var folder in _settings.LocalMusicFolders.ToList())
         {
-            var item = new ToolStripMenuItem("Remove:  " + (folder.Length <= 48 ? folder : "…" + folder[^47..]));
+            var item = new ToolStripMenuItem(Loc.T("Remove:  {0}", folder.Length <= 48 ? folder : "…" + folder[^47..]));
             item.Click += (_, _) => { _settings.LocalMusicFolders.RemoveAll(p => p == folder); _settings.Save(); _localStale = true; ShowLocalMusic(); };
             m.Items.Add(item);
         }
         m.Items.Add(new ToolStripSeparator());
-        var clear = new ToolStripMenuItem("Clear all folders"); clear.Click += (_, _) => { _settings.LocalMusicFolders.Clear(); _settings.Save(); _localStale = true; ShowLocalMusic(); };
+        var clear = new ToolStripMenuItem(Loc.T("Clear all folders")); clear.Click += (_, _) => { _settings.LocalMusicFolders.Clear(); _settings.Save(); _localStale = true; ShowLocalMusic(); };
         m.Items.Add(clear);
         var b = _header.DeleteButton;
         m.Show(b.PointToScreen(new Point(0, b.Height + 2)));
@@ -3327,7 +3615,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         bool ok = e.Data?.GetDataPresent(DataFormats.FileDrop) == true && CanAcceptDrop();
         e.Effect = ok ? DragDropEffects.Copy : DragDropEffects.None;
-        if (ok) SetDropActive(true, _viewKind == SidebarRowKind.LocalMusic ? "Drop to add to Local Music" : "Drop to add to your iPod");
+        if (ok) SetDropActive(true, _viewKind == SidebarRowKind.LocalMusic ? Loc.T("Drop to add to Local Music") : Loc.T("Drop to add to your iPod"));
         else SetDropActive(false);
     }
 
@@ -3358,7 +3646,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (_device is null || !_device.Profile.CanWrite)
         {
-            SetStatus("Connect a writable iPod, or open Local Music, to add files by dropping them.");
+            SetStatus(Loc.T("Connect a writable iPod, or open Local Music, to add files by dropping them."));
             return;
         }
 
@@ -3371,7 +3659,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var images = files.Where(f => IsExt(f, ImageExt)).ToArray();
         if (audio.Length == 0 && video.Length == 0 && images.Length == 0)
         {
-            SetStatus("Drop music, video, or photo files — or a folder of them — to add them.");
+            SetStatus(Loc.T("Drop music, video, or photo files — or a folder of them — to add them."));
             return;
         }
         // Each runs its own progress dialog; a mixed drop processes them in turn.
@@ -3399,7 +3687,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         if (toAdd.Count == 0)
         {
-            SetStatus(sawMusic ? "That folder is already in your Local Music." : "Drop a music folder — or songs — to add them to Local Music.");
+            SetStatus(sawMusic ? Loc.T("That folder is already in your Local Music.") : Loc.T("Drop a music folder — or songs — to add them to Local Music."));
             return;
         }
         _settings.LocalMusicFolders.AddRange(toAdd);
@@ -3408,7 +3696,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _localStale = true;
         BuildSidebar();
         ShowLocalMusic();
-        SetStatus(toAdd.Count == 1 ? "Added a folder to Local Music." : $"Added {toAdd.Count} folders to Local Music.");
+        SetStatus(toAdd.Count == 1 ? Loc.T("Added a folder to Local Music.") : Loc.T("Added {0} folders to Local Music.", toAdd.Count));
     }
 
     // ---- video ----
@@ -3419,8 +3707,8 @@ internal sealed class MainForm : Form, IMessageFilter
         using var dlg = new OpenFileDialog
         {
             Multiselect = true,
-            Title = "Select video to copy onto the iPod",
-            Filter = "Video files|*.mp4;*.m4v;*.mov;*.avi;*.mkv;*.wmv;*.flv;*.webm;*.mpg;*.mpeg|All files|*.*",
+            Title = Loc.T("Select video to copy onto the iPod"),
+            Filter = Loc.T("Video files") + "|*.mp4;*.m4v;*.mov;*.avi;*.mkv;*.wmv;*.flv;*.webm;*.mpg;*.mpeg|" + Loc.T("All files") + "|*.*",
         };
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.FileNames.Length == 0) return;
         AddVideoFiles(dlg.FileNames);
@@ -3431,17 +3719,16 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_lib is null || _device is null || !_device.Profile.CanWrite || files.Length == 0) return;
 
-        files = FilterAlreadyOnIpod(files, "videos", isVideo: true); // skip/keep duplicates already on the iPod
+        files = FilterAlreadyOnIpod(files, Loc.T("videos"), isVideo: true); // skip/keep duplicates already on the iPod
         if (files.Length == 0) return;
+        if (!SpaceOkToAdd(files)) return;   // free-space pre-flight (source size over-estimates the transcode — safe)
 
         var ffmpeg = FfmpegService.Detect(_settings.FfmpegPath);
         if (ffmpeg is null)
         {
-            var r = MessageBox.Show(this,
-                "ffmpeg was not found, so videos can't be converted to an iPod-compatible format.\n\n" +
-                "• Install ffmpeg (e.g. `winget install Gyan.FFmpeg`) and it'll be picked up automatically, or set its path in Settings ▸ Video.\n\n" +
-                "Copy the selected file(s) as-is for now? They will only play if they are already iPod-compatible H.264/MPEG-4.",
-                "ffmpeg not found", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            var r = MessageDialog.Show(this,
+                Loc.T("ffmpeg was not found, so videos can't be converted to an iPod-compatible format.\n\n• Install ffmpeg (e.g. `winget install Gyan.FFmpeg`) and it'll be picked up automatically, or set its path in Settings ▸ Video.\n\nCopy the selected file(s) as-is for now? They will only play if they are already iPod-compatible H.264/MPEG-4."),
+                Loc.T("ffmpeg not found"), MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
             if (r != DialogResult.OK) return;
         }
         if (!ConfirmWriteOnce()) return;
@@ -3451,7 +3738,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var errors = new List<string>();
         string tempDir = Path.Combine(Path.GetTempPath(), "mixtape-video");
 
-        using var prog = new CopyProgressDialog("Adding video to your iPod", files.Length * 100, (report, cancelled) =>
+        using var prog = new CopyProgressDialog(Loc.T("Adding video to your iPod"), files.Length * 100, (report, cancelled) =>
         {
             Directory.CreateDirectory(tempDir);
             for (int i = 0; i < files.Length; i++)
@@ -3459,7 +3746,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (cancelled()) break;
                 string src = files[i], name = Path.GetFileName(src);
                 int baseP = i * 100;
-                report(baseP, $"Processing {i + 1} of {files.Length}   ·   {name}");
+                report(baseP, Loc.T("Processing {0} of {1}   ·   {2}", i + 1, files.Length, name));
                 string toCopy = src;
                 string? temp = null;
                 double durSec = 0;
@@ -3474,7 +3761,7 @@ internal sealed class MainForm : Form, IMessageFilter
                         {
                             temp = Path.Combine(tempDir, Guid.NewGuid().ToString("N") + ".m4v");
                             ffmpeg.Transcode(src, temp, target, durSec,
-                                frac => report(baseP + (int)(frac * 98), $"Converting {i + 1} of {files.Length}   ·   {(int)(frac * 100)}%   ·   {name}"),
+                                frac => report(baseP + (int)(frac * 98), Loc.T("Converting {0} of {1}   ·   {2}%   ·   {3}", i + 1, files.Length, (int)(frac * 100), name)),
                                 cancelled);
                             toCopy = temp;
                         }
@@ -3484,9 +3771,9 @@ internal sealed class MainForm : Form, IMessageFilter
                         // No ffmpeg: only an already-packaged MP4-family container has any chance of playing.
                         string ext = Path.GetExtension(src).ToLowerInvariant();
                         if (ext is not (".m4v" or ".mp4" or ".mov"))
-                            throw new InvalidOperationException("not an iPod-compatible container — install ffmpeg to convert it.");
+                            throw new InvalidOperationException(Loc.T("not an iPod-compatible container — install ffmpeg to convert it."));
                     }
-                    report(baseP + 99, $"Copying {i + 1} of {files.Length}   ·   {name}");
+                    report(baseP + 99, Loc.T("Copying {0} of {1}   ·   {2}", i + 1, files.Length, name));
                     _lib!.AddMediaFile(toCopy, MediaType.Movie, Path.GetFileNameWithoutExtension(src), durSec);
                     ok++;
                 }
@@ -3494,7 +3781,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 catch (Exception ex) { errors.Add($"{name}: {ex.Message}"); }
                 finally { if (temp is not null) { try { File.Delete(temp); } catch { } } }
             }
-            if (ok > 0) { report(files.Length * 100, "Saving the iPod database…"); _lib!.Save(); }
+            if (ok > 0) { report(files.Length * 100, Loc.T("Saving the iPod database…")); _lib!.Save(); }
             try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
         });
         prog.ShowDialog(this);
@@ -3503,12 +3790,12 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (prog.Error is not null)
         {
-            MessageBox.Show(this, "Writing the database failed (a backup was kept as iTunesDB.bak):\n\n" + prog.Error.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageDialog.Show(this, Loc.T("Writing the database failed (a backup was kept as iTunesDB.bak):\n\n{0}", prog.Error.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
-        string msg = prog.WasCancelled ? $"Stopped — added {ok} video(s)." : $"Added {ok} video(s).";
-        if (errors.Count > 0) msg += $"\n\n{errors.Count} could not be added:\n• " + string.Join("\n• ", errors);
-        MessageBox.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        string msg = prog.WasCancelled ? Loc.T("Stopped — added {0} video(s).", ok) : Loc.T("Added {0} video(s).", ok);
+        if (errors.Count > 0) msg += Loc.T("\n\n{0} could not be added:\n• ", errors.Count) + string.Join("\n• ", errors);
+        MessageDialog.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 
     // ---- photos ----
@@ -3518,17 +3805,57 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_photos is null || _device is null) return;
         if (!_photos.SafeToWrite)
         {
-            MessageBox.Show(this, _photos.BlockReason ?? "Photos are read-only on this iPod.", "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, _photos.BlockReason ?? Loc.T("Photos are read-only on this iPod."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         using var dlg = new OpenFileDialog
         {
             Multiselect = true,
-            Title = "Select photos to copy onto the iPod",
-            Filter = "Image files|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tif;*.tiff;*.webp|All files|*.*",
+            Title = Loc.T("Select photos to copy onto the iPod"),
+            Filter = Loc.T("Image files") + "|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tif;*.tiff;*.webp|" + Loc.T("All files") + "|*.*",
         };
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.FileNames.Length == 0) return;
         AddPhotoFiles(dlg.FileNames);
+    }
+
+    /// <summary>Pick from the generated wallpaper pack and add the chosen designs to the iPod's Photos library
+    /// (rendered full-size in memory — no temp files). They show full-screen / as a slideshow on color iPods.</summary>
+    private void OnAddWallpapers()
+    {
+        if (_photos is null || _device is null) return;
+        if (!_photos.SafeToWrite)
+        {
+            MessageDialog.Show(this, _photos.BlockReason ?? Loc.T("Photos are read-only on this iPod."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        using var dlg = new WallpaperPickerDialog();
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedIndices.Count == 0) return;
+        if (!ConfirmWriteOnce()) return;
+
+        var picks = dlg.SelectedIndices.ToArray();
+        int ok = 0;
+        using var prog = new CopyProgressDialog(Loc.T("Adding wallpapers to your iPod"), picks.Length, (report, cancelled) =>
+        {
+            for (int i = 0; i < picks.Length; i++)
+            {
+                if (cancelled()) break;
+                report(i, Loc.T("Rendering {0} of {1}   ·   {2}", i + 1, picks.Length, Loc.T(Wallpaper.Names[picks[i]])));
+                using var bmp = Wallpaper.Render(picks[i], 640, 480);
+                _photos!.AddPhoto(bmp, bmp.Width * (long)bmp.Height * 2);
+                ok++;
+            }
+            report(picks.Length, Loc.T("Writing the photo library… (this can take a moment)"));
+            _photos!.Save();
+        });
+        prog.ShowDialog(this);
+        ShowPhotos();
+
+        if (prog.Error is not null)
+        {
+            MessageDialog.Show(this, Loc.T("Writing the photo library failed (a backup was kept as Photo Database.bak):\n\n{0}", prog.Error.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        MessageDialog.Show(this, prog.WasCancelled ? Loc.T("Stopped — added {0} wallpaper(s).", ok) : Loc.T("Added {0} wallpaper(s).", ok), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     /// <summary>Core photo-add (shared by the button and drag-and-drop): render thumbnails + write the photo DB.</summary>
@@ -3541,58 +3868,86 @@ internal sealed class MainForm : Form, IMessageFilter
         // Save in batches so a large folder import keeps memory bounded (rendered thumbnails are flushed
         // and freed each Save) and so already-added photos persist even if a later one fails or is cancelled.
         const int BatchSize = 150;
-        using var prog = new CopyProgressDialog("Adding photos to your iPod", files.Length, (report, cancelled) =>
+        using var prog = new CopyProgressDialog(Loc.T("Adding photos to your iPod"), files.Length, (report, cancelled) =>
         {
             int staged = 0;
             for (int i = 0; i < files.Length; i++)
             {
                 if (cancelled()) break;
-                report(i, $"Rendering {i + 1} of {files.Length}   ·   {Path.GetFileName(files[i])}");
+                report(i, Loc.T("Rendering {0} of {1}   ·   {2}", i + 1, files.Length, Path.GetFileName(files[i])));
                 try { _photos!.AddPhoto(files[i]); ok++; staged++; }
                 catch (Exception ex) { errors.Add($"{Path.GetFileName(files[i])}: {ex.Message}"); }
-                if (staged >= BatchSize) { report(i + 1, $"Saving… ({ok} added so far)"); _photos!.Save(); staged = 0; }
+                if (staged >= BatchSize) { report(i + 1, Loc.T("Saving… ({0} added so far)", ok)); _photos!.Save(); staged = 0; }
             }
-            if (staged > 0) { report(files.Length, "Writing the photo library… (this can take a moment)"); _photos!.Save(); }
+            if (staged > 0) { report(files.Length, Loc.T("Writing the photo library… (this can take a moment)")); _photos!.Save(); }
         });
         prog.ShowDialog(this);
         ShowPhotos();
 
         if (prog.Error is not null)
         {
-            MessageBox.Show(this, "Writing the photo library failed (a backup was kept as Photo Database.bak):\n\n" + prog.Error.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageDialog.Show(this, Loc.T("Writing the photo library failed (a backup was kept as Photo Database.bak):\n\n{0}", prog.Error.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
-        string msg = prog.WasCancelled ? $"Stopped — added {ok} photo(s)." : $"Added {ok} photo(s).";
-        if (errors.Count > 0) msg += $"\n\n{errors.Count} could not be added:\n• " + string.Join("\n• ", errors);
-        MessageBox.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        string msg = prog.WasCancelled ? Loc.T("Stopped — added {0} photo(s).", ok) : Loc.T("Added {0} photo(s).", ok);
+        if (errors.Count > 0) msg += Loc.T("\n\n{0} could not be added:\n• ", errors.Count) + string.Join("\n• ", errors);
+        MessageDialog.Show(this, msg, "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 
     private void OnDeletePhotos()
     {
         if (_photos is null || !_photos.SafeToWrite) return;
         var ids = _photoView.SelectedIds;
-        if (ids.Count == 0) { SetStatus("Select one or more photos to delete."); return; }
-        if (MessageBox.Show(this, $"Delete {ids.Count} photo(s) from the iPod?\n\nA backup of the photo database is kept (Photo Database.bak).",
-                "Delete photos", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        if (ids.Count == 0) { SetStatus(Loc.T("Select one or more photos to delete.")); return; }
+        if (MessageDialog.Show(this, Loc.T("Delete {0} photo(s) from the iPod?\n\nA backup of the photo database is kept (Photo Database.bak).", ids.Count),
+                Loc.T("Delete photos"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         if (!ConfirmWriteOnce()) return;
 
         Exception? error = null;
-        using (var prog = new CopyProgressDialog("Updating the photo library", 1, (report, cancelled) =>
+        using (var prog = new CopyProgressDialog(Loc.T("Updating the photo library"), 1, (report, cancelled) =>
         {
-            report(0, "Removing photos and repacking…");
+            report(0, Loc.T("Removing photos and repacking…"));
             _photos!.DeletePhotos(ids);
             _photos!.Save();
-            report(1, "Done");
+            report(1, Loc.T("Done"));
         }))
         {
             prog.ShowDialog(this);
             error = prog.Error;
         }
-        ShowPhotos();
         if (error is not null)
-            MessageBox.Show(this, "Writing the photo library failed (a backup was kept as Photo Database.bak):\n\n" + error.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        {
+            ShowPhotos();   // the model was resynced from disk on failure — rebuild the grid to match
+            MessageDialog.Show(this, Loc.T("Writing the photo library failed (a backup was kept as Photo Database.bak):\n\n{0}", error.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         else
-            SetStatus($"Deleted {ids.Count} photo(s).");
+        {
+            // Drop just the deleted tiles in place — the surviving tiles keep their decoded thumbnails and the
+            // grid keeps its scroll position, so deleting one photo no longer snaps the view back to the top
+            // (and we skip re-decoding the whole library). Remaining offsets are unchanged by a delete.
+            RefreshPhotosAfterDelete(ids);
+            SetStatus(Loc.T("Deleted {0} photo(s).", ids.Count));
+        }
+    }
+
+    /// <summary>Refresh the Photos view after an in-place delete without rebuilding the grid: drop the removed
+    /// tiles (keeping scroll + the other thumbnails) and re-sync the header count, art and status.</summary>
+    private void RefreshPhotosAfterDelete(IReadOnlyCollection<uint> deletedIds)
+    {
+        if (_photos is null) { ShowPhotos(); return; }
+        _photoView.RemovePhotos(deletedIds);
+
+        // Keep the revisit-skip cache valid so re-opening Photos doesn't needlessly rebuild.
+        _photoShownLib = _photos; _photoShownGen = _photos.Generation;
+
+        var photos = _photos.Photos.ToList();
+        long pb = PhotoBytes();
+        string sub = PhotoSummary(photos.Count) + (pb > 0 ? "  ·  " + CapacityBar.Human(pb) : "");
+        _header.SetInfo(Loc.T("LIBRARY"), Loc.T("Photos"), sub, Theme.StableHash("Photos"));
+        using (var hb = photos.Count > 0 ? _photos.RenderThumb(photos[0]) : null)
+            _header.SetArt(hb);
+        SetActionButtons();
+        UpdatePhotoStatus();
     }
 
     private void ShowPhotoMenu(Point screen)
@@ -3603,31 +3958,34 @@ internal sealed class MainForm : Form, IMessageFilter
         if (sel.Count > 0) // viewing isn't a write — offered even on read-only iPods
         {
             uint vid = sel[0];
-            var view = new ToolStripMenuItem("View");
+            var view = new ToolStripMenuItem(Loc.T("View"));
             view.Click += (_, _) => OpenPhotoViewer(vid);
             m.Items.Add(view);
             m.Items.Add(new ToolStripSeparator());
         }
         if (!_photos.SafeToWrite)
         {
-            m.Items.Add(new ToolStripMenuItem("Read-only — " + (_photos.BlockReason ?? "")) { Enabled = false });
+            m.Items.Add(new ToolStripMenuItem(Loc.T("Read-only — {0}", _photos.BlockReason ?? "")) { Enabled = false });
             m.Show(screen);
             return;
         }
         var ids = _photoView.SelectedIds;
         if (ids.Count > 0)
         {
-            var del = new ToolStripMenuItem($"Delete {ids.Count} photo(s) from iPod");
+            var del = new ToolStripMenuItem(Loc.T("Delete {0} photo(s) from iPod", ids.Count));
             del.Click += (_, _) => OnDeletePhotos();
             m.Items.Add(del);
             m.Items.Add(new ToolStripSeparator());
         }
-        var add = new ToolStripMenuItem("Add photos…");
+        var add = new ToolStripMenuItem(Loc.T("Add photos…"));
         add.Click += (_, _) => OnAddPhotos();
         m.Items.Add(add);
-        var addFolder = new ToolStripMenuItem("Add folder…   (includes subfolders)");
+        var addFolder = new ToolStripMenuItem(Loc.T("Add folder…   (includes subfolders)"));
         addFolder.Click += (_, _) => OnAddPhotoFolder();
         m.Items.Add(addFolder);
+        var addWall = new ToolStripMenuItem(Loc.T("Add wallpapers…"));
+        addWall.Click += (_, _) => OnAddWallpapers();
+        m.Items.Add(addWall);
         m.Show(screen);
     }
 
@@ -3639,7 +3997,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (kind == SidebarRowKind.LocalMusic)
         {
             var lm = ThemedMenu.New();
-            var n = new ToolStripMenuItem("New playlist…"); n.Click += (_, _) => CreateLocalPlaylist(null);
+            var n = new ToolStripMenuItem(Loc.T("New playlist…")); n.Click += (_, _) => CreateLocalPlaylist(null);
             lm.Items.Add(n);
             lm.Show(screen);
             return;
@@ -3647,11 +4005,13 @@ internal sealed class MainForm : Form, IMessageFilter
         if (kind == SidebarRowKind.LocalPlaylist && tag is LocalPlaylistData lp)
         {
             var lm = ThemedMenu.New();
-            var ren = new ToolStripMenuItem("Rename…"); ren.Click += (_, _) => RenameLocalPlaylist(lp); lm.Items.Add(ren);
+            var cov = new ToolStripMenuItem(Loc.T("Choose cover…")); cov.Click += (_, _) => ChooseLocalCover(lp); lm.Items.Add(cov);
             lm.Items.Add(new ToolStripSeparator());
-            var ldel = new ToolStripMenuItem("Delete playlist"); ldel.Click += (_, _) => DeleteLocalPlaylist(lp); lm.Items.Add(ldel);
+            var ren = new ToolStripMenuItem(Loc.T("Rename…")); ren.Click += (_, _) => RenameLocalPlaylist(lp); lm.Items.Add(ren);
             lm.Items.Add(new ToolStripSeparator());
-            var lnu = new ToolStripMenuItem("New playlist…"); lnu.Click += (_, _) => CreateLocalPlaylist(null); lm.Items.Add(lnu);
+            var ldel = new ToolStripMenuItem(Loc.T("Delete playlist")); ldel.Click += (_, _) => DeleteLocalPlaylist(lp); lm.Items.Add(ldel);
+            lm.Items.Add(new ToolStripSeparator());
+            var lnu = new ToolStripMenuItem(Loc.T("New playlist…")); lnu.Click += (_, _) => CreateLocalPlaylist(null); lm.Items.Add(lnu);
             lm.Show(screen);
             return;
         }
@@ -3664,7 +4024,7 @@ internal sealed class MainForm : Form, IMessageFilter
             string? lk = CoverKeyFor(SidebarRowKind.AllSongs, null);
             if (lk is null) return;
             var lm = ThemedMenu.New();
-            AddCoverItem(lm, lk, "Cover for All songs");
+            AddCoverItem(lm, lk, Loc.T("Cover for All songs"));
             lm.Show(screen);
             return;
         }
@@ -3674,24 +4034,24 @@ internal sealed class MainForm : Form, IMessageFilter
 
         // Choosing a cover is a local preference, so offer it even on read-only iPods.
         string? ck = CoverKeyFor(SidebarRowKind.Playlist, pl);
-        if (ck is not null) { AddCoverItem(m, ck, $"Cover for “{pl.Name}”"); m.Items.Add(new ToolStripSeparator()); }
+        if (ck is not null) { AddCoverItem(m, ck, Loc.T("Cover for “{0}”", pl.Name)); m.Items.Add(new ToolStripSeparator()); }
 
         if (_lib is null || _device is null || !_device.Profile.CanWrite)
         {
-            string why = _device?.Profile.WriteBlockReason is { Length: > 0 } w ? w : "This iPod is read-only.";
-            m.Items.Add(new ToolStripMenuItem("Read-only — " + why) { Enabled = false });
+            string why = _device?.Profile.WriteBlockReason is { Length: > 0 } w ? w : Loc.T("This iPod is read-only.");
+            m.Items.Add(new ToolStripMenuItem(Loc.T("Read-only — {0}", why)) { Enabled = false });
             m.Show(screen);
             return;
         }
-        var rename = new ToolStripMenuItem("Rename…");
+        var rename = new ToolStripMenuItem(Loc.T("Rename…"));
         rename.Click += (_, _) => RenamePlaylistInteractive(pl);
         m.Items.Add(rename);
         m.Items.Add(new ToolStripSeparator());
-        var del = new ToolStripMenuItem("Delete playlist (keep songs)");
+        var del = new ToolStripMenuItem(Loc.T("Delete playlist (keep songs)"));
         del.Click += (_, _) => DeletePlaylist(pl);
         m.Items.Add(del);
         m.Items.Add(new ToolStripSeparator());
-        var nu = new ToolStripMenuItem("New playlist…");
+        var nu = new ToolStripMenuItem(Loc.T("New playlist…"));
         nu.Click += (_, _) => CreatePlaylistWithTracks(new List<uint>());
         m.Items.Add(nu);
         m.Show(screen);
@@ -3726,7 +4086,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (firstRow >= 0 && _tracks.Rows[firstRow].Tag is Track ft)
         {
             int fr = firstRow;
-            var play = new ToolStripMenuItem(MediaType.IsVideo(ft.MediaType) ? "Play video" : "Play");
+            var play = new ToolStripMenuItem(MediaType.IsVideo(ft.MediaType) ? Loc.T("Play video") : Loc.T("Play"));
             play.Click += (_, _) => ActivateTrackRow(fr);
             m.Items.Add(play);
         }
@@ -3735,36 +4095,36 @@ internal sealed class MainForm : Form, IMessageFilter
         m.Items.Add(new ToolStripSeparator());
 
         // Copy off the iPod to the PC — a read, so offered on every device (incl. read-only).
-        var copyOut = new ToolStripMenuItem($"Copy to PC…   ({ids.Count})");
+        var copyOut = new ToolStripMenuItem(Loc.T("Copy to PC…   ({0})", ids.Count));
         copyOut.Click += (_, _) => OnExportSelected();
         m.Items.Add(copyOut);
         m.Items.Add(new ToolStripSeparator());
 
         if (!_device.Profile.CanWrite)
         {
-            string why = _device.Profile.WriteBlockReason.Length > 0 ? _device.Profile.WriteBlockReason : "This iPod is read-only.";
-            m.Items.Add(new ToolStripMenuItem("Read-only — " + why) { Enabled = false });
+            string why = _device.Profile.WriteBlockReason.Length > 0 ? _device.Profile.WriteBlockReason : Loc.T("This iPod is read-only.");
+            m.Items.Add(new ToolStripMenuItem(Loc.T("Read-only — {0}", why)) { Enabled = false });
             m.Show(screen);
             return;
         }
 
-        // Edit tags + star rating.
-        var edit = new ToolStripMenuItem("Edit info…");
+        // Edit tags + star rating (one song, or shared fields across the whole selection).
+        var edit = new ToolStripMenuItem(ids.Count > 1 ? Loc.T("Edit {0} songs…", ids.Count) : Loc.T("Edit info…"));
         edit.Click += (_, _) => OnEditTrackInfo();
         m.Items.Add(edit);
         m.Items.Add(new ToolStripSeparator());
 
         // Add to playlist ▸ (existing playlists + New playlist…)
-        var addTo = new ToolStripMenuItem("Add to playlist");
+        var addTo = new ToolStripMenuItem(Loc.T("Add to playlist"));
         foreach (var pl in _shownPlaylists.Where(p => _db is not null && !ReferenceEquals(p, _db.Master) && !p.IsPodcast))
         {
             var plRef = pl;
-            var it = new ToolStripMenuItem(pl.Name.Length == 0 ? "Untitled" : pl.Name);
+            var it = new ToolStripMenuItem(pl.Name.Length == 0 ? Loc.T("Untitled") : pl.Name);
             it.Click += (_, _) => AddSelectedToPlaylist(plRef, ids);
             addTo.DropDownItems.Add(it);
         }
         if (addTo.DropDownItems.Count > 0) addTo.DropDownItems.Add(new ToolStripSeparator());
-        var newWith = new ToolStripMenuItem("New playlist…");
+        var newWith = new ToolStripMenuItem(Loc.T("New playlist…"));
         newWith.Click += (_, _) => CreatePlaylistWithTracks(ids);
         addTo.DropDownItems.Add(newWith);
         m.Items.Add(addTo); // the submenu is themed automatically by RoundContextMenu
@@ -3773,12 +4133,12 @@ internal sealed class MainForm : Form, IMessageFilter
         bool inUserPlaylist = _db is not null && _current is not null && !ReferenceEquals(_current, _db.Master) && !_current.IsPodcast;
         if (inUserPlaylist)
         {
-            var rem = new ToolStripMenuItem($"Remove from “{_current!.Name}”   ({ids.Count})");
+            var rem = new ToolStripMenuItem(Loc.T("Remove from “{0}”   ({1})", _current!.Name, ids.Count));
             rem.Click += (_, _) => RemoveFromCurrentPlaylist(ids);
             m.Items.Add(rem);
             m.Items.Add(new ToolStripSeparator());
         }
-        var del = new ToolStripMenuItem($"Delete from iPod   ({ids.Count})");
+        var del = new ToolStripMenuItem(Loc.T("Delete from iPod   ({0})", ids.Count));
         del.Click += (_, _) => OnDelete();
         m.Items.Add(del);
         m.Show(screen);
@@ -3794,45 +4154,53 @@ internal sealed class MainForm : Form, IMessageFilter
     private void DeletePlaylist(Playlist pl)
     {
         if (_lib is null) return;
-        string label = pl.Name.Length == 0 ? "Untitled" : pl.Name;
-        if (MessageBox.Show(this, $"Delete the playlist “{label}”?\n\nThe songs stay on the iPod — only the playlist itself is removed.",
-                "Delete playlist", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        string label = pl.Name.Length == 0 ? Loc.T("Untitled") : pl.Name;
+        if (MessageDialog.Show(this, Loc.T("Delete the playlist “{0}”?\n\nThe songs stay on the iPod — only the playlist itself is removed.", label),
+                Loc.T("Delete playlist"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         if (!ConfirmWriteOnce()) return;
-        try { Cursor = Cursors.WaitCursor; _lib.RemovePlaylist(pl); _lib.Save(); }
-        catch (Exception ex) { MessageBox.Show(this, "Write failed (backup kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        bool ok;
+        try { Cursor = Cursors.WaitCursor; ok = _lib.RemovePlaylist(pl); if (ok) _lib.Save(); }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Write failed (backup kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         finally { Cursor = Cursors.Default; }
+        if (!ok) { ShowPlaylistNotEditable(); return; }
         ReloadAfterEdit();
-        SetStatus($"Deleted playlist “{label}” — songs kept.");
+        SetStatus(Loc.T("Deleted playlist “{0}” — songs kept.", label));
     }
 
     private void RenamePlaylistInteractive(Playlist pl)
     {
         if (_lib is null) return;
-        string? name = PromptDialog.Show(this, "Rename playlist", "New name:", pl.Name);
+        string? name = PromptDialog.Show(this, Loc.T("Rename playlist"), Loc.T("New name:"), pl.Name);
         if (string.IsNullOrWhiteSpace(name) || name.Trim() == pl.Name) return;
         if (!ConfirmWriteOnce()) return;
-        try { Cursor = Cursors.WaitCursor; _lib.RenamePlaylist(pl, name.Trim()); _lib.Save(); }
-        catch (Exception ex) { MessageBox.Show(this, "Write failed (backup kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        bool ok;
+        try { Cursor = Cursors.WaitCursor; ok = _lib.RenamePlaylist(pl, name.Trim()); if (ok) _lib.Save(); }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Write failed (backup kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         finally { Cursor = Cursors.Default; }
+        if (!ok) { ShowPlaylistNotEditable(); return; }
         ReloadAfterEdit();
-        SetStatus($"Renamed playlist to “{name.Trim()}”.");
+        SetStatus(Loc.T("Renamed playlist to “{0}”.", name.Trim()));
     }
 
     private void AddSelectedToPlaylist(Playlist pl, List<uint> ids)
     {
         if (_lib is null) return;
         if (!ConfirmWriteOnce()) return;
-        try { Cursor = Cursors.WaitCursor; _lib.AddToPlaylist(pl.PersistentId, ids); _lib.Save(); }
-        catch (Exception ex) { MessageBox.Show(this, "Write failed (backup kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        bool ok;
+        try { Cursor = Cursors.WaitCursor; ok = _lib.AddToPlaylist(pl.PersistentId, ids); if (ok) _lib.Save(); }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Write failed (backup kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         finally { Cursor = Cursors.Default; }
+        // AddToPlaylist returns false for BOTH "no stable id" and "every song was already in the list" — only the
+        // former is the not-editable case; the latter is a benign no-op, not an error.
+        if (!ok) { if (pl.PersistentId == 0) ShowPlaylistNotEditable(); else SetStatus(Loc.T("All selected songs are already in “{0}”.", pl.Name)); return; }
         ReloadAfterEdit();
-        SetStatus($"Added {ids.Count} song(s) to “{pl.Name}”.");
+        SetStatus(Loc.T("Added {0} song(s) to “{1}”.", ids.Count, pl.Name));
     }
 
     private void CreatePlaylistWithTracks(List<uint> ids)
     {
         if (_lib is null) return;
-        string? name = PromptDialog.Show(this, "New playlist", "Playlist name:", "New Playlist");
+        string? name = PromptDialog.Show(this, Loc.T("New playlist"), Loc.T("Playlist name:"), Loc.T("New Playlist"));
         if (string.IsNullOrWhiteSpace(name)) return;
         if (!ConfirmWriteOnce()) return;
         try
@@ -3842,22 +4210,30 @@ internal sealed class MainForm : Form, IMessageFilter
             if (ids.Count > 0) _lib.AddToPlaylist(pid, ids);
             _lib.Save();
         }
-        catch (Exception ex) { MessageBox.Show(this, "Write failed (backup kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Write failed (backup kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         finally { Cursor = Cursors.Default; }
         ReloadAfterEdit();
-        SetStatus($"Created playlist “{name.Trim()}”" + (ids.Count > 0 ? $" with {ids.Count} song(s)." : "."));
+        SetStatus(ids.Count > 0 ? Loc.T("Created playlist “{0}” with {1} song(s).", name.Trim(), ids.Count) : Loc.T("Created playlist “{0}”.", name.Trim()));
     }
 
     private void RemoveFromCurrentPlaylist(List<uint> ids)
     {
         if (_lib is null || _current is null) return;
         if (!ConfirmWriteOnce()) return;
-        try { Cursor = Cursors.WaitCursor; _lib.RemoveFromPlaylist(_current, ids); _lib.Save(); }
-        catch (Exception ex) { MessageBox.Show(this, "Write failed (backup kept as iTunesDB.bak):\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        bool ok;
+        try { Cursor = Cursors.WaitCursor; ok = _lib.RemoveFromPlaylist(_current, ids); if (ok) _lib.Save(); }
+        catch (Exception ex) { MessageDialog.Show(this, Loc.T("Write failed (backup kept as iTunesDB.bak):\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         finally { Cursor = Cursors.Default; }
+        if (!ok) { ShowPlaylistNotEditable(); return; }
         ReloadAfterEdit();
-        SetStatus($"Removed {ids.Count} song(s) from the playlist.");
+        SetStatus(Loc.T("Removed {0} song(s) from the playlist.", ids.Count));
     }
+
+    /// <summary>Shown when a playlist edit no-ops because the list has no stable persistent id (an externally-authored
+    /// list, e.g. an On-The-Go playlist) — so the user is never told an edit succeeded when the DB was left unchanged.</summary>
+    private void ShowPlaylistNotEditable() => MessageDialog.Show(this,
+        Loc.T("This playlist can't be edited — it has no stable identifier in the iPod's database, so nothing was changed.\n\n(Playlists you create in Mixtape don't have this limitation.)"),
+        "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ReloadAfterEdit()
     {
@@ -3970,8 +4346,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         using var dlg = new OpenFileDialog
         {
-            Title = "Play an audio file from your PC",
-            Filter = "Audio files|*.mp3;*.m4a;*.aac;*.wav;*.aif;*.aiff;*.m4b;*.flac;*.wma|All files|*.*",
+            Title = Loc.T("Play an audio file from your PC"),
+            Filter = Loc.T("Audio files") + "|*.mp3;*.m4a;*.aac;*.wav;*.aif;*.aiff;*.m4b;*.flac;*.wma|" + Loc.T("All files") + "|*.*",
         };
         if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.FileName)) return;
         try
@@ -3991,7 +4367,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "Couldn't play that file:\n\n" + ex.Message, "Play file", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageDialog.Show(this, Loc.T("Couldn't play that file:\n\n{0}", ex.Message), Loc.T("Play file"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 
@@ -4073,11 +4449,11 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         var w = _db?.Warnings;
         if (w is not { Count: > 0 }) return;
-        MessageBox.Show(this,
-            "While reading your iPod's database, Mixtape noticed the following. These are non-fatal — your music still reads and plays normally:\n\n• " +
+        MessageDialog.Show(this,
+            Loc.T("While reading your iPod's database, Mixtape noticed the following. These are non-fatal — your music still reads and plays normally:\n\n• ") +
             string.Join("\n\n• ", w) +
-            "\n\n(These usually come from how a previous app or sync wrote the database, and are safe to ignore.)",
-            "Database notes", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Loc.T("\n\n(These usually come from how a previous app or sync wrote the database, and are safe to ignore.)"),
+            Loc.T("Database notes"), MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void SeedDefaultSort()
@@ -4095,11 +4471,10 @@ internal sealed class MainForm : Form, IMessageFilter
     private bool ConfirmWriteOnce()
     {
         if (!_settings.ConfirmWrites || _writeConfirmed) return true;
-        string drive = _device?.MountRoot.TrimEnd('\\') ?? "the iPod";
-        var r = MessageBox.Show(this,
-            "Mixtape backs up the database (iTunesDB.bak) before every write and verifies the result afterwards.\n\n" +
-            $"Tip: if Windows has flagged this iPod's drive for repair, run  chkdsk {drive} /f  first.\n\nContinue?",
-            "Writing to the iPod", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
+        string drive = _device?.MountRoot.TrimEnd('\\') ?? Loc.T("the iPod");
+        var r = MessageDialog.Show(this,
+            Loc.T("Mixtape backs up the database (iTunesDB.bak) before every write and verifies the result afterwards.\n\nTip: if Windows has flagged this iPod's drive for repair, run  chkdsk {0} /f  first.\n\nContinue?", drive),
+            Loc.T("Writing to the iPod"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
         if (r == DialogResult.OK) { _writeConfirmed = true; return true; }
         return false;
     }

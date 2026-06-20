@@ -22,7 +22,7 @@ internal sealed class SearchBox : Panel
             BackColor = Theme.Blend(Theme.Bg, Color.Black, 0.30),
             ForeColor = Theme.TextCol,
             Font = Theme.UiFont(10f),
-            PlaceholderText = "Search songs, artists, albums…",
+            PlaceholderText = Loc.T("Search songs, artists, albums…"),
         };
         _tb.TextChanged += (_, _) => { Changed?.Invoke(_tb.Text); Invalidate(); };
         Controls.Add(_tb);

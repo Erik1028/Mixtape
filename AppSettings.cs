@@ -12,6 +12,9 @@ internal sealed class AppSettings
     public string ThemeVariant { get; set; } = "Graphite";
     public bool Compact { get; set; }          // false = comfortable (52px rows + art), true = compact (28px, text-only)
     public bool ShowArtwork { get; set; } = true;
+    /// <summary>UI language code: "en" | "hu". Empty = auto (follow the OS language). Applied at startup;
+    /// changing it restarts the app. See <see cref="Loc"/>.</summary>
+    public string Language { get; set; } = "";
 
     // ---- Playback modes (now-playing bar) ----
     public bool Shuffle { get; set; }
@@ -37,6 +40,9 @@ internal sealed class AppSettings
 
     /// <summary>User-made playlists of PC files, shown under "ON THIS PC". Each is a name + ordered file paths.</summary>
     public List<LocalPlaylistData> LocalPlaylists { get; set; } = new();
+
+    /// <summary>Photo-grid tile size in px (the size slider on the Photos view).</summary>
+    public int PhotoTileSize { get; set; } = 132;
 
     // ---- Equalizer (applied to PC playback via NAudio) ----
     public bool EqEnabled { get; set; }
@@ -155,6 +161,9 @@ internal sealed class AppSettings
 /// <summary>A PC-side playlist: a name plus an ordered list of local audio file paths.</summary>
 internal sealed class LocalPlaylistData
 {
+    /// <summary>Stable id used to key a chosen cover (and any future per-playlist preference) so it survives a
+    /// rename. Assigned lazily the first time a cover is set; empty for playlists that never got one.</summary>
+    public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public List<string> Paths { get; set; } = new();
 }
