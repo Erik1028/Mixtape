@@ -10,6 +10,7 @@ internal sealed class EqBandsControl : Control
     private readonly float[] _gains = new float[EqualizerSampleProvider.BandCount];
     private int _drag = -1;
     private static readonly string[] Labels = { "31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k" };
+    private readonly Font _fLabel = Theme.UiFont(7.5f);   // cached: drawn per band, per drag-repaint — an inline font leaked ~10 handles/frame
 
     public EqBandsControl(float[] gains)
     {
@@ -51,7 +52,7 @@ internal sealed class EqBandsControl : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(BackColor);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(BackColor);
         var ta = TrackArea;
         int w = ColW, midY = ta.Top + ta.Height / 2;
         using (var cp = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.12f))) g.DrawLine(cp, 6, midY, Width - 6, midY); // 0 dB line
@@ -65,9 +66,15 @@ internal sealed class EqBandsControl : Control
             using (var fp = new Pen(Theme.Accent, 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 g.DrawLine(fp, cx, midY, cx, ky);
             using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, cx - 6, ky - 6, 12, 12);
-            TextRenderer.DrawText(g, Labels[i], Theme.UiFont(7.5f), new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.Subtle,
+            TextRenderer.DrawText(g, Labels[i], _fLabel, new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _fLabel.Dispose();
+        base.Dispose(disposing);
     }
 }
 
@@ -94,11 +101,12 @@ internal sealed class EqualizerDialog : FlyoutForm
     public EqualizerDialog(bool enabled, float[] gains, Action<bool, float[]> onChange)
     {
         _onChange = onChange;
+        GlassEnabled = Glass.PopupsEnabled;   // frosted-glass backdrop (Settings → "Frosted popups")
         Text = Loc.T("Equalizer");
         ClientSize = new Size(404, 286);
         ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);   // borderless/anchored chrome comes from FlyoutForm
 
-        Controls.Add(new Label { Text = Loc.T("Equalizer"), Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Bounds = new Rectangle(18, 14, 220, 24), TextAlign = ContentAlignment.MiddleLeft });
+        Controls.Add(new GlassLabel { Text = Loc.T("Equalizer"), Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Bounds = new Rectangle(18, 14, 220, 24), TextAlign = ContentAlignment.MiddleLeft });
 
         _toggle = new ToggleSwitch { Checked = enabled, Location = new Point(ClientSize.Width - 18 - 46, 15) };
         _toggle.CheckedChanged += Push;

@@ -9,6 +9,7 @@ internal sealed class DurationSlider : Control
     private double _value;
     private bool _drag;
     private const double Min = 1, Max = 12;
+    private readonly Font _fVal = Theme.UiFont(9.5f);   // cached: OnPaint repaints continuously while dragging — an inline font leaked a handle per frame
 
     public DurationSlider(double seconds)
     {
@@ -45,7 +46,7 @@ internal sealed class DurationSlider : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Parent?.BackColor ?? Theme.PanelBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         var t = Track;
         float frac = (float)((_value - Min) / (Max - Min));
         using (var bp = Theme.RoundedRect(new RectangleF(t.X, t.Y, t.Width, t.Height), t.Height / 2f))
@@ -57,8 +58,14 @@ internal sealed class DurationSlider : Control
         float kx = t.X + fw, ky = t.Y + t.Height / 2f;
         using (var ks = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(ks, kx - 7, ky - 6.5f, 14, 14);
         using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, kx - 6.5f, ky - 6.5f, 13, 13);
-        TextRenderer.DrawText(g, $"{(int)_value}s", Theme.UiFont(9.5f), new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
+        TextRenderer.DrawText(g, $"{(int)_value}s", _fVal, new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _fVal.Dispose();
+        base.Dispose(disposing);
     }
 }
 
@@ -80,11 +87,12 @@ internal sealed class ProFeaturesDialog : FlyoutForm
         Action<bool, double, bool, bool, bool> onChange, Action<int> onSleep)
     {
         _onChange = onChange; _onSleep = onSleep;
+        GlassEnabled = Glass.PopupsEnabled;   // frosted-glass backdrop (Settings → "Frosted popups")
         Text = Loc.T("Pro Features");
         ClientSize = new Size(404, 300);
         ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);   // borderless/anchored chrome comes from FlyoutForm
 
-        Controls.Add(new Label
+        Controls.Add(new GlassLabel
         {
             Text = Loc.T("Pro Features"), Font = Theme.DisplayFont(13f, FontStyle.Bold), ForeColor = Theme.TextCol,
             AutoSize = false, Bounds = new Rectangle(18, 14, 300, 24), TextAlign = ContentAlignment.MiddleLeft,

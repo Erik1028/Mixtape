@@ -35,6 +35,7 @@ internal sealed class CoverFlowView : Control
     private readonly struct BakeReq { public readonly long Key; public readonly int[] SrcPx; public readonly int SrcW, SrcH, BaseH, Side, Bucket, Gen;
         public BakeReq(long k, int[] px, int sw, int sh, int bh, int side, int bucket, int gen) { Key = k; SrcPx = px; SrcW = sw; SrcH = sh; BaseH = bh; Side = side; Bucket = bucket; Gen = gen; } }
     private readonly Dictionary<long, (int[] px, int w, int h)> _srcPx = new();  // per (index,ver) cover pixels, extracted once on the UI thread
+    private readonly List<long> _evictKeys = new();              // REUSED scratch for the per-frame cache eviction (no LINQ → no per-frame GC)
     private readonly object _qLock = new();
     private readonly Stack<BakeReq> _queue = new();               // LIFO → the most recently needed angle bakes first
     private readonly HashSet<long> _pending = new();             // keys already queued or in flight (dedup)
@@ -49,8 +50,17 @@ internal sealed class CoverFlowView : Control
     private const int Buckets = 20;                                 // angle steps for the cross-centre rotation (more = smoother)
     private Bitmap? _bg;                                            // cached backdrop, re-rendered on resize only
     private Bitmap? _vignette;                                      // cached edge-darkening overlay (re-rendered on resize only)
+    // Chrome fonts + the close-button pen draw on EVERY OnPaint (~66fps during a coast/flick). Theme.UiFont/DisplayFont
+    // allocate a fresh GDI Font per call, so building them per-frame churned handles + GC → a real Cover-Flow stutter source.
+    // Hoisted here (font families are static-readonly, fixed at startup → identical render). Disposed in Dispose().
+    private readonly Font _fCentreTitle = Theme.DisplayFont(13f, FontStyle.Bold);
+    private readonly Font _fCentreSub = Theme.UiFont(10f);
+    private readonly Font _fMode = Theme.UiFont(9f, FontStyle.Bold);
+    private readonly Font _fNpChip = Theme.UiFont(8.75f, FontStyle.Bold);
+    private readonly Pen _closePen = new(Color.White, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round };  // colour reassigned per frame
     private float _lastPaintPos;                                    // _pos at the previous paint → per-frame scroll speed
     private bool _fast;                                             // moving fast this frame → coarsen the warp buckets
+    private int _visRange = 6;                                      // visible covers each side of centre (from the last paint) → pre-buffer window
     private float _intro = 1f;                                      // open/close zoom+fade (1 = fully shown)
     private Tween? _introTween;
     private readonly List<(int index, RectangleF rect)> _hit = new();
@@ -120,8 +130,10 @@ internal sealed class CoverFlowView : Control
     {
         index = Math.Clamp(index, 0, Math.Max(0, _items.Count - 1));
         if (index == _target) return;
+        int fromIdx = (int)Math.Round(_pos);
         _target = index;
         _tw?.Cancel();
+        PrebufferMove(fromIdx, _target);   // bake the arrival + the centre covers' paths NOW, during the coast → no pop-in
         if (!Anim.MotionEnabled) { _pos = _target; Invalidate(); return; }
         float from = _pos, to = _target;
         // Coast time scales gently with distance (snappy single steps, a longer glide for big jumps) and
@@ -308,15 +320,19 @@ internal sealed class CoverFlowView : Control
         // Fan out enough covers to reach the screen edges (capped for perf), so a wide / full-screen window
         // shows a full-width deck rather than a short fan stranded in the middle.
         int range = Math.Clamp((int)Math.Ceiling((Width / 2f - side1) / sideStep) + 2, 5, 8);
+        _visRange = range;   // remembered so the pre-buffer knows how wide the deck is
 
         int lo = Math.Max(0, (int)Math.Floor(_pos) - range);
         int hi = Math.Min(_items.Count - 1, (int)Math.Ceiling(_pos) + range);
         // Draw farthest-from-centre first (back) and the centre last (front): each cover overlaps the one
-        // further out, the centre on top.
-        var order = Enumerable.Range(lo, hi - lo + 1).OrderByDescending(i => Math.Abs(i - _pos)).ToList();
-
-        foreach (int i in order)
+        // further out, the centre on top. Two cursors walking inward from both ends reproduce that exact
+        // farthest-first order with zero per-frame allocation (this runs ~66fps during a coast/drag).
+        int dlo = lo, dhi = hi;
+        while (dlo <= dhi)
+        {
+            int i = Math.Abs(dlo - _pos) >= Math.Abs(dhi - _pos) ? dlo++ : dhi--;
             DrawCover(g, i, cx, centreY, coverW, coverH, baseH, maxAngle, side1, sideStep, introScale);
+        }
 
         // Edge vignette: darken the far side covers toward the screen edges for depth (drawn over them).
         // Cached as a transparent overlay — and blitted as only its two non-empty EDGE STRIPS (the wide middle is
@@ -340,18 +356,70 @@ internal sealed class CoverFlowView : Control
         g.DrawImage(_vignette, new Rectangle(Width - vw, 0, vw, H), Width - vw, 0, vw, H, GraphicsUnit.Pixel);     // right strip
 
         // Evict baked sprites + cover-pixel arrays for covers that have scrolled well out of view (bounds memory).
+        // ⚠️ This runs EVERY paint (~66fps) during a coast/drag, so it must NOT allocate — the old `.Where(..).ToList()`
+        // built a List + a capturing closure each frame once a cache passed its threshold (easily, with 20 buckets × 2
+        // sides), churning Gen2 GC = the intermittent scroll stutter. Reuse one scratch list + a plain loop (struct
+        // Dictionary enumerator → zero heap alloc); collect-then-remove so we don't mutate mid-enumeration.
         if (_sprites.Count > 100)
             lock (_spritesLock)
-                foreach (var k in _sprites.Keys.Where(k => { int idx = (int)(k >> 12); return idx < lo - 2 || idx > hi + 2; }).ToList())
-                { _sprites[k].Dispose(); _sprites.Remove(k); }
+            {
+                _evictKeys.Clear();
+                foreach (var k in _sprites.Keys) { int idx = (int)(k >> 12); if (idx < lo - 2 || idx > hi + 2) _evictKeys.Add(k); }
+                foreach (var k in _evictKeys) { _sprites[k].Dispose(); _sprites.Remove(k); }
+            }
         if (_srcPx.Count > 40)
-            foreach (var k in _srcPx.Keys.Where(k => { int idx = (int)(k >> 2); return idx < lo - 2 || idx > hi + 2; }).ToList())
-                _srcPx.Remove(k);
+        {
+            _evictKeys.Clear();
+            foreach (var k in _srcPx.Keys) { int idx = (int)(k >> 2); if (idx < lo - 2 || idx > hi + 2) _evictKeys.Add(k); }
+            foreach (var k in _evictKeys) _srcPx.Remove(k);
+        }
 
         DrawCentreText(g, centreY, coverH);
         DrawNowPlayingChip(g);
         DrawModeSwitch(g);
         DrawCloseButton(g);
+
+        // When idle, proactively bake the RESTING sprites for the deck (a touch beyond what's visible) so the next
+        // wheel-step / arrival shows already-baked covers — no pop-in flicker as the on-demand bakes catch up.
+        if (Settled) PrebufferSettle(_target);
+    }
+
+    /// <summary>Pre-bake the crisp SETTLE sprites for the covers around <paramref name="center"/> (centre flat at
+    /// 2×, each side at its full-angle anchor), a little beyond the visible deck. Idempotent + cheap (skips anything
+    /// already baked/queued). The requests go to the BOTTOM of the LIFO queue, so live on-demand bakes still run first.</summary>
+    private void PrebufferSettle(int center)
+    {
+        int baseH = _bakedCoverH;
+        if (baseH <= 0 || _items.Count == 0) return;
+        int r = _visRange + 1;
+        for (int i = center - r; i <= center + r; i++)
+        {
+            if (i < 0 || i >= _items.Count) continue;
+            if (i == center) QueueBakeIfMissing(i, 0, 0, baseH);                 // centred cover: flat, 2× supersample
+            else QueueBakeIfMissing(i, i < center ? -1 : 1, Buckets, baseH);     // side covers: full-angle anchor
+        }
+    }
+
+    /// <summary>Pre-bake the path of a coast: the arrival state, plus the incoming + outgoing centre covers' angle
+    /// buckets (every 4th), so the two covers the eye tracks across the deck don't STEP/flicker as they slide.</summary>
+    private void PrebufferMove(int from, int target)
+    {
+        int baseH = _bakedCoverH;
+        if (baseH <= 0) return;
+        PrebufferSettle(target);                       // arrival + just-beyond
+        if (target == from) return;
+        int inSide = target > from ? 1 : -1;           // the incoming centre cover approaches from this side
+        QueueBakeIfMissing(target, 0, 0, baseH);       // …and lands flat at centre (2×)
+        for (int b = Buckets; b >= 4; b -= 4) QueueBakeIfMissing(target, inSide, b, baseH);
+        for (int b = 4; b <= Buckets; b += 4) QueueBakeIfMissing(from, -inSide, b, baseH);   // outgoing centre sweeps the other way
+    }
+
+    private void QueueBakeIfMissing(int i, int side, int bucket, int baseH)
+    {
+        if (i < 0 || i >= _items.Count) return;
+        long key = SpriteKey(i, Ver(i), side, bucket);
+        lock (_spritesLock) if (_sprites.ContainsKey(key)) return;
+        Enqueue(i, side, bucket, baseH, key);
     }
 
     /// <summary>A Songs / Albums / Artists segmented toggle centred at the top — clicking a segment raises
@@ -359,7 +427,7 @@ internal sealed class CoverFlowView : Control
     private void DrawModeSwitch(Graphics g)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var f = Theme.UiFont(9f, FontStyle.Bold);
+        var f = _fMode;
         const int padX = 17, h = 30;
         int[] w = new int[3]; int total = 0;
         for (int i = 0; i < 3; i++) { w[i] = TextRenderer.MeasureText(g, Loc.T(ModeLabels[i]), f).Width + padX * 2; total += w[i]; }
@@ -399,7 +467,7 @@ internal sealed class CoverFlowView : Control
         if (!present) return;
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var f = Theme.UiFont(8.75f, FontStyle.Bold);
+        var f = _fNpChip;
         string txt = Loc.T("Now Playing");
         int tw = TextRenderer.MeasureText(g, txt, f).Width;
         _npChip = new Rectangle(16, 14, 16 + 16 + 8 + tw + 14, 30);
@@ -441,7 +509,12 @@ internal sealed class CoverFlowView : Control
             // seen mid-flick on the leading edge, where motion + the edge vignette hide the missing slant.
             float projW = coverW * (float)Math.Cos(maxAngle * Math.Min(bucket, Buckets) / (float)Buckets) * scale;
             float ch = coverH * scale;
-            var im0 = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            // CHEAP interpolation ONLY during a FAST flick: HighQualityBilinear re-prefilters the WHOLE source cover every
+            // frame, and a fast flick hits this branch for MANY covers at once (the baker is behind) → that was the tween lag
+            // (a slow drag stays smooth because the baker keeps up → no flat cards). Plain Bilinear is ~3-5× cheaper and the
+            // drop is invisible mid-motion. When NOT fast (slow/settle, where a flat card is rare + the eye can rest on it),
+            // keep HighQualityBilinear so quality is unchanged.
+            var im0 = g.InterpolationMode; g.InterpolationMode = _fast ? InterpolationMode.Bilinear : InterpolationMode.HighQualityBilinear;
             g.DrawImage(_items[i].Cover, Xc - projW / 2f, top, projW, ch);
             g.InterpolationMode = im0;
             _hit.Add((i, new RectangleF(Xc - projW / 2f, top, projW, ch)));
@@ -566,10 +639,14 @@ internal sealed class CoverFlowView : Control
         }
     }
 
+    private int _repaintQueued;   // 0/1 — COALESCE the baker's repaint requests: a fast flick bakes a burst of sprites, each of
+    private Action? _repaintAction;   // which posted a fresh BeginInvoke closure → message-pump flood + GC churn on the UI thread.
     private void RequestRepaint()
     {
         if (!IsHandleCreated || IsDisposed) return;
-        try { BeginInvoke((Action)(() => { if (!IsDisposed) Invalidate(); })); } catch { /* handle gone */ }
+        if (System.Threading.Interlocked.Exchange(ref _repaintQueued, 1) == 1) return;   // already one pending — Invalidate is whole-control, so it covers this bake too
+        try { BeginInvoke(_repaintAction ??= () => { _repaintQueued = 0; if (!IsDisposed) Invalidate(); }); }
+        catch { _repaintQueued = 0; }
     }
 
     /// <summary>Render a perspective-warped cover (true foreshortened trapezoid) plus a baked, fade-to-
@@ -724,8 +801,8 @@ internal sealed class CoverFlowView : Control
         if (alpha < 8) return;
         int y = (int)(centreY + coverH / 2f + coverH * 0.42f + 10);
         var rect = new Rectangle(0, y, Width, 26);
-        using var tf = Theme.DisplayFont(13f, FontStyle.Bold);
-        using var sf = Theme.UiFont(10f);
+        var tf = _fCentreTitle;
+        var sf = _fCentreSub;
         TextRenderer.DrawText(g, it.Title, tf, rect, Color.FromArgb(alpha, Color.White),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (!string.IsNullOrEmpty(it.Subtitle))
@@ -741,9 +818,9 @@ internal sealed class CoverFlowView : Control
         using (var b = new SolidBrush(Color.FromArgb((int)((_closeHover ? 70 : 40) * _intro), Color.White)))
             g.FillEllipse(b, _closeRect);
         float cx = _closeRect.X + sz / 2f, cy = _closeRect.Y + sz / 2f, r = sz * 0.22f;
-        using var pen = new Pen(Color.FromArgb((int)(220 * _intro), Color.White), 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-        g.DrawLine(pen, cx - r, cy - r, cx + r, cy + r);
-        g.DrawLine(pen, cx + r, cy - r, cx - r, cy + r);
+        _closePen.Color = Color.FromArgb((int)(220 * _intro), Color.White);
+        g.DrawLine(_closePen, cx - r, cy - r, cx + r, cy + r);
+        g.DrawLine(_closePen, cx + r, cy - r, cx - r, cy + r);
     }
 
     private void ClearCaches()
@@ -765,6 +842,7 @@ internal sealed class CoverFlowView : Control
             _bakerStop = true; _bakeSignal.Set(); _baker?.Join(500); _bakeSignal.Dispose();
             if (_hiPin.IsAllocated) _hiPin.Free();              // safe: worker has stopped, so no bake is mid-flight
             _tw?.Cancel(); _introTween?.Cancel(); ClearCaches(); _bg?.Dispose(); _vignette?.Dispose();
+            _fCentreTitle.Dispose(); _fCentreSub.Dispose(); _fMode.Dispose(); _fNpChip.Dispose(); _closePen.Dispose();
         }
         base.Dispose(disposing);
     }

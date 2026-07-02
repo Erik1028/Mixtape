@@ -12,6 +12,9 @@ internal sealed class ThinScrollBar : Control
     private DataGridView? _grid;
     private Control? _viewport;     // panel mode: the clipping viewport
     private Control? _content;      // panel mode: the (taller) content, scrolled via its Top
+    private Func<int>? _cTotal, _cVisible, _cFirst;   // custom mode: an owner-drawn host (e.g. the sidebar) drives it
+    private Action<int>? _cSetFirst;
+    public bool SidebarTrack;       // clear the track to SidebarBg (not Theme.Bg) so it's invisible inside the rail
     private bool _dragging;
     private bool _hover;
     private int _dragStartY;
@@ -46,22 +49,31 @@ internal sealed class ThinScrollBar : Control
         content.LocationChanged += (_, _) => Invalidate();   // follow Top changes (wheel / animated scroll)
     }
 
-    /// <summary>Scroll from a mouse-wheel notch (panel mode) — ~60px per notch, eased.</summary>
+    /// <summary>Custom mode: an owner-drawn host (e.g. the Sidebar) provides its own pixel-scroll values + setter,
+    /// so it gets the same thin scrollbar + eased wheel as the grid/panel without being a viewport+content pair.</summary>
+    public void AttachCustom(Func<int> total, Func<int> visible, Func<int> first, Action<int> setFirst)
+    { _cTotal = total; _cVisible = visible; _cFirst = first; _cSetFirst = setFirst; }
+
+    /// <summary>Scroll from a mouse-wheel notch (panel/custom mode) — ~60px per notch, eased.</summary>
     public void ScrollByWheel(int wheelDelta) => AnimateScrollBy(-Math.Sign(wheelDelta) * 60);
 
     private bool PanelMode => _viewport is not null && _content is not null;
+    private bool CustomMode => _cTotal is not null;
 
-    private int Total => PanelMode ? _content!.Height : (_grid?.RowCount ?? 0);
-    private int Visible => PanelMode ? Math.Max(1, _viewport!.ClientSize.Height)
+    private int Total => CustomMode ? Math.Max(0, _cTotal!()) : PanelMode ? _content!.Height : (_grid?.RowCount ?? 0);
+    private int Visible => CustomMode ? Math.Max(1, _cVisible!())
+                         : PanelMode ? Math.Max(1, _viewport!.ClientSize.Height)
                                      : (_grid is null ? 0 : Math.Max(1, _grid.DisplayedRowCount(false)));
-    private int First => PanelMode ? Math.Max(0, -_content!.Top)
+    private int First => CustomMode ? Math.Max(0, _cFirst!())
+                       : PanelMode ? Math.Max(0, -_content!.Top)
                                    : (_grid is { RowCount: > 0 } g ? Math.Max(0, g.FirstDisplayedScrollingRowIndex) : 0);
 
     private void SetFirst(int v)
     {
         int max = Math.Max(0, Total - Visible);
         v = Math.Min(max, Math.Max(0, v));
-        if (PanelMode)
+        if (CustomMode) _cSetFirst!(v);
+        else if (PanelMode)
         {
             // Drive the SmoothGrid through its own seam-free move (and stop any wheel animation first, so the
             // user dragging the thumb never fights an in-flight eased scroll). Plain panels just move their Top.
@@ -100,8 +112,8 @@ internal sealed class ThinScrollBar : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         // Paint the track live from the current theme (not the BackColor baked at field-init,
-        // which would still be the default variant if a non-default theme was saved).
-        e.Graphics.Clear(Theme.Bg);
+        // which would still be the default variant if a non-default theme was saved). Glass-aware in a glass dialog.
+        if (!Glass.PaintBackground(e.Graphics, this, Glass.SurfaceTint)) e.Graphics.Clear(SidebarTrack ? Theme.SidebarBg : Theme.Bg);
         if (Total <= Visible) return; // nothing to scroll → no thumb
         var (y, h) = Thumb();
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;

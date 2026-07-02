@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace iPodCommander;
 
-internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist }
+internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist, SmartPlaylist }
 
 /// <summary>
 /// Apple-Music-style left rail: a "Mixtape" wordmark, then sections (DEVICE / LIBRARY /
@@ -15,11 +15,11 @@ internal sealed class Sidebar : Panel
     public event Action<SidebarRowKind, object?>? RowActivated;
     public event Action<SidebarRowKind, object?, Point>? RowRightClicked;
     public event Action<Point>? PlaylistAreaRightClicked; // right-click on empty space / the PLAYLISTS header
+    public event Action<SidebarRowKind, Point>? SectionAddClicked; // the "+" on a section header (Playlist = iPod, LocalPlaylist = on-PC)
     public event Action? RefreshClicked;
     public event Action? OpenFolderClicked;
     public event Action? SettingsClicked;
     public event Action<object?>? EjectClicked; // the ⏏ icon on a device row
-    public event Action? PlayFileClicked;       // the ▶ icon in the header (play a PC file)
 
     private sealed class Row
     {
@@ -28,6 +28,8 @@ internal sealed class Sidebar : Panel
         public object? Tag;
         public bool Active;
         public bool Hint;      // a faint, non-interactive helper line
+        public bool ShowAdd;   // a section header that gets a clickable "+" (PLAYLISTS / ON THIS PC)
+        public SidebarRowKind AddKind;   // what the "+" creates (Playlist = iPod, LocalPlaylist = on-PC)
         public Color Tile;
         public Bitmap? Icon;   // real mini cover art, when available
     }
@@ -35,6 +37,8 @@ internal sealed class Sidebar : Panel
     private readonly List<Row> _rows = new();
     private readonly List<(Rectangle Rect, Row Row)> _hit = new();
     private readonly List<(Rectangle Rect, Row Row)> _ejectHit = new(); // ⏏ sub-regions on device rows
+    private readonly List<(Rectangle Rect, SidebarRowKind Kind)> _addHit = new();   // "+" on a section header (new playlist)
+    private bool _addHover;
     private Row? _hover;
     private Row? _ejectHover;
     private Row? _dropRow;   // playlist row highlighted as the current drag-drop target (songs → playlist)
@@ -50,8 +54,8 @@ internal sealed class Sidebar : Panel
 
     private readonly ThemedButton _refresh = new() { Text = Loc.T("Refresh"), Pill = true, Height = 30 };
     private readonly ThemedButton _openFolder = new() { Text = Loc.T("Open folder"), Pill = true, Height = 30 };
-    private readonly ThemedButton _settings = new() { Icon = ThemedButton.Ico.Settings, Width = 30, Height = 28, Ghost = true };
-    private readonly ThemedButton _playFile = new() { Icon = ThemedButton.Ico.Play, Width = 30, Height = 28, Ghost = true };
+    private readonly ThemedButton _settings = new() { Icon = ThemedButton.Ico.Settings, Width = 38, Height = 34, Ghost = true };
+    private readonly ThinScrollBar _scrollbar = new() { SidebarTrack = true };   // same thin scrollbar + eased wheel as the song list
     private readonly ToolTip _tip = new();
 
     private const int HeaderH = 60, SectionH = 30, ItemH = 34, FooterH = 56, Pad = 12;
@@ -62,15 +66,15 @@ internal sealed class Sidebar : Panel
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
+        Controls.Add(_scrollbar);
+        _scrollbar.AttachCustom(() => _contentH, () => Math.Max(1, Height - HeaderH - FooterH), () => _scroll,
+            v => { if (v != _scroll) { _scroll = v; Invalidate(); } });
         Controls.Add(_refresh);
         Controls.Add(_openFolder);
         Controls.Add(_settings);
-        Controls.Add(_playFile);
         _refresh.Click += (_, _) => RefreshClicked?.Invoke();
         _openFolder.Click += (_, _) => OpenFolderClicked?.Invoke();
         _settings.Click += (_, _) => SettingsClicked?.Invoke();
-        _playFile.Click += (_, _) => PlayFileClicked?.Invoke();
-        _tip.SetToolTip(_playFile, "Play an audio file from your PC");
         _tip.SetToolTip(_settings, "Settings");
 
         try { if (Environment.ProcessPath is string p) _logo = System.Drawing.Icon.ExtractAssociatedIcon(p)?.ToBitmap(); } catch { }
@@ -78,13 +82,15 @@ internal sealed class Sidebar : Panel
         MouseMove += (_, e) =>
         {
             var ej = EjectHitTest(e.Location);
-            Cursor = ej is not null ? Cursors.Hand : Cursors.Default;
+            bool add = AddHitTest(e.Location) is not null;
+            Cursor = (ej is not null || add) ? Cursors.Hand : Cursors.Default;
             var r = HitTest(e.Location);
-            if (!ReferenceEquals(r, _hover) || !ReferenceEquals(ej, _ejectHover)) { _hover = r; _ejectHover = ej; Invalidate(); }
+            if (!ReferenceEquals(r, _hover) || !ReferenceEquals(ej, _ejectHover) || add != _addHover) { _hover = r; _ejectHover = ej; _addHover = add; Invalidate(); }
         };
-        MouseLeave += (_, _) => { _hover = null; _ejectHover = null; Invalidate(); };
+        MouseLeave += (_, _) => { _hover = null; _ejectHover = null; _addHover = false; Invalidate(); };
         MouseClick += (_, e) =>
         {
+            if (e.Button == MouseButtons.Left && AddHitTest(e.Location) is { } addKind) { SectionAddClicked?.Invoke(addKind, PointToScreen(e.Location)); return; }   // "+" → new (iPod / local) playlist
             if (e.Button == MouseButtons.Left && EjectHitTest(e.Location) is { } ejectRow) { EjectClicked?.Invoke(ejectRow.Tag); return; }
             var r = HitTest(e.Location);
             if (e.Button == MouseButtons.Right)
@@ -97,12 +103,27 @@ internal sealed class Sidebar : Panel
             if (r is null || r.Kind == SidebarRowKind.Section) return;
             RowActivated?.Invoke(r.Kind, r.Tag);
         };
-        MouseWheel += (_, e) => ClampScroll(_scroll - Math.Sign(e.Delta) * 40);
+        MouseWheel += (_, e) => _scrollbar.ScrollByWheel(e.Delta);
     }
 
     /// <summary>Scroll the rail by a raw wheel delta. The host routes the wheel here (the rail is a
-    /// non-focusable Panel, so it never receives WM_MOUSEWHEEL itself).</summary>
-    public void ScrollByWheel(int delta) => ClampScroll(_scroll - Math.Sign(delta) * 40);
+    /// non-focusable Panel, so it never receives WM_MOUSEWHEEL itself). Eased, via the thin scrollbar.</summary>
+    public void ScrollByWheel(int delta) => _scrollbar.ScrollByWheel(delta);
+
+    /// <summary>Keyboard rail nav (Ctrl+↑/↓): activate the next/previous SELECTABLE row (skipping section headers + hints),
+    /// from the current active row. The host re-builds the rail with the new active row (scroll is preserved by End()).</summary>
+    public void ActivateAdjacent(int dir)
+    {
+        int cur = _rows.FindIndex(r => r.Active);
+        if (cur < 0) cur = dir > 0 ? -1 : _rows.Count;
+        for (int i = cur + dir; i >= 0 && i < _rows.Count; i += dir)
+        {
+            var r = _rows[i];
+            if (r.Kind == SidebarRowKind.Section || r.Hint) continue;
+            RowActivated?.Invoke(r.Kind, r.Tag);
+            return;
+        }
+    }
 
     /// <summary>Clamp the scroll offset to [0, content − visible] so the list can't scroll past its end into empty space.</summary>
     private void ClampScroll(int value)
@@ -111,15 +132,41 @@ internal sealed class Sidebar : Panel
         int max = Math.Max(0, _contentH - visible);
         int v = Math.Clamp(value, 0, max);
         if (v != _scroll) { _scroll = v; Invalidate(); }
+        _scrollbar.Invalidate();
     }
 
     // ---- content building ----
     public void Begin() => _rows.Clear();
-    public void AddSection(string text) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text });
+    public void AddSection(string text, bool showAdd = false, SidebarRowKind addKind = SidebarRowKind.Playlist) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text, ShowAdd = showAdd, AddKind = addKind });
     public void AddItem(SidebarRowKind kind, string text, object? tag, bool active) =>
         _rows.Add(new Row { Kind = kind, Text = text, Tag = tag, Active = active, Tile = TileColor(kind, text) });
     public void AddHint(string text) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text, Hint = true });
-    public void End() { _scroll = 0; Invalidate(); }
+    // PRESERVE the scroll across rebuilds — a nav rebuild (Begin/AddItem/End on every view switch) must NOT yank the rail
+    // back to the top; just re-measure + re-clamp to the (possibly new) content height. (Was `_scroll = 0` → the scroll-reset bug.)
+    public void End() { _contentH = MeasureContent(); LayoutScrollbar(); ClampScroll(_scroll); Invalidate(); }
+
+    /// <summary>Total laid-out height of all rows (mirrors the y-advance in OnPaint) — so the scrollbar knows the
+    /// content size before the first paint.</summary>
+    private int MeasureContent()
+    {
+        int h = 0; bool any = false;
+        foreach (var row in _rows)
+        {
+            if (row.Hint) { h += ItemH; any = true; }
+            else if (row.Kind == SidebarRowKind.Section) { if (any) h += 10; h += SectionH; any = true; }
+            else { h += ItemH; any = true; }
+        }
+        return h;
+    }
+
+    /// <summary>Place the thin scrollbar in the right margin of the scrollable region; hide it when everything fits.</summary>
+    private void LayoutScrollbar()
+    {
+        int vis = Math.Max(0, Height - HeaderH - FooterH);
+        _scrollbar.Bounds = new Rectangle(Width - 10, HeaderH, 10, vis);   // 10px margin = the gap right of the row pills
+        _scrollbar.Visible = _contentH > vis;
+        _scrollbar.Invalidate();
+    }
 
     /// <summary>Attach a loaded mini cover to the row whose Tag matches by reference.</summary>
     public void SetIcon(object tag, Bitmap icon)
@@ -173,6 +220,20 @@ internal sealed class Sidebar : Panel
                     using (var bp = Theme.RoundedRect(new RectangleF(bx, y + s * (0.29f + 0.165f * i), bw, stroke), stroke / 2))
                         g.FillPath(br, bp);
                 g.FillEllipse(br, x + s * 0.66f, y + s * 0.27f, s * 0.16f, s * 0.16f);
+                break;
+            }
+            case SidebarRowKind.SmartPlaylist: // list with a sparkle (auto-generated from rules)
+            {
+                float bx = x + s * 0.22f, bw = s * 0.38f;
+                for (int i = 0; i < 3; i++)
+                    using (var bp = Theme.RoundedRect(new RectangleF(bx, y + s * (0.31f + 0.165f * i), bw, stroke), stroke / 2))
+                        g.FillPath(br, bp);
+                float scx = x + s * 0.72f, scy = y + s * 0.30f, r1 = s * 0.19f, r2 = s * 0.06f;
+                g.FillPolygon(br, new[]
+                {
+                    new PointF(scx, scy - r1), new PointF(scx + r2, scy - r2), new PointF(scx + r1, scy), new PointF(scx + r2, scy + r2),
+                    new PointF(scx, scy + r1), new PointF(scx - r2, scy + r2), new PointF(scx - r1, scy), new PointF(scx - r2, scy - r2),
+                });
                 break;
             }
             case SidebarRowKind.Albums: // vinyl disc
@@ -233,8 +294,9 @@ internal sealed class Sidebar : Panel
         _refresh.Width = _openFolder.Width = bw;
         _refresh.Location = new Point(Pad, by);
         _openFolder.Location = new Point(Pad + bw + gap, by);
-        _settings.Location = new Point(Width - Pad - _settings.Width, 15);
-        _playFile.Location = new Point(_settings.Left - 4 - _playFile.Width, 15);
+        _settings.Location = new Point(Width - Pad - _settings.Width, 12);
+        _contentH = MeasureContent();
+        LayoutScrollbar();
         ClampScroll(_scroll); // a shorter window mustn't leave the list stranded past its new bottom
         Invalidate();
     }
@@ -263,6 +325,12 @@ internal sealed class Sidebar : Panel
         return null;
     }
 
+    private SidebarRowKind? AddHitTest(Point p)
+    {
+        foreach (var (rect, kind) in _addHit) if (rect.Contains(p)) return kind;
+        return null;
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
@@ -279,6 +347,7 @@ internal sealed class Sidebar : Panel
         // --- rows (scrollable region) ---
         _hit.Clear();
         _ejectHit.Clear();
+        _addHit.Clear();
         var clip = new Rectangle(0, HeaderH, Width, Height - HeaderH - FooterH);
         g.SetClip(clip);
         int y = HeaderH - _scroll;
@@ -287,7 +356,7 @@ internal sealed class Sidebar : Panel
         {
             if (row.Hint)
             {
-                if (y + ItemH > clip.Top && y < clip.Bottom)
+                if (y >= clip.Top && y + ItemH <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
                     TextRenderer.DrawText(g, row.Text, _fHint,
                         new Rectangle(Pad + 8, y, Width - Pad * 2 - 8, ItemH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordEllipsis);
@@ -298,10 +367,24 @@ internal sealed class Sidebar : Panel
             if (row.Kind == SidebarRowKind.Section)
             {
                 if (anyDrawn) y += 10; // breathing room above each group after the first
-                if (y + SectionH > clip.Top)
+                if (y >= clip.Top && y + SectionH <= clip.Bottom)   // fully inside (see the item-row note: avoid text bleeding past the edges)
+                {
                     TextRenderer.DrawText(g, row.Text, _fSection,
                         new Rectangle(Pad + 4, y, Width - Pad * 2, SectionH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.Bottom);
+                    if (row.ShowAdd)   // a 2-stroke vector "+" on the right of the header → New Playlist (creation was right-click-only)
+                    {
+                        var hit = new Rectangle(Width - Pad - 22, y + SectionH - 22, 24, 22);
+                        _addHit.Add((hit, row.AddKind));
+                        float cx = hit.X + hit.Width / 2f, cy = y + SectionH - 9f, arm = 4.5f;
+                        bool over = _addHover && hit.Contains(PointToClient(MousePosition));
+                        using var ap = new Pen(over ? Theme.AccentBright : Theme.Faint, 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+                        var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+                        g.DrawLine(ap, cx - arm, cy, cx + arm, cy);
+                        g.DrawLine(ap, cx, cy - arm, cx, cy + arm);
+                        g.SmoothingMode = sm;
+                    }
+                }
                 y += SectionH;
                 anyDrawn = true;
                 continue;
@@ -309,7 +392,7 @@ internal sealed class Sidebar : Panel
 
             var rowRect = new Rectangle(0, y, Width, ItemH);
             _hit.Add((rowRect, row));
-            if (y + ItemH > clip.Top && y < clip.Bottom)
+            if (y >= clip.Top && y + ItemH <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
             {
                 var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, ItemH - 4);
                 bool hover = ReferenceEquals(row, _hover);
@@ -323,6 +406,13 @@ internal sealed class Sidebar : Panel
                     using var pb = new SolidBrush(fill);
                     using var pp = Theme.RoundedRect(pill, Theme.RadControl);
                     g.FillPath(pb, pp);
+                }
+                if (row.Active)   // a solid accent bar pinned to the pill's left edge — the persistent "you are here" anchor (distinct from the drop ring below)
+                {
+                    var barRect = new RectangleF(pill.X + 2f, pill.Y + (pill.Height - 18f) / 2f, 3f, 18f);
+                    using var ab = new SolidBrush(Theme.AccentBright);
+                    using var ap = Theme.RoundedRect(barRect, 1.5f);
+                    g.FillPath(ab, ap);
                 }
                 if (ReferenceEquals(row, _dropRow))   // song drag-drop target → brighter wash + accent ring
                 {
@@ -389,6 +479,19 @@ internal sealed class Sidebar : Panel
         }
         _contentH = y + _scroll - HeaderH; // absolute height of all rows, independent of the current scroll
         g.ResetClip();
+
+        // Soft scroll edges: dissolve a half-scrolled row into the rail bg at the top/bottom of the list instead of
+        // hard-cutting it. The bottom one is the important one — without it the last row was sliced right at the
+        // footer hairline (its text cut in half) and read as cramped/weird. The top fade only shows once scrolled.
+        const int fadeH = 22;
+        int regTop = HeaderH, regBot = Height - FooterH;
+        bool moreBelow = _scroll < Math.Max(0, _contentH - Math.Max(0, regBot - regTop));
+        if (moreBelow)
+            using (var bf = new LinearGradientBrush(new Rectangle(0, regBot - fadeH, Width, fadeH + 1), Color.FromArgb(0, Theme.SidebarBg), Theme.SidebarBg, 90f))
+                g.FillRectangle(bf, 0, regBot - fadeH, Width, fadeH);
+        if (_scroll > 0)
+            using (var tf = new LinearGradientBrush(new Rectangle(0, regTop - 1, Width, fadeH + 1), Theme.SidebarBg, Color.FromArgb(0, Theme.SidebarBg), 90f))
+                g.FillRectangle(tf, 0, regTop, Width, fadeH);
 
         // hairline above the footer, inset so it doesn't run into the card's rounded corners
         using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, Pad, Height - FooterH, Width - Pad, Height - FooterH);

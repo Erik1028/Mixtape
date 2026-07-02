@@ -88,7 +88,7 @@ internal sealed class UpNextPanel : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.Clear(Theme.PanelBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Theme.PanelBg);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
@@ -209,6 +209,7 @@ internal sealed class UpNextPanel : Control
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
+        base.OnMouseDown(e);   // BEFORE the early returns — the flyout's press-flex (glass) listens on this event
         if (e.Button != MouseButtons.Left) return;
         if (CloseRect.Contains(e.Location)) { CloseRequested?.Invoke(); return; }
         if (_items.Count > 0 && ClearRect.Contains(e.Location)) { ClearRequested?.Invoke(); return; }
@@ -256,6 +257,7 @@ internal sealed class UpNextPanel : Control
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
+        base.OnMouseUp(e);   // BEFORE the early returns — the flyout's press-flex release listens on this event
         if (_thumbDrag) { _thumbDrag = false; Invalidate(); return; }
         if (_dragging && _dragIndex >= 0 && _dropIndex >= 0 && _dropIndex != _dragIndex)
             MoveRequested?.Invoke(_dragIndex, _dropIndex);
@@ -297,6 +299,7 @@ internal sealed class UpNextFlyout : FlyoutForm
 
     public UpNextFlyout()
     {
+        GlassEnabled = Glass.PopupsEnabled;   // frosted-glass backdrop (Settings → "Frosted popups")
         ClientSize = new Size(Wide, 420);
         _panel = new UpNextPanel { Dock = DockStyle.Fill };
         _panel.CloseRequested += Close;                                  // the × closes the popover

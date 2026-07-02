@@ -71,6 +71,12 @@ internal static class MenuStyle
         // the handler no-ops for the top menu (no OwnerItem) and only repositions actual submenus.
         d.Opened -= FlushToParent;
         d.Opened += FlushToParent;
+        // Liquid glass AFTER FlushToParent (invocation order = subscription order) so a repositioned
+        // submenu captures its backdrop at its FINAL spot, not the pre-slide one.
+        d.Opened -= MenuGlass.OnOpened;
+        d.Opened += MenuGlass.OnOpened;
+        d.Closed -= MenuGlass.OnClosed;
+        d.Closed += MenuGlass.OnClosed;
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
@@ -105,6 +111,82 @@ internal static class MenuStyle
     }
 }
 
+/// <summary>Liquid-glass backdrop for the themed menus — the SAME material as the flyouts (blur + Vibrance +
+/// squircle-Snell refraction + adaptive dimming), so the popover language is consistent across the whole app,
+/// the way Apple applies Liquid Glass to menus everywhere. ONE-SHOT per open (a menu is short-lived and modal-ish
+/// — nothing behind it needs to move), baked tint included so the renderer just blits. Menus opened with no
+/// active form (render harness) or with glass off fall back to the solid themed surface.</summary>
+internal static class MenuGlass
+{
+    private const int Margin = 40;        // padding for the refraction's CA offsets (same layout as the flyout capture)
+    private const int MinTint = 150;      // menus are text rows straight over content → a slightly higher dimming floor than the flyouts' 136
+
+    // Baked backdrop per open dropdown. Weak keys — entries vanish with the menu; the bitmap itself is
+    // disposed eagerly in OnClosed (and replaced on re-open).
+    private static readonly ConditionalWeakTable<ToolStripDropDown, Holder> _frost = new();
+    private sealed class Holder { public Bitmap? Bmp; }
+
+    // ONE full-window owner snapshot per menu SESSION (top-level open → close): the expensive DrawToBitmap runs
+    // once per right-click, and every submenu just re-slices it (the content behind a modal-ish menu can't change).
+    // Menus are exclusive + UI-thread-only, so a single static pair is safe.
+    private static Bitmap? _ownerSnap;
+    private static Form? _snapOwner;
+
+    public static Bitmap? FrostOf(ToolStrip ts) => ts is ToolStripDropDown dd && _frost.TryGetValue(dd, out var h) ? h.Bmp : null;
+
+    public static void OnOpened(object? sender, EventArgs e)
+    {
+        if (sender is not ToolStripDropDown dd) return;
+        if (!Glass.PopupsEnabled) { Drop(dd); return; }
+        try
+        {
+            if (dd.OwnerItem is null)   // top-level open → start a session: capture the host window ONCE
+            {
+                _ownerSnap?.Dispose();
+                // Menus never take activation, so the host (MainForm / mini player / a dialog) stays the active form.
+                _snapOwner = Form.ActiveForm is { IsDisposed: false } f ? f : null;
+                _ownerSnap = Glass.CaptureWindow(_snapOwner);
+            }
+            if (_ownerSnap is null || _snapOwner is null) { Drop(dd); return; }
+            // A menu hanging past the owner's edge would frost a flat theme-bg seam — fall back to the solid
+            // surface unless ~60%+ of the menu actually sits over the owner window.
+            var inter = Rectangle.Intersect(_snapOwner.Bounds, dd.Bounds);
+            if (inter.Width * (long)inter.Height < dd.Bounds.Width * (long)dd.Bounds.Height * 6 / 10) { Drop(dd); return; }
+
+            var raw = Glass.SliceRegionPadded(_ownerSnap, _snapOwner, dd.Bounds, Margin);
+            if (raw is null) { Drop(dd); return; }
+            Bitmap bent; float luma;
+            using (raw)
+            {
+                const int k = 3;
+                using var tiny = new Bitmap(Math.Max(8, raw.Width / k), Math.Max(8, raw.Height / k));
+                using var blur = new Bitmap(raw.Width, raw.Height);
+                luma = Glass.BlurInto(raw, blur, tiny, Margin / k);
+                bent = Glass.Refract(blur, Margin, 2);
+            }
+            var hold = _frost.GetOrCreateValue(dd);
+            hold.Bmp?.Dispose(); hold.Bmp = bent;   // stored BEFORE the bake — a throw below lands in catch → Drop disposes it
+            using (var g = Graphics.FromImage(bent))   // bake the dimming layer (adaptive, menu floor) — the renderer just blits
+            using (var t = new SolidBrush(Color.FromArgb(Math.Max(MinTint, Glass.TintTargetFor(luma)), Theme.SidebarBg)))
+                g.FillRectangle(t, 0, 0, bent.Width, bent.Height);
+            dd.Invalidate();
+        }
+        catch { Drop(dd); }
+    }
+
+    public static void OnClosed(object? sender, ToolStripDropDownClosedEventArgs e)
+    {
+        if (sender is not ToolStripDropDown dd) return;
+        Drop(dd);
+        if (dd.OwnerItem is null) { _ownerSnap?.Dispose(); _ownerSnap = null; _snapOwner = null; }   // session over
+    }
+
+    private static void Drop(ToolStripDropDown dd)
+    {
+        if (_frost.TryGetValue(dd, out var h)) { h.Bmp?.Dispose(); h.Bmp = null; }
+    }
+}
+
 /// <summary>Owner-draws the menu: rounded popup window (region + fill + hairline border), accent
 /// rounded hover pills, inset separators, and a crisp submenu chevron.</summary>
 internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
@@ -133,6 +215,15 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using var path = Theme.RoundedRect(new RectangleF(0, 0, ts.Width, ts.Height), Radius());
+        if (MenuGlass.FrostOf(ts) is { } frost)
+        {
+            // Liquid glass: blit the baked backdrop (blur+refract+tint) clipped to the rounded silhouette.
+            var clip = g.Clip;
+            g.SetClip(path, CombineMode.Intersect);
+            g.DrawImageUnscaled(frost, 0, 0);
+            g.Clip = clip;
+            return;
+        }
         using var b = new SolidBrush(MenuStyle.Surface);
         g.FillPath(b, path);
     }

@@ -76,6 +76,7 @@ internal sealed class WallpaperGrid : Panel
 
     private const int TileW = 128, TileH = 96, NameH = 18, Gap = 16, Pad = 18, Cols = 4;
     private readonly Bitmap[] _thumbs;
+    private readonly Font _fName = Theme.UiFont(8.25f);   // cached: one font per tile, per paint — inline leaked N handles each repaint
     private readonly List<(Rectangle Rect, int Idx)> _hit = new();
     private int _hover = -1;
 
@@ -114,7 +115,7 @@ internal sealed class WallpaperGrid : Panel
                 using var edge = new Pen(Color.FromArgb(40, 255, 255, 255)); g.DrawPath(edge, path);
             }
 
-            TextRenderer.DrawText(g, Loc.T(Wallpaper.Names[i]), Theme.UiFont(8.25f), new Rectangle(x, y + TileH + 1, TileW, NameH),
+            TextRenderer.DrawText(g, Loc.T(Wallpaper.Names[i]), _fName, new Rectangle(x, y + TileH + 1, TileW, NameH),
                 _sel.Contains(i) ? Theme.TextCol : Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
 
             bool selected = _sel.Contains(i);
@@ -140,7 +141,7 @@ internal sealed class WallpaperGrid : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) foreach (var b in _thumbs) b.Dispose();
+        if (disposing) { foreach (var b in _thumbs) b.Dispose(); _fName.Dispose(); }
         base.Dispose(disposing);
     }
 }

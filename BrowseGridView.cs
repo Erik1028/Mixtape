@@ -11,6 +11,7 @@ namespace iPodCommander;
 internal sealed class BrowseGridView : Panel
 {
     public event Action<string>? ItemActivated; // carries the card Key
+    public event Action? Scrolled;               // so the host can refresh the frosted-bar backdrop
 
     private sealed class Card { public string Key = ""; public string Title = ""; public string Subtitle = ""; public Bitmap? Cover; public int Seed;
         public float Fade = 1f; public Bitmap? Prev; public Tween? Tween; }   // Prev/Cover are cache-borrowed (never disposed); cross-dissolve state
@@ -112,7 +113,7 @@ internal sealed class BrowseGridView : Panel
 
     private Card? HitTest(Point p) { foreach (var (rect, card) in _hit) if (rect.Contains(p)) return card; return null; }
 
-    private void SetScroll(int v) { v = Math.Max(0, Math.Min(MaxScroll(), v)); if (v != _scroll) { _scroll = v; Invalidate(); } }
+    private void SetScroll(int v) { v = Math.Max(0, Math.Min(MaxScroll(), v)); if (v != _scroll) { _scroll = v; Invalidate(); Scrolled?.Invoke(); } }
 
     private (int Max, int BarH, int BarY) Bar()
     {
@@ -178,6 +179,8 @@ internal sealed class BrowseGridView : Panel
             DrawCard(g, x, y, _cards[i]);
         }
 
+        Theme.DrawScrollEdge(g, 0, 0, Width, _scroll);   // scroll edge: cards dissolve into the chrome under the header
+
         // grabbable scrollbar
         var (max, barH, barY) = Bar();
         if (max > 0)
@@ -219,6 +222,35 @@ internal sealed class BrowseGridView : Panel
         TextRenderer.DrawText(g, c.Subtitle, _fSub,
             new Rectangle(x, y + CoverW + 24, CoverW, 16), Theme.Subtle,
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>Render the row(s) of cards just BELOW the visible fold — the "continuation" that flows into the
+    /// now-playing bar's frosted glass (same idea as the song list). Cheap (only the next row is drawn), so the host
+    /// can re-cut it on every scroll without a full DrawToBitmap. Null when there's nothing below (at the bottom).</summary>
+    public Bitmap? RenderFrostStrip(int stripH)
+    {
+        if (Width < 8 || stripH < 4 || _cards.Count == 0) return null;
+        int contentY = _scroll + Height;                 // content y just past the visible bottom
+        if (contentY >= ContentHeight - Pad) return null; // scrolled to the end → nothing below to show
+        int cols = Columns;
+        int gridW = cols * CoverW + Math.Max(0, cols - 1) * Gap;
+        int x0 = Math.Max(Pad, (Width - gridW) / 2);
+        var bmp = new Bitmap(Width, stripH);
+        bool drawn = false;
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var bg = new SolidBrush(Theme.Bg)) g.FillRectangle(bg, 0, 0, Width, stripH);
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                int y = Pad + (i / cols) * (TileH + Gap) - contentY;
+                if (y + TileH < 0 || y >= stripH) continue;
+                DrawCard(g, x0 + (i % cols) * (CoverW + Gap), y, _cards[i]);
+                drawn = true;
+            }
+        }
+        if (!drawn) { bmp.Dispose(); return null; }
+        return bmp;
     }
 
     // No cover disposal: every Card.Cover/Prev is a borrowed ArtworkService / Theme.ArtCache instance.

@@ -421,6 +421,24 @@ internal sealed class RawDb
         return changed;
     }
 
+    /// <summary>Replace a playlist's ENTIRE membership with exactly <paramref name="orderedIds"/> (every dataset
+    /// copy), in that order. Smart playlists use this — they recompute their members from scratch on each refresh.
+    /// Returns false if nothing changed (already exactly this list), so the caller can skip a needless save.</summary>
+    public bool SetPlaylistTracks(ulong persistentId, IList<uint> orderedIds)
+    {
+        if (persistentId == 0) return false;
+        byte[]? template = FindMhipTemplate();
+        bool changed = false;
+        foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
+            foreach (var pl in ds.Playlists!.Where(p => !IsMaster(p) && PlaylistPid(p) == persistentId))
+            {
+                if (pl.Mhips.Select(m => ReadU32(m, 0x18)).SequenceEqual(orderedIds)) continue;  // already exact → no change
+                pl.Mhips = orderedIds.Select(id => template is not null ? CloneMhip(template, id) : BuildMinimalMhip(id)).ToList();
+                changed = true;
+            }
+        return changed;
+    }
+
     private byte[]? FindMhipTemplate()
     {
         foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))

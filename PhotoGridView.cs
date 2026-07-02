@@ -10,6 +10,7 @@ namespace iPodCommander;
 internal sealed class PhotoGridView : Panel
 {
     public event Action? SelectionChanged;
+    public event Action? Scrolled;               // so the host can refresh the frosted-bar backdrop
     public event Action<Point>? ItemRightClicked;
     /// <summary>Double-click on a tile — carries the photo id, for opening the full-size viewer.</summary>
     public event Action<uint>? ItemActivated;
@@ -17,6 +18,9 @@ internal sealed class PhotoGridView : Panel
     private sealed class Tile { public uint Id; public Bitmap? Thumb; public bool Selected; public float Fade = 1f; public Tween? Tween; }
     private readonly List<Tile> _tiles = new();
     private readonly List<(Rectangle Rect, Tile Tile)> _hit = new();
+    // Cached font for the empty-state line. Theme.UiFont allocates a fresh GDI Font per call, so this is held once.
+    // (The per-tile placeholder is a vector photo glyph — Theme.DrawPhoto — so it needs no font handle.)
+    private readonly Font _fEmpty = Theme.UiFont(11f);
     private Tile? _hover;
     private int _scroll;
     private int _lastClicked = -1;
@@ -52,7 +56,7 @@ internal sealed class PhotoGridView : Panel
 
         MouseMove += OnMouseMoveInternal;
         MouseLeave += (_, _) => { _hover = null; if (_barHover) _barHover = false; Invalidate(); };
-        MouseWheel += (_, e) => { _scroll = Math.Max(0, Math.Min(MaxScroll(), _scroll - Math.Sign(e.Delta) * 60)); Invalidate(); };
+        MouseWheel += (_, e) => SetScroll(_scroll - Math.Sign(e.Delta) * 60);
         MouseDown += OnMouseDown;
         MouseUp += (_, _) => { if (_barDragging) { _barDragging = false; Invalidate(); } };
         MouseDoubleClick += (_, e) => { if (e.X < Width - BarZone) { var t = HitTest(e.Location); if (t is not null) ItemActivated?.Invoke(t.Id); } };
@@ -154,7 +158,7 @@ internal sealed class PhotoGridView : Panel
     private void SetScroll(int value)
     {
         int v = Math.Max(0, Math.Min(MaxScroll(), value));
-        if (v != _scroll) { _scroll = v; Invalidate(); }
+        if (v != _scroll) { _scroll = v; Invalidate(); Scrolled?.Invoke(); }
     }
 
     private void OnMouseMoveInternal(object? sender, MouseEventArgs e)
@@ -219,7 +223,7 @@ internal sealed class PhotoGridView : Panel
         _hit.Clear();
         if (_tiles.Count == 0)
         {
-            TextRenderer.DrawText(g, _empty, Theme.UiFont(11f), new Rectangle(0, 0, Width, Height), Theme.Faint,
+            TextRenderer.DrawText(g, _empty, _fEmpty, new Rectangle(0, 0, Width, Height), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
@@ -240,6 +244,8 @@ internal sealed class PhotoGridView : Panel
             DrawTile(g, rect, _tiles[i]);
         }
 
+        Theme.DrawScrollEdge(g, 0, 0, Width, _scroll);   // scroll edge: tiles dissolve into the chrome under the header
+
         // thin scroll indicator
         int max = MaxScroll();
         if (max > 0)
@@ -255,6 +261,34 @@ internal sealed class PhotoGridView : Panel
         }
     }
 
+    /// <summary>Render the row(s) of tiles just BELOW the visible fold — the "continuation" that flows into the
+    /// now-playing bar's frosted glass. Cheap (only the next row), so the host can re-cut it on every scroll.</summary>
+    public Bitmap? RenderFrostStrip(int stripH)
+    {
+        if (Width < 8 || stripH < 4 || _tiles.Count == 0) return null;
+        int contentY = _scroll + Height;
+        if (contentY >= ContentHeight - Pad) return null;   // at the end → nothing below
+        int cols = Columns;
+        int gridW = cols * TileW + Math.Max(0, cols - 1) * Gap;
+        int x0 = Math.Max(Pad, (Width - gridW) / 2);
+        var bmp = new Bitmap(Width, stripH);
+        bool drawn = false;
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var bg = new SolidBrush(Theme.Bg)) g.FillRectangle(bg, 0, 0, Width, stripH);
+            for (int i = 0; i < _tiles.Count; i++)
+            {
+                int y = Pad + (i / cols) * (TileH + Gap) - contentY;
+                if (y + TileH < 0 || y >= stripH) continue;
+                DrawTile(g, new Rectangle(x0 + (i % cols) * (TileW + Gap), y, TileW, TileH), _tiles[i]);
+                drawn = true;
+            }
+        }
+        if (!drawn) { bmp.Dispose(); return null; }
+        return bmp;
+    }
+
     private void DrawTile(Graphics g, Rectangle rect, Tile t)
     {
         bool hover = ReferenceEquals(t, _hover);
@@ -265,10 +299,7 @@ internal sealed class PhotoGridView : Panel
             if (t.Thumb is not null)
             {
                 if (t.Fade < 1f)   // placeholder glyph shows through while the freshly-decoded thumb dissolves in
-                {
-                    using var gf0 = Theme.UiFont(20f);
-                    TextRenderer.DrawText(g, "▦", gf0, rect, Theme.Faint, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                }
+                    DrawPlaceholder(g, rect);
                 var prev = g.InterpolationMode;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 // COVER-fit: scale so the photo fills the whole tile, centred, with the overflow cropped by the
@@ -285,10 +316,7 @@ internal sealed class PhotoGridView : Panel
                 g.InterpolationMode = prev;
             }
             else
-            {
-                using var gf = Theme.UiFont(20f);
-                TextRenderer.DrawText(g, "▦", gf, rect, Theme.Faint, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            }
+                DrawPlaceholder(g, rect);
         }
         if (t.Selected)
         {
@@ -298,9 +326,18 @@ internal sealed class PhotoGridView : Panel
         }
     }
 
+    /// <summary>The undecoded/loading tile placeholder: a centred vector photo mark (matches the Photos header tile
+    /// and the empty-state glyph), instead of the old ▦ box character.</summary>
+    private static void DrawPlaceholder(Graphics g, Rectangle rect)
+    {
+        float gs = Math.Min(rect.Width, rect.Height) * 0.62f;
+        var gr = new RectangleF(rect.X + (rect.Width - gs) / 2f, rect.Y + (rect.Height - gs) / 2f, gs, gs);
+        Theme.DrawPhoto(g, gr, Theme.Faint);
+    }
+
     protected override void Dispose(bool disposing)
     {
-        if (disposing) foreach (var t in _tiles) { t.Tween?.Cancel(); t.Thumb?.Dispose(); }
+        if (disposing) { foreach (var t in _tiles) { t.Tween?.Cancel(); t.Thumb?.Dispose(); } _fEmpty.Dispose(); }
         base.Dispose(disposing);
     }
 }

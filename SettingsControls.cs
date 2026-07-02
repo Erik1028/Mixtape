@@ -36,7 +36,7 @@ internal sealed class ToggleSwitch : Control
         _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Parent?.BackColor ?? Theme.PanelBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         float tc = Math.Clamp(_t, 0f, 1f);
         var r = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
         using (var track = Theme.RoundedRect(r, (Height - 1) / 2f))
@@ -110,7 +110,7 @@ internal sealed class AccentPicker : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Parent?.BackColor ?? Theme.PanelBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
 
         bool customSelected = _current.StartsWith('#');
         for (int i = 0; i < Theme.AccentPresets.Length; i++)
@@ -209,7 +209,7 @@ internal sealed class SettingsNav : Panel
         _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Theme.SidebarBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Theme.SidebarBg);
         _hit.Clear();
 
         // A single accent selection pill that slides between categories.
@@ -315,11 +315,15 @@ internal sealed class CardPanel : Panel
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        // Owner-painted rounded card: an anti-aliased FillPath (the old Region clip hard-aliased every
-        // corner). The transparent corners outside the path reveal whatever sits behind the card.
+        // Owner-painted rounded card: an anti-aliased FillPath (the old Region clip hard-aliased every corner).
         var g = e.Graphics;
-        g.Clear(Parent?.BackColor ?? Theme.Bg);
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        // Glass card: a uniform sheet of frosted glass, no extra frame — the flyout's own edge plus the row
+        // dividers already give structure, so an inner card outline just reads as a redundant box-in-a-box.
+        if (Glass.PaintBackground(g, this, Glass.SurfaceTint)) return;
+        // Opaque card (non-glass windows, e.g. Settings): rounded PanelBg fill; the transparent corners reveal
+        // whatever sits behind the card.
+        g.Clear(Parent?.BackColor ?? Theme.Bg);
         using var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Theme.RadCard);
         using var b = new SolidBrush(Theme.PanelBg);
         g.FillPath(b, p);
@@ -344,7 +348,7 @@ internal sealed class CardPanel : Panel
         int ctrlLeft = ctrl is not null ? Width - rightPad - ctrl.Width : Width - rightPad;
         int labelW = Math.Max(80, ctrlLeft - gap - labelLeft);
 
-        Controls.Add(new Label
+        Controls.Add(new GlassLabel
         {
             Text = label,
             Font = F(10f),
@@ -358,7 +362,7 @@ internal sealed class CardPanel : Panel
             Height = desc is null ? rowH : 32,
         });
         if (desc is not null)
-            Controls.Add(new Label
+            Controls.Add(new GlassLabel
             {
                 Text = desc,
                 Font = F(9f),
@@ -388,8 +392,8 @@ internal sealed class CardPanel : Panel
         int y = Height;
         if (Controls.Count > 0)
             Controls.Add(new Panel { Height = 1, BackColor = Theme.HairLine, Left = 16, Width = Width - 32, Top = y });
-        Controls.Add(new Label { Text = label, Font = F(9.5f), ForeColor = Theme.TextCol, BackColor = Theme.PanelBg, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Left = 18, Top = y, Width = 200, Height = 38 });
-        Controls.Add(new Label { Text = value, Font = F(9.5f), ForeColor = Theme.Subtle, BackColor = Theme.PanelBg, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Left = 210, Top = y, Width = Width - 210 - 18, Height = 38 });
+        Controls.Add(new GlassLabel { Text = label, Font = F(9.5f), ForeColor = Theme.TextCol, BackColor = Theme.PanelBg, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Left = 18, Top = y, Width = 200, Height = 38 });
+        Controls.Add(new GlassLabel { Text = value, Font = F(9.5f), ForeColor = Theme.Subtle, BackColor = Theme.PanelBg, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Left = 210, Top = y, Width = Width - 210 - 18, Height = 38 });
         Height = y + 38;
     }
 
@@ -451,7 +455,7 @@ internal sealed class SegmentedControl : Control
         _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Parent?.BackColor ?? Theme.PanelBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         var outer = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
         using var op = Theme.RoundedRect(outer, Theme.RadControl);
         using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.18))) g.FillPath(bg, op);

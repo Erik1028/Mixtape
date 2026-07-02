@@ -57,6 +57,8 @@ internal sealed class MiniPlayerForm : Form
 
     private const int W = 340, H = 544, TitleH = 42;
     private static readonly Size NormalSize = new(W, H), CompactSize = new(300, 486);
+    private const int Grip = 8;                        // px from each edge that grabs a resize handle
+    private static readonly float Aspect = (float)W / H;   // the card's locked aspect (everything in Layout() scales from width)
 
     // Segoe Fluent (Win11) / MDL2 (Win10) icon glyphs — the family the reference uses. Built from char
     // codes because literal PUA glyphs get stripped when written into source.
@@ -80,6 +82,8 @@ internal sealed class MiniPlayerForm : Form
         TopMost = true;
         KeyPreview = true;
         ClientSize = new Size(W, H);
+        MinimumSize = new Size(300, (int)Math.Round(300 / Aspect));   // ~300×480 — the fixed transport spacing needs ≥300 wide (controls would clip otherwise)
+        MaximumSize = new Size(600, (int)Math.Round(600 / Aspect));   // ~600×960 — generous upper bound
         BackColor = Theme.SidebarBg;
         Text = "Mixtape — Mini Player";
         DoubleBuffered = true;
@@ -297,6 +301,7 @@ internal sealed class MiniPlayerForm : Form
     private void OnDown(object? s, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
+        int ht = ResizeEdge(e.Location); if (ht != 0) { StartWindowResize(ht); return; }   // grabbed an edge → resize
         var l = Layout();
         if (l.Restore.Contains(e.Location) || l.Close.Contains(e.Location)) { ExpandRequested?.Invoke(); return; }
         if (l.Min.Contains(e.Location)) { WindowState = FormWindowState.Minimized; return; }
@@ -316,6 +321,8 @@ internal sealed class MiniPlayerForm : Form
     {
         var l = Layout();
         if (_scrubFrac >= 0) { _scrubFrac = FracAt(l.Seek, e.X); Invalidate(SeekStrip()); return; }
+        int re = ResizeEdge(e.Location);   // over a resize edge → show the sizing cursor (edges sit in the margins, clear of controls)
+        if (re != 0) { Cursor = re switch { 10 or 11 => Cursors.SizeWE, 15 => Cursors.SizeNS, 16 => Cursors.SizeNESW, 17 => Cursors.SizeNWSE, _ => Cursors.Default }; if (_hover != Hit.None) { _hover = Hit.None; Invalidate(); } return; }
         var h = l.Restore.Contains(e.Location) ? Hit.Restore
             : l.Min.Contains(e.Location) ? Hit.Min
             : l.Max.Contains(e.Location) ? Hit.Max
@@ -353,6 +360,48 @@ internal sealed class MiniPlayerForm : Form
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     private void StartWindowDrag() { try { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } catch { } } // WM_NCLBUTTONDOWN, HTCAPTION
+    private void StartWindowResize(int ht) { try { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)ht, IntPtr.Zero); } catch { } }   // same trick as the move drag, with a resize HT code
+
+    /// <summary>The resize handle (HT* code) under <paramref name="p"/>, or 0. Left/right/bottom + the two bottom corners
+    /// only — the TOP is the title bar (drag-to-move), so no top resize. The grips sit in the card's margins, clear of controls.</summary>
+    private int ResizeEdge(Point p)
+    {
+        int w = ClientSize.Width, h = ClientSize.Height;
+        bool L = p.X <= Grip, R = p.X >= w - Grip, B = p.Y >= h - Grip;
+        if (B && L) return 16; if (B && R) return 17;     // HTBOTTOMLEFT / HTBOTTOMRIGHT
+        if (L) return 10; if (R) return 11; if (B) return 15;   // HTLEFT / HTRIGHT / HTBOTTOM
+        return 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == 0x0214)   // WM_SIZING — lock the aspect so the card scales as a unit (Layout ties the cover to width)
+        {
+            var rc = Marshal.PtrToStructure<RECT>(m.LParam);
+            int edge = (int)m.WParam;   // WMSZ_*: 1=L, 2=R, 6=B, 7=BL, 8=BR
+            int minW = MinimumSize.Width, maxW = MaximumSize.Width;
+            if (edge == 6 || edge == 7)   // bottom edge drove → derive width from height
+            {
+                int hh = Math.Clamp(rc.Bottom - rc.Top, (int)Math.Round(minW / Aspect), (int)Math.Round(maxW / Aspect));
+                int nw = (int)Math.Round(hh * Aspect);
+                rc.Bottom = rc.Top + hh;
+                if (edge == 7) rc.Left = rc.Right - nw; else rc.Right = rc.Left + nw;
+            }
+            else   // left / right / bottom-right → derive height from width
+            {
+                int ww = Math.Clamp(rc.Right - rc.Left, minW, maxW);
+                int nh = (int)Math.Round(ww / Aspect);
+                if (edge == 1) rc.Left = rc.Right - ww; else rc.Right = rc.Left + ww;
+                rc.Bottom = rc.Top + nh;
+            }
+            Marshal.StructureToPtr(rc, m.LParam, false);
+            m.Result = (IntPtr)1;
+            return;
+        }
+        base.WndProc(ref m);
+    }
 
     // ---- paint ----
     protected override void OnPaint(PaintEventArgs e)

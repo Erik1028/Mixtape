@@ -33,6 +33,8 @@ internal sealed class AppSettings
     public bool ShowPlays { get; set; } = true;    // Play-count column
     public bool ShowDateAdded { get; set; } = true;// Date-added column
     public bool ShowTime { get; set; } = true;     // Time column
+    public bool FrostedBar { get; set; } = true;   // EXPERIMENT: faint frosted blur of the song list at the top of the player bar
+    public bool GlassPopups { get; set; } = true;   // frosted/liquid-glass backdrop on the Equalizer / Pro / Up Next flyouts (toggle off for plain opaque popups)
 
     // ---- Local Music (PC files browsable inside Mixtape) ----
     /// <summary>Folders on the PC scanned for the "Local Music" library view.</summary>
@@ -40,6 +42,11 @@ internal sealed class AppSettings
 
     /// <summary>User-made playlists of PC files, shown under "ON THIS PC". Each is a name + ordered file paths.</summary>
     public List<LocalPlaylistData> LocalPlaylists { get; set; } = new();
+
+    /// <summary>Smart-playlist rule-sets. The rules live HERE (app-side, per-device) and are evaluated by Mixtape
+    /// into a normal iPod playlist's members — so they work on every iPod and can never corrupt the iTunesDB.
+    /// Keyed to the iPod playlist by <see cref="SmartPlaylistDef.PersistentId"/>.</summary>
+    public List<SmartPlaylistDef> SmartPlaylists { get; set; } = new();
 
     /// <summary>Photo-grid tile size in px (the size slider on the Photos view).</summary>
     public int PhotoTileSize { get; set; } = 132;
@@ -166,4 +173,25 @@ internal sealed class LocalPlaylistData
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public List<string> Paths { get; set; } = new();
+}
+
+/// <summary>One rule of a smart playlist: a field, a comparison operator, and the value to compare against.
+/// Field/Op are stable string keys (see SmartPlaylist.cs) so the JSON stays readable and forward-compatible.</summary>
+internal sealed class SmartRule
+{
+    public string Field { get; set; } = "Artist";   // e.g. Artist, Album, Genre, Title, Year, Rating, PlayCount, DateAdded, LastPlayed
+    public string Op { get; set; } = "contains";     // e.g. contains, is, isnot, startswith, atleast, atmost, more, less, within, notwithin
+    public string Value { get; set; } = "";          // text, a number, or a day-count depending on the field
+}
+
+/// <summary>A smart-playlist definition: name + rules + optional limit. Evaluated app-side into a real iPod
+/// playlist identified by <see cref="PersistentId"/>.</summary>
+internal sealed class SmartPlaylistDef
+{
+    public ulong PersistentId { get; set; }          // the iPod playlist this drives
+    public string Name { get; set; } = "";
+    public bool MatchAll { get; set; } = true;       // true = match ALL rules (AND), false = match ANY (OR)
+    public List<SmartRule> Rules { get; set; } = new();
+    public int Limit { get; set; }                   // 0 = no limit; else keep at most N tracks
+    public string LimitSort { get; set; } = "MostPlayed"; // how to pick which N when limited (+ playlist order)
 }

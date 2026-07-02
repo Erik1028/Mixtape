@@ -64,6 +64,7 @@ internal sealed class CoverGrid : Panel
     private int _hover = -2; // -2 none, -1 default tile, 0..N art
     private readonly List<(Rectangle Rect, int Id)> _hit = new();
     private readonly string _sampleName;
+    private readonly Font _fDefault = Theme.UiFont(8.5f, FontStyle.Bold);   // cached: leaked a handle per repaint when inline
 
     public CoverGrid(int currentId, string? sampleName)
     {
@@ -105,7 +106,7 @@ internal sealed class CoverGrid : Panel
                 using var bb = new SolidBrush(Theme.PanelBg);
                 using var bp = Theme.RoundedRect(rect, 10);
                 g.FillPath(bb, bp);
-                TextRenderer.DrawText(g, Loc.T("Default"), Theme.UiFont(8.5f, FontStyle.Bold), rect, Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, Loc.T("Default"), _fDefault, rect, Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             else if (id == CoverArt.CassetteId)
             {
@@ -129,5 +130,11 @@ internal sealed class CoverGrid : Panel
                 g.DrawPath(pen, sp);
             }
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _fDefault.Dispose();
+        base.Dispose(disposing);
     }
 }

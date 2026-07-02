@@ -13,6 +13,22 @@ internal static class ArtworkService
     private static readonly Dictionary<string, Bitmap?> Cache = new();
     private static readonly object Gate = new();          // guards the cache dictionary
     private static readonly object DecodeGate = new();    // serializes GDI+ image decode (System.Drawing is NOT thread-safe)
+    private const int CacheCap = 384;                     // bound the cache so it can't grow unbounded across a long session
+    private static readonly Queue<string> Order = new();  // insertion order for FIFO eviction (guarded by Gate)
+
+    // Insert under the Gate lock and FIFO-trim to CacheCap. We deliberately do NOT Dispose evicted bitmaps: a caller
+    // (or the cover-flow baker thread) may still hold/draw a reference we returned earlier, so eviction only drops OUR
+    // reference and lets the GC reclaim it once unreferenced — that bounds growth with zero use-after-dispose risk.
+    private static void RememberLocked(string key, Bitmap? value)
+    {
+        Cache[key] = value;
+        Order.Enqueue(key);
+        while (Cache.Count > CacheCap && Order.Count > 0)
+        {
+            string old = Order.Dequeue();
+            if (old != key) Cache.Remove(old);   // never evict the entry we just added
+        }
+    }
 
     public static string KeyFor(Track t) =>
         !string.IsNullOrEmpty(t.Album) ? "alb:" + t.Album!.ToLowerInvariant()
@@ -58,7 +74,7 @@ internal static class ArtworkService
                 // Cache a SUCCESS under the shared album key (so the whole album reuses it); cache a MISS only
                 // under the per-file memo — so a track with no art can't deny another track (or another source,
                 // e.g. an iPod track with no on-disk file) that DOES have a cover for the same album.
-                lock (Gate) { if (result is not null) Cache[ck] = result; else Cache[nk] = null; }
+                lock (Gate) RememberLocked(result is not null ? ck : nk, result);
                 return result;
             }
             catch { return null; }   // transient decode failure → do NOT cache, so a later call can retry
@@ -103,7 +119,7 @@ internal static class ArtworkService
                     }
                     result = bmp;
                 }
-                lock (Gate) { if (result is not null) Cache[ck] = result; else Cache[nk] = null; }
+                lock (Gate) RememberLocked(result is not null ? ck : nk, result);
                 return result;
             }
             catch { return null; }   // transient decode failure → don't cache

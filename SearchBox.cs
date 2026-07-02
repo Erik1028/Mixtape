@@ -34,6 +34,7 @@ internal sealed class SearchBox : Panel
 
     public string Query => _tb.Text;
     public void ClearQuery() => _tb.Clear();
+    public void FocusInput() { try { _tb.Focus(); _tb.SelectAll(); } catch { } }   // Ctrl+F → jump to the search field
 
     /// <summary>Re-read theme colours into the inner TextBox (its BackColor is baked at construction).</summary>
     public void Restyle()

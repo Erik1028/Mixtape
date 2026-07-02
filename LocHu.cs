@@ -104,6 +104,10 @@ internal static partial class LocHu
         ["Show when each song was added to the iPod."] = "Mikor került az egyes dalok az iPodra.",
         ["Time column"] = "Idő oszlop",
         ["Show the Time column in the song list."] = "Az Idő oszlop megjelenítése a dallistában.",
+        ["Frosted player bar"] = "Matt lejátszó sáv",
+        ["Show a faint blur of the song list at the top of the player bar (experimental)."] = "A dallista halvány elmosása a lejátszó sáv tetején (kísérleti).",
+        ["Frosted glass"] = "Matt üveg",
+        ["Liquid-glass effect on the player bar AND the Equalizer / Pro / Up Next popups (experimental). Turn off for a plain look."] = "Folyékony üveg effekt a lejátszó sávon ÉS az Equalizer / Pro / Up Next felugró ablakokon (kísérleti). Kapcsold ki a sima megjelenésért.",
 
         // ---- Settings: Video ----
         ["Quality"] = "Minőség",
@@ -190,6 +194,7 @@ internal static partial class LocHu
         // ---- Main window: headers, buttons, empty states, status ----
         ["PLAYLIST"] = "LEJÁTSZÁSI LISTA",
         ["No iPod is connected."] = "Nincs csatlakoztatott iPod.",
+        ["Not connected"] = "Nincs csatlakoztatva",
         ["Right-click here to add one"] = "Kattints ide jobb gombbal egy létrehozásához",
         ["Right-click to add a playlist"] = "Jobbkattintás új lejátszási listához",
         ["Untitled"] = "Névtelen",
@@ -209,7 +214,8 @@ internal static partial class LocHu
         ["No photos yet — click “Add photos”."] = "Még nincsenek fényképek — kattints a „Fényképek hozzáadása” gombra.",
         ["Photos are read-only."] = "A fényképek csak olvashatók.",
         ["Photos are read-only on this iPod."] = "A fényképek csak olvashatók ezen az iPodon.",
-        ["⚠ {0} warning(s)"] = "⚠ {0} figyelmeztetés",
+        ["⚠ {0} warning"] = "⚠ {0} figyelmeztetés",
+        ["⚠ {0} warnings"] = "⚠ {0} figyelmeztetés",
         ["Read-only — {0}"] = "Csak olvasható — {0}",
 
         // ---- Wallpaper pack ----

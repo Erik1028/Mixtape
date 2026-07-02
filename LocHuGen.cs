@@ -41,7 +41,7 @@ internal static partial class LocHu
         ("Looking for your iPod…", "Az iPod keresése…"),
         ("Scanning for a connected iPod.", "Csatlakoztatott iPod keresése."),
         ("No iPod connected", "Nincs csatlakoztatott iPod"),
-        ("Plug in your iPod — Mixtape detects it automatically. Or use Open folder. A Mac-formatted (HFS+) iPod isn't readable on Windows.", "Csatlakoztasd az iPodot — a Mixtape automatikusan felismeri. Vagy használd a Mappa megnyitása lehetőséget. A Mac-formátumú (HFS+) iPod Windows alatt nem olvasható."),
+        ("Plug in your iPod — Mixtape detects it, or use Open folder.", "Csatlakoztasd az iPodot — a Mixtape felismeri, vagy Mappa megnyitása."),
         ("This iPod isn't on a drive letter, so it can't be ejected from here. Use Windows' “Safely Remove Hardware”.", "Ez az iPod nincs meghajtóbetűjelen, így innen nem lehet leválasztani. Használd a Windows „Hardver biztonságos eltávolítása” funkcióját."),
         ("Eject", "Leválasztás"),
         ("Ejected — safe to unplug your iPod.", "Leválasztva — az iPod biztonságosan kihúzható."),

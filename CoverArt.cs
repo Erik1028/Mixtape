@@ -46,6 +46,43 @@ internal static class CoverArt
         return bmp;
     }
 
+    /// <summary>A MOSAIC tile built from real cover bitmaps — used as the header art for the Albums / Artists /
+    /// Videos / Photos overview pages instead of the plain ♪ placeholder. One cover fills the tile; 2+ tile a 2×2
+    /// grid (cover-fit/cropped per cell, thin dark dividers); fewer than 4 are cycled to fill. Null if no covers.
+    /// Reads the source bitmaps (copies pixels) — does NOT take ownership; the caller keeps/disposes them.</summary>
+    public static Bitmap? BuildCollage(IReadOnlyList<Bitmap>? covers, int size)
+    {
+        if (covers is null || covers.Count == 0) return null;
+        return RenderInto(size, (g, s) =>
+        {
+            using (var bg = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.Black, 0.32))) g.FillRectangle(bg, 0, 0, s, s);
+            if (covers.Count == 1) { DrawCoverFit(g, covers[0], new RectangleF(0, 0, s, s)); return; }
+            float gap = Math.Max(1f, s * 0.012f);
+            float cell = (s - gap) / 2f;
+            var cells = new[]
+            {
+                new RectangleF(0, 0, cell, cell),
+                new RectangleF(cell + gap, 0, cell, cell),
+                new RectangleF(0, cell + gap, cell, cell),
+                new RectangleF(cell + gap, cell + gap, cell, cell),
+            };
+            for (int i = 0; i < 4; i++) DrawCoverFit(g, covers[i % covers.Count], cells[i]);
+        });
+    }
+
+    // Cover-fit (crop-to-fill) one bitmap into a cell, intersected with the current (rounded) clip so the tile's
+    // outer corners stay rounded.
+    private static void DrawCoverFit(Graphics g, Bitmap? src, RectangleF cell)
+    {
+        if (src is null || src.Width < 1 || src.Height < 1) return;
+        var st = g.Save();
+        g.IntersectClip(cell);
+        float scale = Math.Max(cell.Width / src.Width, cell.Height / src.Height);
+        float w = src.Width * scale, h = src.Height * scale;
+        g.DrawImage(src, cell.X + (cell.Width - w) / 2f, cell.Y + (cell.Height - h) / 2f, w, h);
+        g.Restore(st);
+    }
+
     // Shared chrome for every cover: rounded-clip the body paint, then stroke a faint inner frame.
     private static Bitmap RenderInto(int size, Action<Graphics, int> body)
     {

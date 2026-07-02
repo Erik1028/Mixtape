@@ -29,6 +29,9 @@ internal static class Program
         // Full offline end-to-end: build a sandbox iPod from a fixture, copy a real audio file
         // in, save, verify, then delete. Usage: --addtest <sourceAudio> <fixtureDb> → ipod-addtest.txt
         if (args.Length >= 3 && args[0] == "--addtest") { RunAddTest(args[1], args[2]); return; }
+        // Smart-playlist write roundtrip: build a sandbox from a fixture, create a smart playlist, evaluate rules,
+        // set members, save+reload, verify membership/order/idempotency/replace + no DB corruption. → ipod-smarttest.txt
+        if (args.Length >= 2 && args[0] == "--smarttest") { RunSmartTest(args[1]); return; }
 
         // Controlled real-device write helpers (used for the cautious first test). They go
         // through the exact same IpodLibrary/SafeDbWriter path the Add/Delete buttons use.
@@ -51,6 +54,14 @@ internal static class Program
         // show it off-screen, highlight a row, and capture the (rounded) popup window. Usage:
         //   Mixtape.exe --menupreview <out.png>
         if (args.Length >= 2 && args[0] == "--menupreview") { RunMenuPreview(args[1]); return; }
+
+        // TEMP (liquid-glass prototype review): synthesize a realistic backdrop, then show the CURRENT flat frost vs the
+        // new refraction (Glass.Refract) side by side. Usage: Mixtape.exe --glasstest <out.png>
+        if (args.Length >= 2 && args[0] == "--glasstest") { RunGlassTest(args[1]); return; }
+
+        // TEMP (live-glass debug): prove that a CHANGE in the bar region (the live content) propagates through the
+        // composite+blur+refract to a CHANGE in the refracted output's bottom rim. Usage: Mixtape.exe --glasslivetest <out.png>
+        if (args.Length >= 2 && args[0] == "--glasslivetest") { RunGlassLiveTest(args[1]); return; }
 
         // Full cover-art chain diagnostic for a CONNECTED iPod: device detection → artwork capability →
         // existing ArtworkDB + .ithmb files → iTunesDB track flags → cross-check the track↔art links.
@@ -1636,6 +1647,130 @@ internal static class Program
         catch (Exception ex) { File.WriteAllText(Path.ChangeExtension(outPng, ".err.txt"), ex.ToString()); }
     }
 
+    // TEMP — liquid-glass prototype review. Synthesize a backdrop (album tiles + text rows, like content behind a
+    // flyout), blur it like Glass.Capture, then render the CURRENT flat frost vs the new Glass.Refract side by side.
+    private static void RunGlassLiveTest(string outPng)
+    {
+        try
+        {
+            Theme.SetThemeVariant("Graphite"); Theme.SetAccent("Green");
+            int pw = 420, ph = 520, m = 60, w = pw - 2 * m, h = ph - 2 * m;
+            var baseSharp = new Bitmap(pw, ph);
+            using (var g = Graphics.FromImage(baseSharp))
+            {
+                using var bg = new SolidBrush(Theme.Bg); g.FillRectangle(bg, 0, 0, pw, ph);
+                for (int r = 0; r < 6; r++) for (int c = 0; c < 4; c++) { using var art = Theme.MakeArt(64, Theme.StableHash($"a{r}{c}")); g.DrawImage(art, 20 + c * 72, 20 + r * 72, 64, 64); }
+            }
+            // the bar sits in the BOTTOM MARGIN (like reality: the now-playing bar is just below the popup)
+            var barInPad = new Rectangle(20, ph - m - 30, 360, 96);
+            Bitmap Make(int variant)
+            {
+                var work = (Bitmap)baseSharp.Clone();
+                using (var g = Graphics.FromImage(work))
+                {
+                    using var barBg = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.Black, 0.1)); g.FillRectangle(barBg, barInPad);
+                    using var bb = new SolidBrush(Theme.Accent);   // "eq bars" whose heights depend on the variant → simulates the live animation
+                    for (int i = 0; i < 12; i++) { int bh = 10 + ((i * 7 + variant * 17) % 70); g.FillRectangle(bb, barInPad.X + 8 + i * 28, barInPad.Bottom - 6 - bh, 14, bh); }
+                }
+                using var tiny = new Bitmap(pw / 3, ph / 3);
+                using var blur = new Bitmap(pw, ph);
+                Glass.BlurInto(work, blur, tiny);
+                var res = Glass.Refract(blur, m, 1);
+                work.Dispose();
+                return res;
+            }
+            var a = Make(0); var b = Make(3);
+            long diff = 0; int minRow = h, maxRow = 0;
+            using (var heat = new Bitmap(w, h))
+            {
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                    {
+                        var pa = a.GetPixel(x, y); var pb = b.GetPixel(x, y);
+                        int d = Math.Abs(pa.R - pb.R) + Math.Abs(pa.G - pb.G) + Math.Abs(pa.B - pb.B);
+                        if (d > 8) { diff++; if (y < minRow) minRow = y; if (y > maxRow) maxRow = y; heat.SetPixel(x, y, Color.FromArgb(255, Math.Min(255, d), 40, 40)); }
+                        else heat.SetPixel(x, y, a.GetPixel(x, y));
+                    }
+                int gap = 16, W = w * 3 + gap * 2, H = h;
+                using var canvas = new Bitmap(W, H);
+                using (var g = Graphics.FromImage(canvas)) { using var bg = new SolidBrush(Color.Black); g.FillRectangle(bg, 0, 0, W, H); g.DrawImage(a, 0, 0); g.DrawImage(b, w + gap, 0); g.DrawImage(heat, 2 * (w + gap), 0); }
+                canvas.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            File.WriteAllText(Path.ChangeExtension(outPng, ".txt"), $"diffPixels={diff} of {(long)w * h}  diffRows=[{minRow}..{maxRow}] h={h} bezel≈{Math.Clamp(Math.Min(w, h) * 0.15f, 18f, 44f):0}");
+            a.Dispose(); b.Dispose(); baseSharp.Dispose();
+        }
+        catch (Exception ex) { File.WriteAllText(Path.ChangeExtension(outPng, ".err.txt"), ex.ToString()); }
+    }
+
+    private static void RunGlassTest(string outPng)
+    {
+        try
+        {
+            Theme.SetThemeVariant("Graphite"); Theme.SetAccent("Green");
+            int pw = 300, ph = 380, m = 60, bw = pw + 2 * m, bh = ph + 2 * m;
+            // 1) a realistic backdrop, captured WITH a margin (bw×bh) — like Glass.CapturePadded — so the album tiles
+            //    extend past the panel rect and the outward edge-magnification has real content to sample.
+            var back = new Bitmap(bw, bh);
+            using (var g = Graphics.FromImage(back))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var bg = new SolidBrush(Theme.Bg)) g.FillRectangle(bg, 0, 0, bw, bh);
+                int tile = 92, gap = 12;
+                for (int r = -1; r < 6; r++)
+                    for (int c = -1; c < 5; c++)
+                    {
+                        using var art = Theme.MakeArt(tile, Theme.StableHash($"album {r}-{c}"));
+                        g.DrawImage(art, m + 14 + c * (tile + gap), m + 14 + r * (tile + gap), tile, tile);
+                    }
+                using var tf = Theme.UiFont(11f, FontStyle.Bold);
+                TextRenderer.DrawText(g, "Now Playing  ·  Albums  ·  Cover Flow", tf, new Rectangle(m + 14, m + ph - 32, pw - 28, 24), Theme.TextCol, TextFormatFlags.Left);
+            }
+            // 2) blur the padded backdrop (the Glass.Capture k=7 downsample/upsample)
+            Bitmap blurPad;
+            { int k = 3, tw = Math.Max(8, bw / k), th = Math.Max(8, bh / k);
+              using var tiny = new Bitmap(tw, th);
+              using (var g = Graphics.FromImage(tiny)) { g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear; g.DrawImage(back, 0, 0, tw, th); }
+              blurPad = new Bitmap(bw, bh);
+              using (var g = Graphics.FromImage(blurPad)) { g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear; g.DrawImage(tiny, new Rectangle(0, 0, bw, bh)); } }
+            // current flat frost = the centre (popup-sized) crop of the blur, no refraction
+            var frostA = new Bitmap(pw, ph);
+            using (var g = Graphics.FromImage(frostA)) g.DrawImage(blurPad, new Rectangle(0, 0, pw, ph), m, m, pw, ph, GraphicsUnit.Pixel);
+            using var blurForRefract = (Bitmap)blurPad.Clone();
+            var liquid = Glass.Refract(blurForRefract, m);   // the new effect (returns popup-sized)
+            blurPad.Dispose();
+
+            // 3) compose: [plain frost] | [liquid glass], each rounded-clipped + tinted like a real flyout, over a faint backdrop.
+            int gap2 = 40, lblH = 30, cm = 30;
+            int W = cm + pw + gap2 + pw + cm, H = cm + ph + lblH + cm;
+            var canvas = new Bitmap(W, H);
+            using (var g = Graphics.FromImage(canvas))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var bg = new SolidBrush(Theme.Blend(Theme.Bg, Color.Black, 0.25))) g.FillRectangle(bg, 0, 0, W, H);
+                void Panel(int px, Bitmap frost, string label)
+                {
+                    var rect = new Rectangle(px, cm, pw, ph);
+                    using (var clip = Theme.RoundedRect(rect, 9f))
+                    {
+                        var saved = g.Clip; g.SetClip(clip);
+                        var im = g.InterpolationMode; g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                        g.DrawImage(frost, rect);
+                        g.InterpolationMode = im;
+                        using (var tint = new SolidBrush(Glass.SurfaceTint)) g.FillRectangle(tint, rect);
+                        g.Clip = saved;
+                    }
+                    using var lf = Theme.UiFont(11f, FontStyle.Bold);
+                    TextRenderer.DrawText(g, label, lf, new Rectangle(px, cm + ph + 6, pw, lblH), Theme.TextCol, TextFormatFlags.HorizontalCenter);
+                }
+                Panel(cm, frostA, "Current — flat frost");
+                Panel(cm + pw + gap2, liquid, "Liquid glass — refraction + rim");
+            }
+            canvas.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            back.Dispose(); frostA.Dispose(); liquid.Dispose(); canvas.Dispose();
+        }
+        catch (Exception ex) { File.WriteAllText(Path.ChangeExtension(outPng, ".err.txt"), ex.ToString()); }
+    }
+
     private static void RunMenuPreviewCore(string outPng)
     {
         Application.EnableVisualStyles();
@@ -1820,6 +1955,77 @@ internal static class Program
         }
         catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-remove.txt"), log.ToString());
+    }
+
+    private static void RunSmartTest(string fixtureDb)
+    {
+        var log = new StringBuilder();
+        int failures = 0;
+        void Check(bool ok, string what) { log.AppendLine((ok ? "PASS " : "FAIL ") + what); if (!ok) failures++; }
+        try
+        {
+            string sandbox = Path.Combine(Path.GetTempPath(), "ipodcmd-smarttest");
+            if (Directory.Exists(sandbox)) Directory.Delete(sandbox, true);
+            string control = Path.Combine(sandbox, "iPod_Control");
+            Directory.CreateDirectory(Path.Combine(control, "iTunes"));
+            Directory.CreateDirectory(Path.Combine(control, "Device"));
+            for (int i = 0; i < 10; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
+            File.Copy(fixtureDb, Path.Combine(control, "iTunes", "iTunesDB"));
+            File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
+
+            var device = DeviceDetector.Build(sandbox);
+            Check(device is not null && device!.Profile.CanWrite, "sandbox writable");
+            var lib = IpodLibrary.Load(device!);
+            int trackCount = lib.View.Tracks.Count;
+            int baseWarn = lib.View.Warnings.Count;
+            int basePlaylists = lib.View.Playlists.Count;
+            log.AppendLine($"baseline: {trackCount} tracks, {basePlaylists} playlists, {baseWarn} warning(s)");
+            List<Track> Audio() => lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+
+            // 1) Create a smart playlist matching all audio, ordered by title.
+            var def = new SmartPlaylistDef { Name = "__SmartTest", MatchAll = true, LimitSort = "Title", Rules = { new SmartRule { Field = "PlayCount", Op = "atleast", Value = "0" } } };
+            var expect1 = SmartPlaylist.Evaluate(def, Audio()).Select(t => t.UniqueId).ToList();
+            ulong pid = lib.CreatePlaylist(def.Name);
+            Check(pid != 0, "CreatePlaylist returned a persistent id");
+            Check(lib.SetPlaylistTracks(pid, expect1), "SetPlaylistTracks made a change");
+            lib.Save();
+
+            Check(lib.View.Tracks.Count == trackCount, $"track count unchanged after save ({lib.View.Tracks.Count})");
+            Check(lib.View.Warnings.Count <= baseWarn, $"no NEW reader warnings ({lib.View.Warnings.Count} <= {baseWarn})");
+            var pl = lib.View.Playlists.FirstOrDefault(p => p.PersistentId == pid);
+            Check(pl is not null, "smart playlist present after save+reload");
+            Check(pl?.Name == def.Name, $"name preserved = '{pl?.Name}'");
+            Check(pl is not null && pl.TrackIds.SequenceEqual(expect1), $"members match the evaluated set, in order ({pl?.TrackIds.Count}/{expect1.Count})");
+            Check(lib.View.Master is not null && lib.View.Master!.TrackIds.Count == trackCount, $"master playlist intact ({lib.View.Master?.TrackIds.Count}/{trackCount})");
+
+            // 2) Idempotency: re-applying the identical evaluation is a no-op.
+            var expect1b = SmartPlaylist.Evaluate(def, Audio()).Select(t => t.UniqueId).ToList();
+            Check(!lib.SetPlaylistTracks(pid, expect1b), "re-applying identical members reports no change");
+
+            // 3) Replace with a limited set (top 5 by play count) — membership must be replaced exactly.
+            var def2 = new SmartPlaylistDef { Name = def.Name, MatchAll = true, LimitSort = "MostPlayed", Limit = 5, Rules = { new SmartRule { Field = "PlayCount", Op = "atleast", Value = "0" } } };
+            var expect2 = SmartPlaylist.Evaluate(def2, Audio()).Select(t => t.UniqueId).ToList();
+            Check(expect2.Count == Math.Min(5, Audio().Count), $"limit applied: {expect2.Count} == min(5,{Audio().Count})");
+            Check(lib.SetPlaylistTracks(pid, expect2), "replace changed the membership");
+            lib.Save();
+            var pl2 = lib.View.Playlists.FirstOrDefault(p => p.PersistentId == pid);
+            Check(pl2 is not null && pl2.TrackIds.SequenceEqual(expect2), $"membership replaced exactly ({pl2?.TrackIds.Count})");
+            Check(lib.View.Tracks.Count == trackCount, "track count still unchanged");
+            Check(lib.View.Warnings.Count <= baseWarn, "still no new reader warnings");
+
+            // 4) Delete the smart playlist → back to the baseline, tracks all kept.
+            Check(lib.RemovePlaylist(pl2!), "RemovePlaylist");
+            lib.Save();
+            Check(lib.View.Playlists.Count == basePlaylists, $"playlist count back to baseline ({lib.View.Playlists.Count})");
+            Check(lib.View.Tracks.Count == trackCount, "all tracks kept after delete");
+
+            Directory.Delete(sandbox, true);
+            log.AppendLine();
+            log.AppendLine(failures == 0 ? "RESULT: OK" : $"RESULT: FAILED ({failures})");
+        }
+        catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-smarttest.txt"), log.ToString());
+        Console.WriteLine(log.ToString());
     }
 
     private static void RunAddTest(string sourceAudio, string fixtureDb)

@@ -6,7 +6,7 @@ namespace iPodCommander;
 /// (title + subtitle + control). Each control writes straight to <see cref="AppSettings"/>, saves,
 /// and calls back so the main window re-applies the change immediately.
 /// </summary>
-internal sealed class SettingsForm : Form, IMessageFilter
+internal sealed class SettingsForm : GlassDialog, IMessageFilter
 {
     private readonly AppSettings _s;
     private readonly IPodDevice? _device;
@@ -26,7 +26,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
     private const int CardW = 608;                      // card width (fills the pane to a matching right gutter)
     private const int PaneW = CardW + SideMargin * 2;   // content pane width
     private const int ContentLeft = SideMargin;         // card column left edge
-    private const int PageHeight = 380; // every category uses this one compact height; dense pages (Library) scroll via the themed ThinScrollBar instead of growing the window
+    private const int PageHeight = 540; // every category uses this one height; dense pages (Library) scroll via the themed ThinScrollBar instead of growing the window (taller so it's not "flat")
 
     private static readonly string[] Categories = { "Appearance", "Library", "Video", "Photos", "Safety", "This iPod", "About" };
 
@@ -35,16 +35,16 @@ internal sealed class SettingsForm : Form, IMessageFilter
         _s = settings; _device = device; _applyChanged = applyChanged; _reloadDevice = reloadDevice;
 
         Text = Loc.T("Settings");
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        FormBorderStyle = FormBorderStyle.None;   // borderless: our own caption strip (no system title-bar slab), like the main window
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-        ClientSize = new Size(NavW + PaneW, 600);
+        ClientSize = new Size(NavW + PaneW, PageHeight + DialogTitleBar.H);   // + the custom caption strip; matches the per-page height so there's no open-then-shrink flash
         BackColor = Theme.Bg;
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
 
-        _pane = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };   // clipping viewport
-        _paneBody = new Panel { BackColor = Theme.Bg, Location = new Point(0, 0), Width = PaneW };
+        _pane = new GlassPanel { Dock = DockStyle.Fill, BackColor = Theme.Bg };   // clipping viewport (frosted glass in this dialog)
+        _paneBody = new GlassPanel { BackColor = Theme.Bg, Location = new Point(0, 0), Width = PaneW };
         _paneScroll = new ThinScrollBar();
         _pane.Controls.Add(_paneBody);
         _pane.Controls.Add(_paneScroll);
@@ -54,6 +54,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
         _nav.Selected += ShowCategory;
         Controls.Add(_pane);
         Controls.Add(_nav);
+        Controls.Add(new DialogTitleBar(Loc.T("Settings"), NavW));   // added LAST so it docks to the top first; nav+pane fill below it
         Application.AddMessageFilter(this);   // route the mouse wheel over the pane to the themed scrollbar
         ShowCategory(0);
 
@@ -242,6 +243,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
         Row(Loc.T("Play count column"), Loc.T("Show how many times each song has been played."), Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Date added column"), Loc.T("Show when each song was added to the iPod."), Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Time column"), Loc.T("Show the Time column in the song list."), Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Frosted glass"), Loc.T("Liquid-glass effect on the player bar AND the Equalizer / Pro / Up Next popups (experimental). Turn off for a plain look."), Toggle(_s.GlassPopups, v => { _s.GlassPopups = v; _s.Save(); _applyChanged(); }));
     }
 
     private void BuildVideo()
@@ -302,7 +304,7 @@ internal sealed class SettingsForm : Form, IMessageFilter
 
     private void BuildAbout()
     {
-        Row("Mixtape", Loc.T("Version {0}", "0.11.0"), null);
+        Row("Mixtape", Loc.T("Version {0}", "0.12.0"), null);
         Row(Loc.T("A friendly manager for classic iPods"), Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes."), null);
     }
 

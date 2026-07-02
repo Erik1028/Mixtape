@@ -18,9 +18,10 @@ internal sealed class DeviceHero : Control
     private Tween? _tween;
     // Cached once — Theme.UiFont/DisplayFont allocate a fresh GDI Font per call; creating them inline in
     // OnPaint would leak a handle every repaint. Disposed in Dispose().
-    private readonly Font _fTotal = Theme.DisplayFont(15f, FontStyle.Bold);
     private readonly Font _fSub = Theme.UiFont(8f);
     private readonly Font _fLegend = Theme.UiFont(9f);
+    private int _ringR = 0;          // the donut radius the centre font is sized for; rebuild the font only when it changes
+    private Font? _fTotalDyn;        // centre "free" number — scales with the (width-driven) ring radius
 
     public DeviceHero()
     {
@@ -53,7 +54,12 @@ internal sealed class DeviceHero : Control
         g.Clear(Parent?.BackColor ?? Theme.Bg);
         int h = Height;
 
-        int cy = h / 2, r = 66, ringW = 22;
+        // The donut grows with the card so it doesn't look lost on a wide device page (was pinned at r=66). Capped at 90
+        // so 2r=180 still fits the 196px height (no layout reflow). The centre number scales with it (font cached by r).
+        int r = Math.Clamp(66 + (Width - 480) / 14, 66, 90);
+        int ringW = (int)Math.Round(r * 0.32f);
+        if (r != _ringR || _fTotalDyn is null) { _fTotalDyn?.Dispose(); _fTotalDyn = Theme.DisplayFont(15f * r / 66f, FontStyle.Bold); _ringR = r; }
+        int cy = h / 2;
         const int legendGap = 28, legendDot = 18, legendInnerW = 150;
         int cx;
         if (_ipod is not null)
@@ -87,7 +93,7 @@ internal sealed class DeviceHero : Control
         using (var hole = new SolidBrush(Parent?.BackColor ?? Theme.Bg)) g.FillEllipse(hole, cx - ri, cy - ri, ri * 2, ri * 2);
 
         long shownFree = _sweep >= 1f ? _free : (long)(_free * _sweep);
-        TextRenderer.DrawText(g, CapacityBar.Human(shownFree), _fTotal, new Rectangle(cx - r, cy - 19, r * 2, 22), Theme.TextCol,
+        TextRenderer.DrawText(g, CapacityBar.Human(shownFree), _fTotalDyn!, new Rectangle(cx - r, cy - 19, r * 2, 22), Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix);
         TextRenderer.DrawText(g, Loc.T("free of {0}", CapacityBar.Human(_total)), _fSub, new Rectangle(cx - r, cy + 4, r * 2, 16), Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
@@ -106,7 +112,7 @@ internal sealed class DeviceHero : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _tween?.Cancel(); _ipod?.Dispose(); _fTotal.Dispose(); _fSub.Dispose(); _fLegend.Dispose(); }
+        if (disposing) { _tween?.Cancel(); _ipod?.Dispose(); _fTotalDyn?.Dispose(); _fSub.Dispose(); _fLegend.Dispose(); }
         base.Dispose(disposing);
     }
 }

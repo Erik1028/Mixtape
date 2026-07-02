@@ -9,7 +9,7 @@ namespace iPodCommander;
 /// name. Owner-drawn dark card with a themed status glyph, a title, a wrapped message, and
 /// <see cref="ThemedButton"/>s mapped from the requested button set (primary/default on the right).
 /// </summary>
-internal sealed class MessageDialog : Form
+internal sealed class MessageDialog : GlassDialog
 {
     public static DialogResult Show(IWin32Window? owner, string text, string caption,
         MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None)
@@ -118,7 +118,7 @@ internal sealed class MessageDialog : Form
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.Clear(BackColor);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(BackColor);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 

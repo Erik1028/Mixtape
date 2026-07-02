@@ -5,7 +5,7 @@ internal static class PromptDialog
 {
     public static string? Show(IWin32Window owner, string title, string prompt, string initial)
     {
-        using var f = new Form
+        using var f = new GlassDialog
         {
             Text = title,
             FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -19,7 +19,7 @@ internal static class PromptDialog
             ShowInTaskbar = false,
         };
 
-        var lbl = new Label { Text = prompt, AutoSize = true, ForeColor = Theme.Subtle, Location = new Point(16, 16) };
+        var lbl = new GlassLabel { Text = prompt, AutoSize = true, ForeColor = Theme.Subtle, Location = new Point(16, 16) };
         var tb = new TextBox
         {
             Text = initial,

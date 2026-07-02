@@ -36,6 +36,11 @@ internal static class Theme
         ("Green", Color.FromArgb(54, 200, 110)),
     };
 
+    /// <summary>Bumped whenever a theme COLOUR changes (accent or background variant). Caches that bake theme colours
+    /// into a built object (gradient brushes, etc.) store the revision they were built at and rebuild when it differs —
+    /// so they never go stale, yet cost nothing on the steady-state paint loop.</summary>
+    public static int Revision { get; private set; }
+
     public static void SetAccent(Color c)
     {
         Accent = c;
@@ -43,6 +48,7 @@ internal static class Theme
         AccentDim = Color.FromArgb((int)(c.R * 0.55), (int)(c.G * 0.55), (int)(c.B * 0.55));
         // Pick legible pill text per accent luminance: dark text on bright accents, white on dark ones.
         OnAccent = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) > 130 ? Color.FromArgb(12, 16, 18) : Color.White;
+        Revision++;
     }
 
     public static void SetAccent(string nameOrHex)
@@ -72,6 +78,7 @@ internal static class Theme
             _          => (Color.FromArgb(29, 30, 34), Color.FromArgb(22, 23, 26),  Color.FromArgb(40, 43, 48), Color.FromArgb(38, 42, 46), Color.FromArgb(44, 46, 51), Color.FromArgb(44, 47, 49)),
         };
         RowBg = Blend(PanelBg, Color.White, 0.05); // a touch lighter than PanelBg so secondary buttons read as raised
+        Revision++;   // background colours changed → theme-colour-baked caches (e.g. the bar gradient) must rebuild
     }
     public static Color OnAccent { get; private set; } = Color.FromArgb(8, 14, 13);
 
@@ -126,28 +133,154 @@ internal static class Theme
         g.SmoothingMode = SmoothingMode.AntiAlias;
         float s = Math.Min(r.Width, r.Height);
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        float rx = 0.130f * s, ry = 0.094f * s, sw = 0.045f * s, beamThk = 0.078f * s;
+        float lhx = cx - 0.19f * s, lhy = cy + 0.27f * s, rhx = cx + 0.13f * s, rhy = cy + 0.15f * s;
+        float lsx = lhx + rx - sw, rsx = rhx + rx - sw;
+        float lTop = cy - 0.23f * s, rTop = cy - 0.33f * s;        // right stem top higher; the beam tilts up to the right
         using var b = new SolidBrush(c);
-
-        float hr = 0.13f * s;                  // round note-head radius
-        float sw = 0.075f * s;                 // stem width
-        float hy = cy + 0.16f * s;             // both heads on the same baseline
-        float lhx = cx - 0.16f * s, rhx = cx + 0.16f * s;
-        float stemTop = cy - 0.26f * s;
-        float lsx = lhx + hr - sw, rsx = rhx + hr - sw;             // stems on each head's right edge
-
-        // Build the whole note as ONE winding path and fill it a single time, so overlaps don't double-
-        // paint (a semi-transparent colour would otherwise darken the seams between stems/beam/heads).
-        using (var path = new GraphicsPath { FillMode = FillMode.Winding })
-        {
-            path.AddRectangle(new RectangleF(lsx, stemTop, sw, hy - stemTop));   // stems
-            path.AddRectangle(new RectangleF(rsx, stemTop, sw, hy - stemTop));
-            using (var beam = RoundedRect(new RectangleF(lsx, stemTop, (rsx + sw) - lsx, 0.12f * s), 0.03f * s))
-                path.AddPath(beam, false);                                       // straight beam across the stem tops
-            path.AddEllipse(lhx - hr, hy - hr, hr * 2, hr * 2);                  // round heads on one line
-            path.AddEllipse(rhx - hr, hy - hr, hr * 2, hr * 2);
-            g.FillPath(b, path);
-        }
+        using var path = new GraphicsPath { FillMode = FillMode.Winding };
+        using (var sl = RoundedRect(new RectangleF(lsx, lTop, sw, lhy - lTop), sw / 2f)) path.AddPath(sl, false);   // capsule stems
+        using (var sr = RoundedRect(new RectangleF(rsx, rTop, sw, rhy - rTop), sw / 2f)) path.AddPath(sr, false);
+        float bx1 = lsx + sw / 2f, by1 = lTop, bx2 = rsx + sw / 2f, by2 = rTop;
+        float len = (float)Math.Sqrt((bx2 - bx1) * (bx2 - bx1) + (by2 - by1) * (by2 - by1));
+        float ang = (float)(Math.Atan2(by2 - by1, bx2 - bx1) * 180.0 / Math.PI);
+        using (var beam = RoundedRect(new RectangleF(-sw / 2f, -beamThk / 2f, len + sw, beamThk), beamThk * 0.4f))   // beam trimmed flush to the stems
+        using (var m = new Matrix())
+        { m.Translate(bx1, by1); m.Rotate(ang); beam.Transform(m); path.AddPath(beam, false); }
+        foreach (var (hx, hy) in new[] { (lhx, lhy), (rhx, rhy) })   // tilted oval note heads
+            using (var hp = new GraphicsPath())
+            using (var mm = new Matrix())
+            { hp.AddEllipse(hx - rx, hy - ry, rx * 2, ry * 2); mm.RotateAt(-20f, new PointF(hx, hy)); hp.Transform(mm); path.AddPath(hp, false); }
+        g.FillPath(b, path);
         g.SmoothingMode = savedSmooth;
+    }
+
+    /// <summary>The idle "No iPod" header tile: the same teal gradient as a generated cover (seed 0) plus the
+    /// <see cref="DrawNote"/> mark. Used only by the no-device header (the caller owns/disposes it).</summary>
+    public static Bitmap IdleNoteTile(int size)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Color c1 = HsvToColor(150, 0.50, 0.56), c2 = HsvToColor(174, 0.60, 0.34);   // == MakeArt(seed 0)
+        float radius = Math.Max(3, size * TileFrac);
+        using (var path = RoundedRect(new RectangleF(0, 0, size - 1, size - 1), radius))
+        using (var br = new LinearGradientBrush(new Rectangle(0, 0, size, size), c1, c2, ArtAngle))
+        { g.SetClip(path); g.FillRectangle(br, 0, 0, size, size); g.ResetClip(); }
+        DrawNote(g, new RectangleF(0, 0, size, size), Color.FromArgb(150, 255, 255, 255));
+        using (var ip = RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), radius))
+        using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255)))
+            g.DrawPath(pen, ip);
+        return bmp;
+    }
+
+    /// <summary>A clean desktop-monitor glyph (screen outline + neck + base) — the "on this PC / Local Music" mark.
+    /// Stroked (not filled) so it reads as a screen; sized to <paramref name="r"/> like <see cref="DrawNote"/>.</summary>
+    public static void DrawComputer(Graphics g, RectangleF r, Color c)
+    {
+        var saved = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float s = Math.Min(r.Width, r.Height);
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        float t = 0.052f * s;
+        using var pen = new Pen(c, t) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        var screen = new RectangleF(cx - 0.28f * s, cy - 0.27f * s, 0.56f * s, 0.38f * s);
+        using (var sp = RoundedRect(screen, 0.06f * s)) g.DrawPath(pen, sp);     // monitor screen
+        g.DrawLine(pen, cx, screen.Bottom, cx, cy + 0.20f * s);                  // neck
+        g.DrawLine(pen, cx - 0.12f * s, cy + 0.21f * s, cx + 0.12f * s, cy + 0.21f * s);   // base
+        g.SmoothingMode = saved;
+    }
+
+    /// <summary>The "Local Music" / "on this PC" header tile: an indigo→violet gradient cover plus the
+    /// <see cref="DrawComputer"/> mark (instead of the music note). The caller owns/disposes it.</summary>
+    public static Bitmap LocalMusicTile(int size)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Color c1 = HsvToColor(250, 0.46, 0.56), c2 = HsvToColor(273, 0.56, 0.34);   // indigo → violet (the PC tile)
+        float radius = Math.Max(3, size * TileFrac);
+        using (var path = RoundedRect(new RectangleF(0, 0, size - 1, size - 1), radius))
+        using (var br = new LinearGradientBrush(new Rectangle(0, 0, size, size), c1, c2, ArtAngle))
+        { g.SetClip(path); g.FillRectangle(br, 0, 0, size, size); g.ResetClip(); }
+        DrawComputer(g, new RectangleF(0, 0, size, size), Color.FromArgb(184, 255, 255, 255));
+        using (var ip = RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), radius))
+        using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255)))
+            g.DrawPath(pen, ip);
+        return bmp;
+    }
+
+    /// <summary>A photo/image glyph (rounded frame + a sun + a mountain) — the Photos-library mark, so the Photos header
+    /// reads as photos rather than the music note. Filled the way <see cref="DrawNote"/>/<see cref="DrawComputer"/> fill <paramref name="r"/>.</summary>
+    public static void DrawPhoto(Graphics g, RectangleF r, Color c)
+    {
+        var saved = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+        float s = Math.Min(r.Width, r.Height) * 0.58f;
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        var fr = new RectangleF(cx - s / 2f, cy - s / 2f, s, s);
+        using var pen = new Pen(c, Math.Max(1f, s * 0.09f)) { LineJoin = LineJoin.Round };
+        using (var fp = RoundedRect(fr, s * 0.16f)) g.DrawPath(pen, fp);
+        using var b = new SolidBrush(c);
+        float sun = s * 0.11f;
+        g.FillEllipse(b, fr.X + s * 0.28f - sun, fr.Y + s * 0.30f - sun, sun * 2, sun * 2);   // sun, top-left
+        var savedClip = g.Clip;
+        using (var clip = RoundedRect(fr, s * 0.16f)) g.SetClip(clip);
+        g.FillPolygon(b, new[] { new PointF(fr.X + s * 0.10f, fr.Bottom - s * 0.13f), new PointF(fr.X + s * 0.44f, fr.Y + s * 0.52f), new PointF(fr.Right - s * 0.10f, fr.Bottom - s * 0.13f) });   // mountain, clipped to the frame
+        g.Clip = savedClip;
+        g.SmoothingMode = saved;
+    }
+
+    /// <summary>The Photos header tile: a sky-blue gradient cover plus the <see cref="DrawPhoto"/> mark (instead of the
+    /// music note, which read as odd on the Photos page). The caller owns/disposes it.</summary>
+    public static Bitmap PhotoTile(int size)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Color c1 = HsvToColor(202, 0.50, 0.56), c2 = HsvToColor(222, 0.58, 0.34);   // sky blue → deeper blue
+        float radius = Math.Max(3, size * TileFrac);
+        using (var path = RoundedRect(new RectangleF(0, 0, size - 1, size - 1), radius))
+        using (var br = new LinearGradientBrush(new Rectangle(0, 0, size, size), c1, c2, ArtAngle))
+        { g.SetClip(path); g.FillRectangle(br, 0, 0, size, size); g.ResetClip(); }
+        DrawPhoto(g, new RectangleF(0, 0, size, size), Color.FromArgb(184, 255, 255, 255));
+        using (var ip = RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), radius))
+        using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255)))
+            g.DrawPath(pen, ip);
+        return bmp;
+    }
+
+    // ---- scroll edge effect: content dissolves into the chrome as it slides under the fixed header (the Apple
+    // Liquid Glass companion behavior — content fades near the bar instead of hard-clipping). One shared cached
+    // gradient brush; the ramp (fade-in over the first ~24px of scroll) is bucketed so the cache stays tiny. ----
+    public const int ScrollEdgeH = 28;
+    private static LinearGradientBrush? _edgeBrush; private static int _edgeKey = -1;
+
+    /// <summary>Draw the top scroll-edge gradient at (x, y) across <paramref name="width"/>. <paramref name="scrolled"/>
+    /// is how far the view is scrolled (px) — 0 draws nothing, and the band fades in over the first ~24px so it never
+    /// pops. Allocation-free on repeat calls (the brush is cached per theme revision + ramp bucket).</summary>
+    public static void DrawScrollEdge(Graphics g, float x, float y, float width, float scrolled)
+    {
+        if (scrolled <= 0f || width <= 0f) return;
+        int bucket = Math.Min(4, (int)(Math.Min(1f, scrolled / 24f) * 4f + 0.5f));
+        if (bucket == 0) return;
+        int key = Revision * 8 + bucket;
+        if (_edgeBrush is null || _edgeKey != key)
+        {
+            _edgeBrush?.Dispose();
+            int a = 235 * bucket / 4;
+            // Brush rect 1px taller than the fill on both ends — GDI+ gradient edges can wrap a stray line otherwise.
+            _edgeBrush = new LinearGradientBrush(new RectangleF(0, -1, 1, ScrollEdgeH + 2), Color.FromArgb(a, Bg), Color.FromArgb(0, Bg), LinearGradientMode.Vertical)
+            {
+                // Pin alpha to hit 0 AT the fill's bottom edge (y=28), not at the oversized rect's end (y=29) —
+                // otherwise the band terminates in a faint residual-alpha hard step instead of fading out.
+                Blend = new Blend { Factors = new[] { 0f, 1f, 1f }, Positions = new[] { 0f, (ScrollEdgeH + 1) / (float)(ScrollEdgeH + 2), 1f } }
+            };
+            _edgeKey = key;
+        }
+        var st = g.Save();
+        g.TranslateTransform(x, y);
+        g.FillRectangle(_edgeBrush, 0, 0, width, ScrollEdgeH);
+        g.Restore(st);
     }
 
     // ---- corner-radius scale (one language across the whole UI) ----
@@ -341,6 +474,8 @@ internal static class Theme
     }
 
     private static readonly Dictionary<(int, int), Bitmap> ArtCache = new();
+    private static readonly Queue<(int, int)> ArtOrder = new();   // insertion order for FIFO eviction
+    private const int ArtCacheCap = 256;                          // bound the generated-tile cache (one tile per distinct album/title seed)
 
     /// <summary>Generated square artwork: a rounded teal-family gradient keyed by seed, a faint ♪, and a hairline inner frame.</summary>
     public static Bitmap MakeArt(int size, int seed)
@@ -372,7 +507,15 @@ internal static class Theme
             using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255)))
                 g.DrawPath(pen, ip);
         }
+        // FIFO-cap the cache. Don't Dispose evicted tiles — callers (grid rows, headers) may still hold a reference
+        // we returned; dropping our reference is enough to bound growth (GC reclaims it once unreferenced).
         ArtCache[key] = bmp;
+        ArtOrder.Enqueue(key);
+        while (ArtCache.Count > ArtCacheCap && ArtOrder.Count > 0)
+        {
+            var old = ArtOrder.Dequeue();
+            if (old != key) ArtCache.Remove(old);
+        }
         return bmp;
     }
 
@@ -496,7 +639,7 @@ internal sealed class ThemedButton : Button
         _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Parent?.BackColor ?? Theme.Bg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.Bg);
 
         float h = Math.Clamp(_hoverT, 0f, 1f);
         float inset = 3f * Math.Clamp(_pressT, 0f, 1f);   // shrink toward centre while pressed
@@ -529,8 +672,24 @@ internal sealed class ThemedButton : Button
         else if (Danger) { fill = Theme.Blend(Theme.RowBg, Theme.ErrorCol, 0.14 * h); text = Theme.ErrorCol; border = Theme.Blend(Theme.Border, Theme.ErrorCol, 0.55); }
         else { fill = Theme.Blend(Theme.RowBg, Theme.RowHover, h); text = Theme.TextCol; border = Theme.Border; }
 
-        using (var b = new SolidBrush(fill)) g.FillPath(b, path);
-        if (!Primary) using (var p = new Pen(border)) g.DrawPath(p, path);
+        // Floating-glass tile: a soft drop shadow lifts it off the surface; the fill carries a subtle top→bottom
+        // sheen (glass depth); a bright top highlight reads as light catching the glass; a faint light edge frames it.
+        if (!disabled)
+            using (var shp = Theme.RoundedRect(new RectangleF(r.X, r.Y + 1.6f, r.Width, r.Height), radius))
+            using (var sh = new SolidBrush(Color.FromArgb(48, 0, 0, 0)))
+                g.FillPath(sh, shp);
+        using (var b = new LinearGradientBrush(new RectangleF(r.X, r.Y - 1, r.Width, r.Height + 2),
+                   Theme.Blend(fill, Color.White, 0.13), Theme.Blend(fill, Color.Black, 0.06), 90f))
+            g.FillPath(b, path);
+        {
+            var saveClip = g.Clip; g.SetClip(path);
+            float sheenH = r.Height * 0.52f;
+            using (var sheen = new LinearGradientBrush(new RectangleF(r.X, r.Y - 1, r.Width, sheenH + 1),
+                       Color.FromArgb(disabled ? 0 : (Primary ? 48 : 30), 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
+                g.FillRectangle(sheen, r.X, r.Y, r.Width, sheenH);
+            g.Clip = saveClip;
+        }
+        using (var p = new Pen(Theme.Blend(border, Color.White, 0.12))) g.DrawPath(p, path);
 
         if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, text); return; }   // narrow header: icon only, no label
 

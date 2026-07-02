@@ -16,6 +16,10 @@ internal sealed class PhotoViewerDialog : Form
     private int _index;
     private Bitmap? _current;
     private int _loadGen; // bumped each navigation; a slower decode for a stale photo is discarded
+    // Cached fonts — OnPaint redraws on every navigate/resize, so inline Theme fonts leaked a handle per repaint.
+    private readonly Font _fCap = Theme.UiFont(10.5f, FontStyle.Bold);
+    private readonly Font _fCounter = Theme.UiFont(9.5f);
+    private readonly Font _fMsg = Theme.UiFont(11f);
 
     private enum Hit { None, Prev, Next, Close }
     private Hit _hover = Hit.None;
@@ -116,7 +120,7 @@ internal sealed class PhotoViewerDialog : Form
         }
         else
         {
-            TextRenderer.DrawText(g, Loc.T("This photo can't be previewed."), Theme.UiFont(11f),
+            TextRenderer.DrawText(g, Loc.T("This photo can't be previewed."), _fMsg,
                 new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
@@ -124,9 +128,9 @@ internal sealed class PhotoViewerDialog : Form
         // top bar: caption + counter
         string cap = _ids.Count > 0 ? (_caption(_ids[_index]) ?? "") : "";
         string counter = _ids.Count > 0 ? $"{_index + 1} / {_ids.Count}" : "";
-        TextRenderer.DrawText(g, cap, Theme.UiFont(10.5f, FontStyle.Bold), new Rectangle(20, 12, ClientSize.Width - 200, 34),
+        TextRenderer.DrawText(g, cap, _fCap, new Rectangle(20, 12, ClientSize.Width - 200, 34),
             Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(g, counter, Theme.UiFont(9.5f), new Rectangle(ClientSize.Width - 200, 12, 140, 34),
+        TextRenderer.DrawText(g, counter, _fCounter, new Rectangle(ClientSize.Width - 200, 12, 140, 34),
             Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
         // arrows
@@ -170,7 +174,7 @@ internal sealed class PhotoViewerDialog : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _loadGen++; _current?.Dispose(); } // discard any in-flight decode result
+        if (disposing) { _loadGen++; _current?.Dispose(); _fCap.Dispose(); _fCounter.Dispose(); _fMsg.Dispose(); } // discard any in-flight decode result
         base.Dispose(disposing);
     }
 }

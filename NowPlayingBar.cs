@@ -33,7 +33,6 @@ internal sealed class NowPlayingBar : Panel
     private Bitmap? _coverPrev;          // outgoing cover, held during a track-change cross-dissolve
     private float _coverFade = 1f;       // 0 = cover just changed (show _coverPrev), 1 = settled (show _cover)
     private Tween? _coverTween;
-    private Bitmap? _backdrop;     // a tiny, heavily-downsampled snapshot of the list above — stretched = a frosted blur
     private bool _playing;
     private float _playMorph;      // play button: 0 = play triangle, 1 = pause bars (cross-faded on the click)
     private Tween? _playTween;
@@ -101,7 +100,7 @@ internal sealed class NowPlayingBar : Panel
         MouseDown += OnDown;
         MouseMove += OnMove;
         MouseUp += OnUp;
-        MouseLeave += (_, _) => { _hover = Hit.None; Invalidate(); };
+        MouseLeave += (_, _) => { _hover = Hit.None; RetargetKnobs(); Invalidate(); };
     }
 
     public bool IsActive => _track is not null;
@@ -306,6 +305,7 @@ internal sealed class NowPlayingBar : Panel
         _coverPrev?.Dispose();
         _coverPrev = _cover;     // hold the outgoing cover for the dissolve
         _cover = next;
+        ComputeAccentTint();     // seek fill + eq bars drift toward the new cover's dominant colour
         if (_coverPrev is null || !Anim.MotionEnabled)
         {
             _coverPrev?.Dispose(); _coverPrev = null; _coverFade = 1f;   // nothing to dissolve from (idle → first cover)
@@ -321,6 +321,25 @@ internal sealed class NowPlayingBar : Panel
         Invalidate(CoverRect);
     }
 
+    /// <summary>Derive the seek-fill / eq-bar accent tint from the current cover's dominant colour (a 1px downscale sample).
+    /// Falls back to the theme Accent for grey/near-black/near-white covers; otherwise blends the sample toward AccentBright
+    /// so it stays vivid + on-brand rather than muddy. Cheap, one-shot per cover change.</summary>
+    private void ComputeAccentTint()
+    {
+        try
+        {
+            if (_cover is null) { _accentTint = Theme.Accent; return; }
+            using var tiny = new Bitmap(1, 1);
+            using (var g = Graphics.FromImage(tiny)) { g.InterpolationMode = InterpolationMode.HighQualityBilinear; g.DrawImage(_cover, 0, 0, 1, 1); }
+            Color c = tiny.GetPixel(0, 0);
+            float max = Math.Max(c.R, Math.Max(c.G, c.B)) / 255f, min = Math.Min(c.R, Math.Min(c.G, c.B)) / 255f;
+            float sat = max <= 0f ? 0f : (max - min) / max;
+            float lum = (0.299f * c.R + 0.587f * c.G + 0.114f * c.B) / 255f;
+            _accentTint = (sat < 0.22f || lum < 0.12f || lum > 0.9f) ? Theme.Accent : Theme.Blend(c, Theme.AccentBright, 0.42);
+        }
+        catch { _accentTint = Theme.Accent; }
+    }
+
     /// <summary>Stop playback and return the bar to its idle state (it stays visible).</summary>
     public void StopAndHide()
     {
@@ -331,6 +350,7 @@ internal sealed class NowPlayingBar : Panel
         _path = null;
         _coverTween?.Cancel(); _coverTween = null; _coverPrev?.Dispose(); _coverPrev = null; _coverFade = 1f;
         _cover?.Dispose(); _cover = null;
+        _accentTint = Theme.Accent;
         _playing = false;
         _scrubFrac = -1;
         _smtc?.Stopped();
@@ -427,15 +447,6 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Drop any already-committed gapless prefetch so the next tick re-evaluates "what's next"
     /// (call after the Up Next queue changes, e.g. a late "Play next").</summary>
     public void InvalidatePrefetch() { if (_engine.GaplessActive) ClearPending(); }
-
-    /// <summary>Set the frosted-glass backdrop — a tiny snapshot of the content above the bar (the host captures
-    /// it on scroll/list change). It's stretched across the bar and dimmed, so the list shows through as a blur.
-    /// TAKES OWNERSHIP of the bitmap.</summary>
-    public void SetBackdrop(Bitmap? tiny)
-    {
-        var old = _backdrop; _backdrop = tiny; old?.Dispose();
-        Invalidate();
-    }
 
     private void ClearPending()
     {
@@ -565,8 +576,11 @@ internal sealed class NowPlayingBar : Panel
     }
 
     // ---- interaction ----
-    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Shuffle, Repeat }
+    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Shuffle, Repeat, Seek, Vol }
     private Hit _hover = Hit.None;
+    private float _seekKnobR = 5f, _volKnobR = 5f;   // grab-knob radii — grow on hover/drag (tweened by RetargetKnobs)
+    private Tween? _knobTween;
+    private Color _accentTint = Theme.Accent;         // seek fill + eq bars drift toward the current cover's dominant colour
 
     private void OnDown(object? s, MouseEventArgs e)
     {
@@ -584,13 +598,13 @@ internal sealed class NowPlayingBar : Panel
             _engine.Volume = _muted ? 0 : _volume;
             Invalidate(); Changed?.Invoke(); return;
         }
-        if (l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; SetVolumeFromX(l.Vol, e.X); return; }
+        if (l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; RetargetKnobs(); SetVolumeFromX(l.Vol, e.X); return; }
 
         if (_track is null) return; // transport needs a loaded track
         if (l.Play.Contains(e.Location)) { TogglePlay(); return; }
         if (l.Prev.Contains(e.Location)) { PrevRequested?.Invoke(); return; }
         if (l.Next.Contains(e.Location)) { NextRequested?.Invoke(); return; }
-        if (l.ShowSeek && Inflate(l.Seek, 0, 10).Contains(e.Location)) { _drag = Drag.Seek; ScrubTo(l.Seek, e.X); return; }
+        if (l.ShowSeek && Inflate(l.Seek, 0, 10).Contains(e.Location)) { _drag = Drag.Seek; RetargetKnobs(); ScrubTo(l.Seek, e.X); return; }
     }
 
     private void OnMove(object? s, MouseEventArgs e)
@@ -604,12 +618,28 @@ internal sealed class NowPlayingBar : Panel
             : l.ShowQueue && l.Queue.Contains(e.Location) ? Hit.Queue
             : l.ShowModes && l.Shuffle.Contains(e.Location) ? Hit.Shuffle
             : l.ShowModes && l.Repeat.Contains(e.Location) ? Hit.Repeat
+            : l.ShowSeek && Inflate(l.Seek, 0, 10).Contains(e.Location) ? Hit.Seek
+            : l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location) ? Hit.Vol
             : _track is null ? Hit.None
             : l.Play.Contains(e.Location) ? Hit.Play
             : l.Prev.Contains(e.Location) ? Hit.Prev
             : l.Next.Contains(e.Location) ? Hit.Next
             : Hit.None;
-        if (h != _hover) { _hover = h; Invalidate(); }
+        if (h != _hover) { _hover = h; RetargetKnobs(); Invalidate(); }
+    }
+
+    /// <summary>Smoothly grow/shrink the seek + volume grab-knobs toward their hover/drag target radius (5→8px, 120ms).
+    /// One tween drives both. Called whenever hover or drag state changes so the knobs feel like grabbable widgets.</summary>
+    private void RetargetKnobs()
+    {
+        float seekTo = (_hover == Hit.Seek || _drag == Drag.Seek) ? 8f : 5f;
+        float volTo = (_hover == Hit.Vol || _drag == Drag.Volume) ? 8f : 5f;
+        if (Math.Abs(seekTo - _seekKnobR) < 0.1f && Math.Abs(volTo - _volKnobR) < 0.1f) return;
+        _knobTween?.Cancel();
+        float seekFrom = _seekKnobR, volFrom = _volKnobR;
+        if (!Anim.MotionEnabled) { _seekKnobR = seekTo; _volKnobR = volTo; Invalidate(); return; }
+        _knobTween = Anim.Run(120, v => { float f = (float)v; _seekKnobR = seekFrom + (seekTo - seekFrom) * f; _volKnobR = volFrom + (volTo - volFrom) * f; if (!IsDisposed) Invalidate(); },
+            () => { _seekKnobR = seekTo; _volKnobR = volTo; _knobTween = null; }, Easings.OutCubic);
     }
 
     private void OnUp(object? s, MouseEventArgs e)
@@ -622,6 +652,7 @@ internal sealed class NowPlayingBar : Panel
         }
         _scrubFrac = -1;
         _drag = Drag.None;
+        RetargetKnobs();
         Invalidate();
         if (wasDragging) Changed?.Invoke();
     }
@@ -644,37 +675,138 @@ internal sealed class NowPlayingBar : Panel
 
     private static Rectangle Inflate(Rectangle r, int dx, int dy) { var c = r; c.Inflate(dx, dy); return c; }
 
+    // EXPERIMENT (gated by AppSettings.FrostedBar): a small, pre-blurred slice of the list that the host slides as
+    // you scroll (cached once → no per-frame capture → no lag). The whole bar reads as frosted glass over the list's
+    // continuation: the blur is drawn at the list's NATURAL vertical scale (no squash) and a translucent glass layer
+    // is laid over it. <see cref="_frostH"/> is that natural height in px from the bar's top (so when the list ends
+    // mid-bar we don't stretch a short slice). Null = the plain seamless gradient. TAKES OWNERSHIP of the bitmap.
+    private Bitmap? _frost;
+    private int _frostH;          // natural display height (px from the bar top) — keeps the list's vertical scale
+    private int _frostX, _frostW; // destination x + width, so the blurred columns line up with the real list columns above
+    private Bitmap? _frostOld;    // outgoing frost held during a view-switch slide (old pushes left, new rides in)
+    private int _frostOldH, _frostOldX, _frostOldW;
+    private float _frostSlide = 1f;   // 1 = settled; <1 = mid-slide (eased progress, matched to the content transition)
+    private Tween? _frostSlideTween;
+    // Ownership: the per-scroll frost is a BORROWED reusable scratch bitmap (owned by MainForm) passed with owned=false,
+    // so the bar must NOT dispose it. View-switch frosts are owned (allocated fresh for the slide). These flags keep a
+    // borrowed scratch from being disposed out from under MainForm (it would crash the next scroll frame).
+    private bool _frostOwned = true, _frostOldOwned = true;
+
+    public void SetFrost(Bitmap? slice, int displayH = 0, int destX = 0, int destW = 0, bool owned = true)
+    {
+        int h = Math.Clamp(displayH, 0, H);
+        if (slice is null && _frost is null && _frostOld is null && _frostSlide >= 1f) return;   // already a plain bar — nothing to do
+        _frostSlideTween?.Cancel(); _frostSlideTween = null;
+        if (_frostOldOwned) _frostOld?.Dispose();
+        _frostOld = null; _frostOldOwned = true; _frostSlide = 1f;
+        var old = _frost; bool oldOwned = _frostOwned;
+        _frost = slice; _frostH = h; _frostX = destX; _frostW = destW; _frostOwned = owned;
+        if (oldOwned && !ReferenceEquals(old, slice)) old?.Dispose();   // never dispose a borrowed scratch (or the same object)
+        Invalidate();   // the frost spans the whole bar now → repaint it all (cheap: gradient + one blit + the controls)
+    }
+
+    /// <summary>Cross-SLIDE the frost from the current one to <paramref name="slice"/>, buffered, in sync with the
+    /// content view-switch transition (old pushes off to the left, new rides in from the right; 360ms OutCubic).
+    /// <paramref name="slice"/> is always an OWNED bitmap (the view-switch allocates a fresh one).</summary>
+    public void SlideFrost(Bitmap? slice, int displayH = 0, int destX = 0, int destW = 0)
+    {
+        int h = Math.Clamp(displayH, 0, H);
+        if (!Anim.MotionEnabled || (_frost is null && slice is null)) { SetFrost(slice, h, destX, destW, owned: true); return; }
+        _frostSlideTween?.Cancel();
+        if (_frostOldOwned) _frostOld?.Dispose();
+        _frostOld = _frost; _frostOldH = _frostH; _frostOldX = _frostX; _frostOldW = _frostW; _frostOldOwned = _frostOwned;   // outgoing keeps its ownership
+        _frost = slice; _frostH = h; _frostX = destX; _frostW = destW; _frostOwned = true;                                     // incoming is owned
+        _frostSlide = 0f;
+        _frostSlideTween = Anim.Run(360, v => { _frostSlide = (float)v; if (!IsDisposed) Invalidate(); },
+            () => { _frostSlideTween = null; if (_frostOldOwned) _frostOld?.Dispose(); _frostOld = null; _frostOldOwned = true; _frostSlide = 1f; if (!IsDisposed) Invalidate(); }, Easings.OutCubic);
+        Invalidate();
+    }
+
+    // Draw one frost layer (the blurred slice + nothing else) at a horizontal offset — used for both the settled
+    // frost and the two sliding layers. dx is added to the layer's own column-aligned x.
+    private void DrawFrostLayer(Graphics g, Bitmap? frost, int fh0, int fx0, int fw0, int dx)
+    {
+        if (frost is null) return;
+        int fh = Math.Clamp(fh0, 0, H);
+        if (fh <= 0) return;
+        int fw = fw0 > 0 ? fw0 : Width;
+        var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.DrawImage(frost, new Rectangle(fx0 + dx, 0, fw, fh));
+        g.InterpolationMode = im;
+    }
+
+    // The full-bar background gradients (no-frost `bg`, frost `glass`) + the frost base fill are rebuilt only when a
+    // theme COLOUR changes (Theme.Revision) — NOT every paint. They ran on BOTH the ~16fps eq-viz playback loop AND
+    // every scroll frame (the frost re-Invalidates the whole bar), so this kills 2 gradient brushes + 2 ColorBlend
+    // arrays + a solid brush per frame. Width doesn't affect a 90° vertical gradient's stops, so resize needs no rebuild.
+    private LinearGradientBrush? _gradBg, _gradGlass;
+    private SolidBrush? _gradBase;
+    private int _gradRev = -1;
+
+    private void EnsureGradients()
+    {
+        if (_gradRev == Theme.Revision && _gradBg is not null) return;
+        _gradBg?.Dispose(); _gradGlass?.Dispose(); _gradBase?.Dispose();
+        var rect = new Rectangle(0, -1, Math.Max(1, Width), H + 1);
+        _gradBg = new LinearGradientBrush(rect, Theme.Bg, Theme.Blend(Theme.SidebarBg, Color.Black, 0.14), 90f)
+        {
+            InterpolationColors = new ColorBlend
+            {
+                Colors = new[] { Theme.Bg, Theme.Blend(Theme.SidebarBg, Color.White, 0.04), Theme.SidebarBg, Theme.Blend(Theme.SidebarBg, Color.Black, 0.14) },
+                Positions = new[] { 0f, 0.34f, 0.62f, 1f },
+            },
+        };
+        _gradGlass = new LinearGradientBrush(rect, Color.FromArgb(150, Theme.Bg), Color.FromArgb(236, Theme.Blend(Theme.SidebarBg, Color.Black, 0.14)), 90f)
+        {
+            InterpolationColors = new ColorBlend
+            {
+                Colors = new[]
+                {
+                    Color.FromArgb(150, Theme.Bg),
+                    Color.FromArgb(202, Theme.Blend(Theme.SidebarBg, Color.White, 0.04)),
+                    Color.FromArgb(232, Theme.SidebarBg),
+                    Color.FromArgb(236, Theme.Blend(Theme.SidebarBg, Color.Black, 0.14)),
+                },
+                Positions = new[] { 0f, 0.2f, 0.4f, 1f },   // ramp to near-opaque by 40% → the see-through blur is a SHORTER top band (Erik: the top blur was a bit long)
+            },
+        };
+        _gradBase = new SolidBrush(Theme.Bg);
+        _gradRev = Theme.Revision;
+    }
+
     // ---- paint ----
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        if (_backdrop is not null)
+        EnsureGradients();
+        bool sliding = _frostSlide < 1f && (_frostOld is not null || _frost is not null);   // slide even if one side is empty (to/from a no-frost view)
+        if (_frost is null && !sliding)
         {
-            // Frosted glass: stretch the tiny snapshot of the list (a smooth blur), then a dark translucent
-            // tint + a soft top sheen so the controls stay legible and the list reads as colour behind glass.
-            var pom = g.PixelOffsetMode; g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-            g.DrawImage(_backdrop, new Rectangle(0, 0, Width, H));
-            g.PixelOffsetMode = pom; g.InterpolationMode = InterpolationMode.Default;
-            // a translucent tint keeps the bar on-theme while the list colour bleeds through; a soft top sheen
-            // + the bright top edge sell the pane-of-glass look.
-            using (var tint = new SolidBrush(Color.FromArgb(150, Theme.SidebarBg))) g.FillRectangle(tint, 0, 0, Width, H);
-            using (var sheen = new LinearGradientBrush(new Rectangle(0, 0, Width, H), Color.FromArgb(32, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
-                g.FillRectangle(sheen, 0, 0, Width, H * 2 / 3);
+            // No frost → a long, seamless gradient: the top eases out of the CONTENT colour (Theme.Bg) so the song
+            // list flows into the player with no hard seam, then through a faint glass sheen down to a darker floor.
+            g.FillRectangle(_gradBg!, 0, 0, Width, H);
         }
-        else using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, H),
-            Theme.Blend(Theme.SidebarBg, Color.White, 0.03), Theme.Blend(Theme.SidebarBg, Color.Black, 0.12), 90f))
+        else
         {
-            bg.InterpolationColors = new ColorBlend
+            // Frosted glass: the song list "continues" UNDER the whole bar. The pre-blurred slice is drawn at its
+            // NATURAL vertical scale (top-aligned, height = _frostH) so the rows never squash/stretch, then a
+            // TRANSLUCENT glass gradient is laid over it — so the list reads faintly through the glass while the
+            // controls (painted opaque below) stay crisp. Most visible up top (the list flowing in), fading to a
+            // near-solid floor where the seek bar + controls sit. During a view switch the two frosts slide
+            // (old left / new in from the right, buffered, matched to the content transition).
+            g.FillRectangle(_gradBase!, 0, 0, Width, H);
+            if (sliding)
             {
-                Colors = new[] { Theme.Blend(Theme.SidebarBg, Color.White, 0.03), Theme.SidebarBg, Theme.Blend(Theme.SidebarBg, Color.Black, 0.12) },
-                Positions = new[] { 0f, 0.5f, 1f },
-            };
-            g.FillRectangle(bg, 0, 0, Width, H);
+                DrawFrostLayer(g, _frostOld, _frostOldH, _frostOldX, _frostOldW, -(int)Math.Round(Width * _frostSlide));   // old pushes off left
+                DrawFrostLayer(g, _frost, _frostH, _frostX, _frostW, (int)Math.Round(Width * (1f - _frostSlide)));         // new rides in from the right
+            }
+            else
+            {
+                DrawFrostLayer(g, _frost, _frostH, _frostX, _frostW, 0);
+            }
+            g.FillRectangle(_gradGlass!, 0, 0, Width, H);
         }
-        // a bright top edge sells the "pane of glass" elevation over the list
-        using (var seam = new Pen(Color.FromArgb(_backdrop is not null ? 40 : 255, _backdrop is not null ? Color.White : Theme.Border))) g.DrawLine(seam, 0, 0, Width, 0);
 
         var l = Layout();
         bool idle = _track is null;
@@ -707,7 +839,7 @@ internal sealed class NowPlayingBar : Panel
             }
             g.Clip = saved;
         }
-        if (idle) Theme.DrawNote(g, cr, Color.FromArgb(110, 255, 255, 255));   // crisp, optically-centred eighth note
+        if (idle) Theme.DrawNote(g, cr, Color.FromArgb(120, 255, 255, 255));   // "Nothing playing" placeholder
         using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(crF, cvr); g.DrawPath(bp, cp2); }
         if (!idle && _playing) DrawEqBars(g, cr);   // animated "now playing" equaliser, bottom-right of the cover
 
@@ -740,12 +872,30 @@ internal sealed class NowPlayingBar : Panel
             double dur = _engine.Duration.TotalSeconds;
             double pos = _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
             double frac = _scrubFrac >= 0 ? _scrubFrac : (dur > 0 ? Math.Clamp(pos / dur, 0, 1) : 0);
-            DrawSlider(g, l.Seek, idle ? 0 : frac, !idle);
+            DrawSlider(g, l.Seek, idle ? 0 : frac, !idle, _accentTint, _seekKnobR, _hover == Hit.Seek || _drag == Drag.Seek);
             if (l.ShowTimes)
             {
                 double shown = _scrubFrac >= 0 ? _scrubFrac * dur : pos;
                 TextRenderer.DrawText(g, idle ? "0:00" : Fmt(shown), _fTime, new Rectangle(l.Seek.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
                 TextRenderer.DrawText(g, idle ? "0:00" : Fmt(dur), _fTime, new Rectangle(l.Seek.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            }
+            // Scrub bubble: while dragging, a little time pill pops above the thumb — the ONLY position feedback when the
+            // window is too narrow for the side time labels (ShowTimes needs w>=740). Fixes a real blind spot on small windows.
+            if (_drag == Drag.Seek && !idle)
+            {
+                string txt = Fmt(frac * dur);
+                var sz = TextRenderer.MeasureText(txt, _fTime);
+                int bw2 = sz.Width + 14, bh2 = 19;
+                float kx = l.Seek.X + (float)(l.Seek.Width * Math.Clamp(frac, 0, 1));
+                float bx = Math.Clamp(kx - bw2 / 2f, l.Seek.Left - 12, l.Seek.Right - bw2 + 12);
+                var bub = new RectangleF(bx, l.Seek.Y - 11 - bh2, bw2, bh2);
+                var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var bb = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.Black, 0.28)))
+                using (var bp = Theme.RoundedRect(bub, 5f)) g.FillPath(bb, bp);
+                using (var bpen = new Pen(Color.FromArgb(40, 255, 255, 255)))
+                using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
+                g.SmoothingMode = sm;
+                TextRenderer.DrawText(g, txt, _fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
 
@@ -754,7 +904,7 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowPro) DrawProGlyph(g, l.Pro, _hover == Hit.Pro);
         if (l.ShowEq) DrawEqGlyph(g, l.Eq, _hover == Hit.Eq);
         if (l.ShowSpeaker) DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
-        if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true);   // knob, matching the seek bar (consistency + a grab target)
+        if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true, Theme.Accent, _volKnobR, _hover == Hit.Vol || _drag == Drag.Volume);   // knob, matching the seek bar (consistency + a grab target)
 
         Theme.CarveCardCorners(g, this, Theme.RadShell, false, false, true, true);   // content card's BOTTOM corners
     }
@@ -766,20 +916,27 @@ internal sealed class NowPlayingBar : Panel
         return t.Hours > 0 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
     }
 
-    private static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob)
+    private static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob, Color fill, float knobR = 5f, bool knobHot = false)
     {
         var t = new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1, track.Height - 1);
         using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1)))
         using (var tp = Theme.RoundedRect(t, t.Height / 2f)) g.FillPath(tb, tp);
         float fw = (float)(t.Width * Math.Clamp(frac, 0, 1));
         if (fw > 0)
-            using (var fb = new SolidBrush(Theme.Accent))
+            using (var fb = new SolidBrush(fill))
             using (var fp = Theme.RoundedRect(new RectangleF(t.X, t.Y, fw, t.Height), t.Height / 2f)) g.FillPath(fb, fp);
         if (knob)
         {
-            float kx = t.X + fw, ky = t.Y + t.Height / 2f;
-            using var kb = new SolidBrush(Color.White);
-            g.FillEllipse(kb, kx - 5, ky - 5, 10, 10);
+            float kx = t.X + fw, ky = t.Y + t.Height / 2f, r = knobR;
+            var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (r > 5.4f)   // a soft shadow under the grown (grabbed) knob so it reads as lifted
+            {
+                using var sh = new SolidBrush(Color.FromArgb(60, 0, 0, 0));
+                g.FillEllipse(sh, kx - r - 0.5f, ky - r + 1f, r * 2 + 1, r * 2 + 1);
+            }
+            using var kb = new SolidBrush(knobHot ? Theme.AccentBright : Color.White);
+            g.FillEllipse(kb, kx - r, ky - r, r * 2, r * 2);
+            g.SmoothingMode = sm;
         }
     }
 
@@ -787,23 +944,28 @@ internal sealed class NowPlayingBar : Panel
     /// universally-recognised "this is playing" cue. Driven by <see cref="_eqPhase"/>; a soft scrim keeps
     /// them legible over any artwork.</summary>
     private static readonly double[] EqOff = { 0.0, 1.7, 3.3, 5.0 }, EqSpd = { 1.0, 1.35, 0.85, 1.15 };
+    // The eq-viz scrim gradient + cover-clip path are built from the static CoverRect (invariant geometry) and a fixed
+    // black gradient (no theme colour) → cache them ONCE instead of allocating both every eq frame (~16fps playback).
+    private System.Drawing.Drawing2D.LinearGradientBrush? _eqScrim;
+    private System.Drawing.Drawing2D.GraphicsPath? _eqClip;
+    private SolidBrush? _eqBarBrush; private Color _eqBarTint;   // eq-bar brush cached on _accentTint (was new per ~33fps eq frame)
+
     private void DrawEqBars(Graphics g, Rectangle cover)
     {
         const int n = 4, bw = 3, gap = 2, maxH = 16;
         int totalW = n * bw + (n - 1) * gap;
         float baseY = cover.Bottom - 7;
         float x0 = cover.Right - 7 - totalW;
-        // soft scrim so the bars read on light covers
-        using (var scrim = new System.Drawing.Drawing2D.LinearGradientBrush(
-            new RectangleF(cover.Left, cover.Bottom - 24, cover.Width, 24), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f))
-        {
-            var save = g.Clip;
-            using (var clip = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac))
-                g.SetClip(clip, CombineMode.Intersect);
-            g.FillRectangle(scrim, cover.Left, cover.Bottom - 24, cover.Width, 24);
-            g.Clip = save;
-        }
-        using var b = new SolidBrush(Theme.AccentBright);
+        // soft scrim so the bars read on light covers (cached — geometry + colours are invariant)
+        _eqScrim ??= new System.Drawing.Drawing2D.LinearGradientBrush(
+            new RectangleF(cover.Left, cover.Bottom - 24, cover.Width, 24), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f);
+        _eqClip ??= Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac);
+        var save = g.Clip;
+        g.SetClip(_eqClip, CombineMode.Intersect);
+        g.FillRectangle(_eqScrim, cover.Left, cover.Bottom - 24, cover.Width, 24);
+        g.Clip = save;
+        if (_eqBarBrush is null || _eqBarTint != _accentTint) { _eqBarBrush?.Dispose(); _eqBarTint = _accentTint; _eqBarBrush = new SolidBrush(Theme.Blend(_accentTint, Color.White, 0.12)); }   // cover-derived tint, cached (rebuilds only on cover change)
+        var b = _eqBarBrush;
         for (int i = 0; i < n; i++)
         {
             double idle = 0.18 + 0.14 * (0.5 + 0.5 * Math.Sin(_eqPhase * EqSpd[i] + EqOff[i]));  // gentle baseline so it stays alive
@@ -990,7 +1152,7 @@ internal sealed class NowPlayingBar : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _eqAnim?.Cancel(); _coverTween?.Cancel(); _playTween?.Cancel(); _sleepFade?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _coverPrev?.Dispose(); _pendingCover?.Dispose(); _backdrop?.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fTime.Dispose(); }
+        if (disposing) { _eqAnim?.Cancel(); _coverTween?.Cancel(); _playTween?.Cancel(); _sleepFade?.Cancel(); _frostSlideTween?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _coverPrev?.Dispose(); _pendingCover?.Dispose(); if (_frostOwned) _frost?.Dispose(); if (_frostOldOwned) _frostOld?.Dispose(); _eqScrim?.Dispose(); _eqClip?.Dispose(); _eqBarBrush?.Dispose(); _gradBg?.Dispose(); _gradGlass?.Dispose(); _gradBase?.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fTime.Dispose(); }
         base.Dispose(disposing);
     }
 }

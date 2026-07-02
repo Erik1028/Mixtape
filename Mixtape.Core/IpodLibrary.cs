@@ -122,6 +122,10 @@ internal sealed class IpodLibrary
     /// <summary>Add existing library tracks to a playlist. Does not save. Returns false if the playlist couldn't be matched.</summary>
     public bool AddToPlaylist(ulong playlistPid, IEnumerable<uint> trackIds) => Raw.AddTracksToPlaylist(playlistPid, trackIds);
 
+    /// <summary>Replace a playlist's whole membership with exactly these tracks, in order (smart playlists).
+    /// Does not save. Returns false if it already matched (no change).</summary>
+    public bool SetPlaylistTracks(ulong playlistPid, IList<uint> orderedIds) => Raw.SetPlaylistTracks(playlistPid, orderedIds);
+
     public void Save()
     {
         // Fold the on-device "Play Counts" into the DB so the save PERSISTS them (the iTunes-style sync). It

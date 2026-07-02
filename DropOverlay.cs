@@ -10,6 +10,10 @@ namespace iPodCommander;
 internal sealed class DropOverlay : Panel
 {
     private string _caption = Loc.T("Drop to add");
+    // Cached fonts — OnPaint repaints on resize and is shown/hidden repeatedly during drags, so inline Theme fonts leaked handles.
+    private readonly Font _fTiny = Theme.DisplayFont(13f, FontStyle.Bold);
+    private readonly Font _fTitle = Theme.DisplayFont(15f, FontStyle.Bold);
+    private readonly Font _fSub = Theme.UiFont(9.5f);
     public string Caption
     {
         get => _caption;
@@ -35,7 +39,7 @@ internal sealed class DropOverlay : Panel
         if (cw < 160 || ch < 120)
         {
             // Tiny viewport — just a centred label.
-            TextRenderer.DrawText(g, _caption, Theme.DisplayFont(13f, FontStyle.Bold), ClientRectangle, Theme.TextCol,
+            TextRenderer.DrawText(g, _caption, _fTiny, ClientRectangle, Theme.TextCol,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
@@ -61,10 +65,16 @@ internal sealed class DropOverlay : Panel
         }
 
         var title = new Rectangle(card.Left + 12, cy + rad + 10, card.Width - 24, 30);
-        TextRenderer.DrawText(g, _caption, Theme.DisplayFont(15f, FontStyle.Bold), title, Theme.TextCol,
+        TextRenderer.DrawText(g, _caption, _fTitle, title, Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         var sub = new Rectangle(card.Left + 12, title.Bottom + 2, card.Width - 24, 22);
-        TextRenderer.DrawText(g, Loc.T("Release to add them"), Theme.UiFont(9.5f), sub, Theme.Subtle,
+        TextRenderer.DrawText(g, Loc.T("Release to add them"), _fSub, sub, Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _fTiny.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); }
+        base.Dispose(disposing);
     }
 }

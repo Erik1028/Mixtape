@@ -101,6 +101,7 @@ internal sealed class VideoPreviewDialog : Form
 
         private double _frac, _pos, _dur;
         private bool _playing, _hoverPlay, _dragging;
+        private readonly Font _fTime = Theme.UiFont(8f);   // cached: OnPaint runs per playback tick, so an inline font leaked a handle each frame
 
         public TransportBar()
         {
@@ -155,13 +156,13 @@ internal sealed class VideoPreviewDialog : Form
                 else { float ss = 5.5f; g.FillPolygon(p, new[] { new PointF(c.X - ss + 1.2f, c.Y - ss), new PointF(c.X - ss + 1.2f, c.Y + ss), new PointF(c.X + ss + 1.2f, c.Y) }); }
             }
 
-            TextRenderer.DrawText(g, Fmt(_pos), Theme.UiFont(8f), new Rectangle(50, 0, 44, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(g, Fmt(_pos), _fTime, new Rectangle(50, 0, 44, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             var t = SeekTrack;
             using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1))) { using var tp = Theme.RoundedRect(t, 2); g.FillPath(tb, tp); }
             int fw = (int)Math.Round(t.Width * _frac);
             if (fw > 0) using (var fb = new SolidBrush(Theme.Accent)) { using var fp = Theme.RoundedRect(new Rectangle(t.X, t.Y, fw, t.Height), 2); g.FillPath(fb, fp); }
             using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, t.X + fw - 5, t.Y + t.Height / 2 - 5, 10, 10);
-            TextRenderer.DrawText(g, Fmt(_dur), Theme.UiFont(8f), new Rectangle(t.Right + 8, 0, 48, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(g, Fmt(_dur), _fTime, new Rectangle(t.Right + 8, 0, 48, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 
         private static string Fmt(double sec)
@@ -169,6 +170,12 @@ internal sealed class VideoPreviewDialog : Form
             if (sec < 0 || double.IsNaN(sec)) sec = 0;
             var t = TimeSpan.FromSeconds(sec);
             return t.Hours > 0 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _fTime.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

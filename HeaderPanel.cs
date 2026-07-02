@@ -142,10 +142,14 @@ internal sealed class HeaderPanel : Panel
 
     private Rectangle ArtRect => new(Pad, (Height - ArtSize) / 2, ArtSize, ArtSize);
 
-    public void SetInfo(string kicker, string title, string subtitle, int seed)
+    public void SetInfo(string kicker, string title, string subtitle, int seed, bool keepArt = false)
     {
         _kicker = kicker; _title = title; _subtitle = subtitle; _seed = seed;
-        SetArt(null); // disposes any prior art
+        // keepArt: hold the CURRENT cover on screen instead of reverting to the seed gradient — the caller then
+        // cross-dissolves straight to the new cover (or a null-fallback gradient), so switching playlists fades
+        // cover→cover with no ♪-placeholder flash in between. Without it, revert to the gradient (disposes prior art).
+        if (keepArt) Invalidate();
+        else SetArt(null);
     }
 
     /// <summary>
@@ -291,6 +295,16 @@ internal sealed class HeaderPanel : Panel
         int tx = TextX;
         // Leave room for the search box + action-button stack on the right so the title never runs under them.
         int rightLimit = (Search is { Visible: true } ? _searchLeft : _buttonsLeft) - 16;
+        // …and for a top-right status line (the Device page has no search/buttons there, so a long stats string —
+        // "166 songs · 4 videos · 1510 photos · 18,6 GB free" — sits on the title's line and must not be run under).
+        if (!string.IsNullOrEmpty(_status))
+        {
+            var stSz = TextRenderer.MeasureText(g, _status, _fStatus);
+            int rightEdge = Width - Pad;
+            int stAvail = _searchLeft < rightEdge ? (rightEdge - _searchLeft) : (rightEdge - TextX);
+            int statusW = Math.Min(stSz.Width + 6, Math.Max(60, stAvail));
+            rightLimit = Math.Min(rightLimit, rightEdge - statusW - 16);
+        }
         int rightW = Math.Max(80, rightLimit - tx);
         var kickerFont = _fKicker;
         var titleFont = _fTitleFont;
