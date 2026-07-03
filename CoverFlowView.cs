@@ -60,6 +60,7 @@ internal sealed class CoverFlowView : Control
     private readonly Pen _closePen = new(Color.White, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round };  // colour reassigned per frame
     private float _lastPaintPos;                                    // _pos at the previous paint → per-frame scroll speed
     private bool _fast;                                             // moving fast this frame → coarsen the warp buckets
+    private volatile bool _coasting;                               // a MoveTo tween is in flight → the whole coast paints on the fast path (read on the baker thread too)
     private int _visRange = 6;                                      // visible covers each side of centre (from the last paint) → pre-buffer window
     private float _intro = 1f;                                      // open/close zoom+fade (1 = fully shown)
     private Tween? _introTween;
@@ -134,12 +135,16 @@ internal sealed class CoverFlowView : Control
         _target = index;
         _tw?.Cancel();
         PrebufferMove(fromIdx, _target);   // bake the arrival + the centre covers' paths NOW, during the coast → no pop-in
-        if (!Anim.MotionEnabled) { _pos = _target; Invalidate(); return; }
+        if (!Anim.MotionEnabled) { _coasting = false; _pos = _target; Invalidate(); return; }
         float from = _pos, to = _target;
         // Coast time scales gently with distance (snappy single steps, a longer glide for big jumps) and
         // settles with a smooth deceleration. Continuing from the current position keeps rapid flicks fluid.
+        // The WHOLE coast paints on the fast path (_coasting → coarse buckets); the done callback drops back to
+        // precise buckets and repaints once — so the landing frame is exact while the flight stays cheap.
         double dur = Math.Clamp(260 + 95 * Math.Sqrt(Math.Abs(to - from)), 260, 620);
-        _tw = Anim.Run(dur, v => { _pos = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutQuint);
+        _coasting = true;
+        _tw = Anim.Run(dur, v => { _pos = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); },
+            () => { _coasting = false; if (!IsDisposed) Invalidate(); }, Easings.OutQuint);
     }
     public void Move(int delta) => MoveTo(_target + delta);
 
@@ -214,7 +219,7 @@ internal sealed class CoverFlowView : Control
             if (!_dragging && Math.Abs(e.X - _downX) > 4) _dragging = true;
             if (_dragging)
             {
-                _tw?.Cancel();
+                _tw?.Cancel(); _coasting = false;   // a grab mid-coast takes over — speed decides the fast path again
                 _pos = Math.Clamp(_downPos - (e.X - _downX) / Math.Max(1f, _stepPx), 0, Math.Max(0, _items.Count - 1));
                 Invalidate();
             }
@@ -255,11 +260,12 @@ internal sealed class CoverFlowView : Control
     {
         var g = e.Graphics;
         _hit.Clear();
-        // Per-frame scroll speed → once moving more than a touch, coarsen the rotation buckets so far fewer distinct
-        // perspective sprites are baked (they blur past anyway) → the background worker keeps up and covers don't
-        // pop in; precise rotation returns the moment it slows / settles. (Was 0.4 — too high; medium scrolls fell
-        // through to fine buckets and starved the worker.)
-        _fast = Math.Abs(_pos - _lastPaintPos) > 0.25f;
+        // Coarsen the rotation buckets while MOVING, so far fewer distinct perspective sprites are baked (they blur
+        // past anyway) → the background worker keeps up and covers don't pop in; precise rotation returns at rest.
+        // Two triggers: per-frame speed (drag), OR a wheel/keyboard coast in flight — the OutQuint tail spends ~85%
+        // of its time under any speed threshold, so exact buckets were requested per frame, missing the cache and
+        // flooding the baker + its repaint storms. That was the "wheel lags, drag doesn't" asymmetry.
+        _fast = _coasting || Math.Abs(_pos - _lastPaintPos) > 0.25f;
         _lastPaintPos = _pos;
 
         // Backdrop: a dark vertical gradient, cached as a bitmap (re-rendered only when the size changes)
@@ -408,8 +414,14 @@ internal sealed class CoverFlowView : Control
         if (baseH <= 0) return;
         PrebufferSettle(target);                       // arrival + just-beyond
         if (target == from) return;
-        int inSide = target > from ? 1 : -1;           // the incoming centre cover approaches from this side
         QueueBakeIfMissing(target, 0, 0, baseH);       // …and lands flat at centre (2×)
+        // The incoming/outgoing centre covers sweep through the MID angle buckets — but only on a SHORT step is that
+        // sweep actually seen. On a big (fast-wheel, accumulated) jump the intermediate covers blur past on the fast
+        // path, so baking their per-4°-bucket sweep is wasted work that floods GetSrcPx (LockBits on the UI thread)
+        // exactly between the coast's timer ticks → the WM_TIMER judder that made the wheel lag while a drag stayed
+        // smooth (a drag never runs this path). The idle prebuffer bakes the landing anyway once the coast slows.
+        if (Math.Abs(target - from) > 2) return;
+        int inSide = target > from ? 1 : -1;           // the incoming centre cover approaches from this side
         for (int b = Buckets; b >= 4; b -= 4) QueueBakeIfMissing(target, inSide, b, baseH);
         for (int b = 4; b <= Buckets; b += 4) QueueBakeIfMissing(from, -inSide, b, baseH);   // outgoing centre sweeps the other way
     }
@@ -490,8 +502,10 @@ internal sealed class CoverFlowView : Control
         float a = Math.Abs(d);
         int s = d < 0 ? -1 : (d > 0 ? 1 : 0);
         int bucket = (int)Math.Round(Math.Clamp(a, 0, 1) * Buckets);  // 0 = flat centre, Buckets = full side angle
-        if (_fast && bucket > 0 && bucket < Buckets)                  // flicking → snap to every-5th bucket so only a
-            bucket = Math.Clamp((int)Math.Round(bucket / 5.0) * 5, 0, Buckets); // handful of sprites bake, then get reused
+        if (_fast && bucket > 0 && bucket < Buckets)                  // moving → snap to every-4th bucket so only a handful of
+            bucket = Math.Clamp((int)Math.Round(bucket / 4.0) * 4, 0, Buckets); // sprites bake + get reused. MUST stay on PrebufferMove's
+                                                                                // 4-grid — the old every-5th snap never matched the
+                                                                                // every-4th prebake, so coasts always missed the cache.
         if (bucket == 0) s = 0;
         // |d|<=1: interpolate the centre cover out to the first side slot; beyond: recede by sideStep.
         float o = a <= 1f ? d * side1 : s * (side1 + (a - 1f) * sideStep);
@@ -644,6 +658,10 @@ internal sealed class CoverFlowView : Control
     private void RequestRepaint()
     {
         if (!IsHandleCreated || IsDisposed) return;
+        // During a coast the tween already repaints at ~66fps, and the landing frame (the tween's done callback)
+        // shows every sprite baked so far — so the baker's per-sprite BeginInvoke here would only pile extra
+        // messages onto the UI queue, delaying the low-priority WM_TIMER that drives the coast → judder.
+        if (_coasting) return;
         if (System.Threading.Interlocked.Exchange(ref _repaintQueued, 1) == 1) return;   // already one pending — Invalidate is whole-control, so it covers this bake too
         try { BeginInvoke(_repaintAction ??= () => { _repaintQueued = 0; if (!IsDisposed) Invalidate(); }); }
         catch { _repaintQueued = 0; }
