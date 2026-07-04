@@ -3,10 +3,11 @@ using System.Globalization;
 namespace iPodCommander;
 
 /// <summary>
-/// The smart-playlist rule engine. Rules live in <see cref="AppSettings"/> (per device); here we turn a
+/// The smart-playlist rule engine. Rules live in the app settings (per device); here we turn a
 /// <see cref="SmartPlaylistDef"/> + the library's audio tracks into the ordered member list that gets written
 /// to a normal iPod playlist. Pure logic, no UI — shared by the editor dialog (field/op metadata + live count)
-/// and by MainForm (evaluate → set members). Nothing here touches the iTunesDB, so a bad rule can never corrupt it.
+/// and by MainForm (evaluate → set members), and by the cross-platform app. Nothing here touches the iTunesDB,
+/// so a bad rule can never corrupt it. Lives in Mixtape.Core so both the WinForms and Avalonia apps share it.
 /// </summary>
 internal static class SmartPlaylist
 {
@@ -145,4 +146,25 @@ internal static class SmartPlaylist
 
     private static bool TryNum(string? s, out double v) =>
         double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) || double.TryParse(s, out v);
+}
+
+/// <summary>One rule of a smart playlist: a field, a comparison operator, and the value to compare against.
+/// Field/Op are stable string keys (see <see cref="SmartPlaylist"/>) so the JSON stays readable and forward-compatible.</summary>
+internal sealed class SmartRule
+{
+    public string Field { get; set; } = "Artist";   // e.g. Artist, Album, Genre, Title, Year, Rating, PlayCount, DateAdded, LastPlayed
+    public string Op { get; set; } = "contains";     // e.g. contains, is, isnot, startswith, atleast, atmost, more, less, within, notwithin
+    public string Value { get; set; } = "";          // text, a number, or a day-count depending on the field
+}
+
+/// <summary>A smart-playlist definition: name + rules + optional limit. Evaluated app-side into a real iPod
+/// playlist identified by <see cref="PersistentId"/>. Stored in the app settings.</summary>
+internal sealed class SmartPlaylistDef
+{
+    public ulong PersistentId { get; set; }          // the iPod playlist this drives
+    public string Name { get; set; } = "";
+    public bool MatchAll { get; set; } = true;       // true = match ALL rules (AND), false = match ANY (OR)
+    public List<SmartRule> Rules { get; set; } = new();
+    public int Limit { get; set; }                   // 0 = no limit; else keep at most N tracks
+    public string LimitSort { get; set; } = "MostPlayed"; // how to pick which N when limited (+ playlist order)
 }

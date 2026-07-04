@@ -175,23 +175,5 @@ internal sealed class LocalPlaylistData
     public List<string> Paths { get; set; } = new();
 }
 
-/// <summary>One rule of a smart playlist: a field, a comparison operator, and the value to compare against.
-/// Field/Op are stable string keys (see SmartPlaylist.cs) so the JSON stays readable and forward-compatible.</summary>
-internal sealed class SmartRule
-{
-    public string Field { get; set; } = "Artist";   // e.g. Artist, Album, Genre, Title, Year, Rating, PlayCount, DateAdded, LastPlayed
-    public string Op { get; set; } = "contains";     // e.g. contains, is, isnot, startswith, atleast, atmost, more, less, within, notwithin
-    public string Value { get; set; } = "";          // text, a number, or a day-count depending on the field
-}
-
-/// <summary>A smart-playlist definition: name + rules + optional limit. Evaluated app-side into a real iPod
-/// playlist identified by <see cref="PersistentId"/>.</summary>
-internal sealed class SmartPlaylistDef
-{
-    public ulong PersistentId { get; set; }          // the iPod playlist this drives
-    public string Name { get; set; } = "";
-    public bool MatchAll { get; set; } = true;       // true = match ALL rules (AND), false = match ANY (OR)
-    public List<SmartRule> Rules { get; set; } = new();
-    public int Limit { get; set; }                   // 0 = no limit; else keep at most N tracks
-    public string LimitSort { get; set; } = "MostPlayed"; // how to pick which N when limited (+ playlist order)
-}
+// SmartRule + SmartPlaylistDef moved to Mixtape.Core/SmartPlaylist.cs (shared with the cross-platform app);
+// the AppSettings.SmartPlaylists list below still holds them — same `iPodCommander` namespace, so nothing changed here.

@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="using:Mixtape.App"
         x:Class="Mixtape.App.Views.MainWindow"
         Title="Mixtape" Width="1040" Height="660"
         MinWidth="820" MinHeight="520"
@@ -8,7 +9,26 @@
         FontFamily="Inter"
         SystemDecorations="BorderOnly">
 
+  <Window.Resources>
+    <app:StarGlyphConverter x:Key="StarGlyph"/>
+    <SolidColorBrush x:Key="StarEmptyBrush" Color="#3AFFFFFF"/>
+  </Window.Resources>
+
   <Window.Styles>
+    <!-- click-to-rate stars in the RATING column: flat accent glyphs, no button chrome -->
+    <Style Selector="Button.star">
+      <Setter Property="Width" Value="18"/><Setter Property="Height" Value="26"/>
+      <Setter Property="Padding" Value="0"/><Setter Property="CornerRadius" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="FontSize" Value="13"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.star /template/ ContentPresenter">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
     <!-- custom window caption buttons (we draw our own title bar) -->
     <Style Selector="Button.winbtn">
       <Setter Property="Width" Value="46"/><Setter Property="Height" Value="32"/>
@@ -157,8 +177,15 @@
                 <Setter Property="Margin" Value="0,1"/>
                 <Setter Property="IsEnabled" Value="{Binding !IsHeader}"/>
               </Style>
+              <!-- active row: a soft pill + a 3px accent left-bar (matches the Windows sidebar), not a solid
+                   accent fill — keeps the label readable and the accent as a marker, following the theme accent -->
               <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                <Setter Property="Background" Value="#1CFFFFFF"/>
+                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                <Setter Property="BorderThickness" Value="3,0,0,0"/>
+              </Style>
+              <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                <Setter Property="Background" Value="#14FFFFFF"/>
               </Style>
             </ListBox.Styles>
             <ListBox.ItemTemplate>
@@ -247,8 +274,9 @@
             </Grid>
           </Border>
 
-          <!-- song table -->
-          <DataGrid x:Name="SongGrid" ItemsSource="{Binding Tracks}" Margin="14,2,10,4"
+          <!-- song table + scroll-edge fade: rows dissolve into the card as they slide under the header -->
+          <Grid Margin="14,2,10,4">
+          <DataGrid x:Name="SongGrid" ItemsSource="{Binding Tracks}" Margin="0"
                     DoubleTapped="OnSongDoubleTapped"
                     Background="Transparent" Foreground="{StaticResource TextBrush}"
                     GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource HairlineBrush}"
@@ -291,12 +319,44 @@
               </DataGridTemplateColumn>
               <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*"/>
               <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*"/>
-              <DataGridTextColumn Header="RATING" Binding="{Binding Stars}"  Width="92"/>
+              <DataGridTemplateColumn Header="RATING" Width="110">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                      <Button Classes="star" Tag="1" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=1}"/>
+                      <Button Classes="star" Tag="2" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=2}"/>
+                      <Button Classes="star" Tag="3" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=3}"/>
+                      <Button Classes="star" Tag="4" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=4}"/>
+                      <Button Classes="star" Tag="5" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=5}"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
               <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="88"/>
-              <DataGridTextColumn Header="ADDED"  Binding="{Binding Added}"  Width="104"/>
+              <DataGridTemplateColumn Header="ADDED" Width="104">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate>
+                    <Panel VerticalAlignment="Center">
+                      <!-- Today/Yesterday tint accent ("what's new" pops); older dates stay subtle -->
+                      <TextBlock Text="{Binding Added}" IsVisible="{Binding AddedRecent}" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+                      <TextBlock Text="{Binding Added}" IsVisible="{Binding !AddedRecent}" Foreground="{StaticResource SubtleBrush}" VerticalAlignment="Center"/>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
               <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74"/>
             </DataGrid.Columns>
           </DataGrid>
+          <!-- the fade sits just under the column header, so the first rows melt into the card -->
+          <Border VerticalAlignment="Top" Height="20" Margin="0,32,0,0" IsHitTestVisible="False">
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                <GradientStop Offset="0" Color="#1D1E22"/>
+                <GradientStop Offset="1" Color="#001D1E22"/>
+              </LinearGradientBrush>
+            </Border.Background>
+          </Border>
+          </Grid>
 
         </DockPanel>
       </Border>

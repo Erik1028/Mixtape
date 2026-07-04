@@ -25,27 +25,51 @@ public sealed class TrackRow : INotifyPropertyChanged
     public string Title { get; init; } = "";
     public string Artist { get; init; } = "";
     public string Album { get; init; } = "";
-    public string Stars { get; init; } = "";
     public string Plays { get; init; } = "";
     public string Added { get; init; } = "";
+    public bool AddedRecent { get; init; }   // added Today/Yesterday → tinted accent in the ADDED column
     public string Time { get; init; } = "";
     internal Track? Source { get; init; }
 
-    private Bitmap? _art;
-    public Bitmap? Art { get => _art; set { _art = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Art))); } }
-    public event PropertyChangedEventHandler? PropertyChanged;
+    // Rating is live (click-to-rate updates it in place without a full grid rebuild). 0–5 stars.
+    // (The RATING column binds RatingValue via the per-star buttons; the old `Stars` string is gone — nothing bound it.)
+    private int _rating;
+    public int RatingValue { get => _rating; set { if (_rating != value) { _rating = value; OnChanged(nameof(RatingValue)); } } }
 
-    internal static TrackRow From(Track t) => new()
+    private Bitmap? _art;
+    public Bitmap? Art { get => _art; set { _art = value; OnChanged(nameof(Art)); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnChanged(string n) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+
+    internal static TrackRow From(Track t)
     {
-        Title = t.DisplayTitle,
-        Artist = t.Artist ?? "",
-        Album = t.Album ?? "",
-        Stars = t.Rating >= 20 ? new string('★', Math.Clamp(t.Rating / 20, 0, 5)) : "",
-        Plays = t.PlayCount > 0 ? t.PlayCount.ToString() : "",
-        Added = t.DateAdded is { } d && d.Year > 1970 ? d.ToString("yyyy-MM-dd") : "",
-        Time = t.DurationStr,
-        Source = t,
-    };
+        var (added, recent) = FmtAdded(t.DateAdded);
+        return new()
+        {
+            Title = t.DisplayTitle,
+            Artist = t.Artist ?? "",
+            Album = t.Album ?? "",
+            _rating = Math.Clamp(t.Rating / 20, 0, 5),
+            Plays = t.PlayCount > 0 ? t.PlayCount.ToString() : "",
+            Added = added,
+            AddedRecent = recent,
+            Time = t.DurationStr,
+            Source = t,
+        };
+    }
+
+    /// <summary>Conversational date for the ADDED column (matches the Windows list): Today / Yesterday / "Mar 27" /
+    /// "Mar 27, 2025". Returns whether it's Today/Yesterday so the cell can tint those accent ("what's new" pops).</summary>
+    private static (string, bool) FmtAdded(DateTime? d)
+    {
+        if (d is not { } dt || dt.Year <= 1970) return ("", false);
+        var local = dt.ToLocalTime();   // the reader yields UTC; compare in LOCAL time so Today/Yesterday isn't off by a day near midnight
+        var today = DateTime.Today; var day = local.Date;
+        if (day == today) return ("Today", true);
+        if (day == today.AddDays(-1)) return ("Yesterday", true);
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        return (local.Year == today.Year ? local.ToString("MMM d", ci) : local.ToString("MMM d, yyyy", ci), false);
+    }
 }
 
 public sealed class MainViewModel : INotifyPropertyChanged
@@ -229,6 +253,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (Exception ex) { Status = "Delete failed: " + ex.Message; }
     }
 
+    /// <summary>Click-to-rate: set (or clear) a track's star rating on the iPod through the SAME verified write path
+    /// as the Windows app (SafeDbWriter backup + verify + rollback). Clicking the current level — or left of ★1 —
+    /// clears it. Updates just this row in place (no grid rebuild), so scroll + selection are kept. Writable iPod only.</summary>
+    public void RateTrack(TrackRow? row, int star)
+    {
+        if (row?.Source is not { } t) return;
+        // Local Music tracks aren't on the iPod (UniqueId==0) — EditTrack would no-op, so guard the VIEW, not just
+        // CanWrite: otherwise a Local Music row would report "Rated" + run a needless DB rewrite that wrote nothing.
+        if (!IsIpodView) { Status = "You can only rate songs that are on the iPod."; return; }
+        if (_lib is null || _device is null || !_device.Profile.CanWrite)
+        {
+            Status = _device is null ? "Connect a writable iPod to rate songs." : "This iPod is read-only.";
+            return;
+        }
+        int cur = Math.Clamp(t.Rating / 20, 0, 5);
+        int stars = (star == 0 || star == cur) ? 0 : Math.Clamp(star, 0, 5);   // toggle-to-clear like the Windows list
+        byte rating = (byte)(stars * 20);
+        try
+        {
+            if (!_lib.EditTrack(t.UniqueId, new TrackEdit { Rating = rating }))   // honour the write: a no-op must not "succeed"
+            {
+                Status = "That song isn't on the iPod.";
+                return;
+            }
+            _lib.Save();
+        }
+        catch (Exception ex) { Status = "Saving the rating failed (a backup was kept): " + ex.Message; return; }
+        t.Rating = rating;              // keep the engine's track in sync for display + the toggle-clear compare
+        row.RatingValue = stars;        // live-update just this row
+        Status = stars > 0 ? $"Rated “{t.DisplayTitle}” {stars}★." : $"Cleared the rating for “{t.DisplayTitle}”.";
+    }
+
     private void ReloadLibrary()
     {
         if (_device is null) return;
@@ -294,24 +350,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _artGen;
     private async void LoadArtwork(IReadOnlyList<TrackRow> rows)
     {
+        // async void: a post-await throw would reach the dispatcher and crash the process — so a failed decode of
+        // one cover must never take the app down. Swallow per-row art errors (the row just keeps its placeholder).
         int gen = ++_artGen;
         HeaderArt = null;
         bool headerSet = false;
         foreach (var r in rows)
         {
             if (gen != _artGen) return;                  // a newer view replaced this one
-            var t = r.Source;
-            if (t is null) continue;
-            string? path = t.LocalPath ?? (_device is not null ? t.ResolveFilePath(_device.MountRoot) : null);
-            if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
-            string key = string.IsNullOrEmpty(t.Album) ? path : (Norm(t.Artist) + "|" + Norm(t.Album));
-            var bmp = await ArtLoader.LoadAsync(path, key);
-            if (gen != _artGen) return;
-            if (bmp is not null)
+            try
             {
-                r.Art = bmp;
-                if (!headerSet) { HeaderArt = bmp; headerSet = true; }   // header tile shows the first cover found
+                var t = r.Source;
+                if (t is null) continue;
+                string? path = t.LocalPath ?? (_device is not null ? t.ResolveFilePath(_device.MountRoot) : null);
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                string key = string.IsNullOrEmpty(t.Album) ? path : (Norm(t.Artist) + "|" + Norm(t.Album));
+                var bmp = await ArtLoader.LoadAsync(path, key);
+                if (gen != _artGen) return;
+                if (bmp is not null)
+                {
+                    r.Art = bmp;
+                    if (!headerSet) { HeaderArt = bmp; headerSet = true; }   // header tile shows the first cover found
+                }
             }
+            catch { /* skip this row's art */ }
         }
     }
 
@@ -359,6 +421,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async void ScanLocal()
     {
+        // async void: guard the whole body so a post-await throw can't reach the dispatcher and crash the app.
+        try
+        {
         int gen = ++_localGen;
         var folders = _localFolders.ToList();
         if (folders.Count == 0) { _localTracks.Clear(); ShowLocalMusic(); return; }
@@ -403,6 +468,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _localTracks.Clear();
         _localTracks.AddRange(found);
         ShowLocalMusic();
+        }
+        catch (Exception ex) { Status = "Couldn't load your music: " + ex.Message; }
     }
 
     private static string FormatTotal(long ms)

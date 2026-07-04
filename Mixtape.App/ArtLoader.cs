@@ -11,6 +11,8 @@ namespace Mixtape.App;
 internal static class ArtLoader
 {
     private static readonly Dictionary<string, Bitmap?> _cache = new();
+    private static readonly Queue<string> _order = new();   // FIFO insertion order for the cap
+    private const int Cap = 384;                             // bound the cache (mirrors the WinForms ArtworkService/Theme caches)
     private static readonly SemaphoreSlim _gate = new(3);   // limit concurrent decodes
 
     public static async Task<Bitmap?> LoadAsync(string path, string key)
@@ -31,7 +33,19 @@ internal static class ArtLoader
                 }
                 catch { return null; }
             });
-            lock (_cache) _cache[key] = bmp;
+            lock (_cache)
+            {
+                if (!_cache.ContainsKey(key)) _order.Enqueue(key);
+                _cache[key] = bmp;
+                // Evict oldest beyond the cap. Do NOT Dispose the evicted bitmap — a visible TrackRow.Art may still
+                // reference it (disposing would render a disposed image); dropping the dict ref lets GC reclaim it
+                // once no row holds it. Same evict-without-dispose caution as the WinForms caches.
+                while (_order.Count > Cap)
+                {
+                    var old = _order.Dequeue();
+                    if (!ReferenceEquals(old, key)) _cache.Remove(old);
+                }
+            }
             return bmp;
         }
         finally { _gate.Release(); }

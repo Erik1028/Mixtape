@@ -148,5 +148,16 @@ public partial class MainWindow : Window
         if ((sender as Control)?.DataContext is TrackRow r) _vm.PlayRow(r);
         e.Handled = true;
     }
+
+    // Click a star in the RATING column → set (or toggle-clear) that track's rating on the iPod.
+    // The button's DataContext is its row's TrackRow; its Tag ("1".."5") is the star level.
+    private void OnStarClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.DataContext is TrackRow row)
+        {
+            int star = b.Tag is string s && int.TryParse(s, out var p) ? p : 0;
+            _vm.RateTrack(row, star);
+        }
+    }
 }
 
