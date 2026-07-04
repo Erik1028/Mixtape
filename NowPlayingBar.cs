@@ -822,7 +822,7 @@ internal sealed class NowPlayingBar : Panel
         using (var sh = new SolidBrush(Color.FromArgb(50, 0, 0, 0))) g.FillPath(sh, shp);
         using (var cp = Theme.RoundedRect(crF, cvr))
         {
-            var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
+            using var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             if (idle)
                 // a quiet recessed tile (just above the bar's own shade), not a bright grey box
@@ -960,7 +960,7 @@ internal sealed class NowPlayingBar : Panel
         _eqScrim ??= new System.Drawing.Drawing2D.LinearGradientBrush(
             new RectangleF(cover.Left, cover.Bottom - 24, cover.Width, 24), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f);
         _eqClip ??= Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac);
-        var save = g.Clip;
+        using var save = g.Clip;
         g.SetClip(_eqClip, CombineMode.Intersect);
         g.FillRectangle(_eqScrim, cover.Left, cover.Bottom - 24, cover.Width, 24);
         g.Clip = save;

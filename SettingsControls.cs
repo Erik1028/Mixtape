@@ -461,7 +461,7 @@ internal sealed class SegmentedControl : Control
         using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.18))) g.FillPath(bg, op);
 
         // Clip fills to the track so segment corners can't spill outside the container's rounded corners.
-        var savedClip = g.Clip;
+        using var savedClip = g.Clip;
         g.SetClip(op, CombineMode.Intersect);
         int w = SegW;
 

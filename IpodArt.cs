@@ -71,7 +71,7 @@ internal static class IpodArt
             using (var bb = new LinearGradientBrush(body, Theme.Blend(bodyColor, Color.White, 0.18), Theme.Blend(bodyColor, Color.Black, 0.16), 90f))
                 g.FillPath(bb, bp);
             // a soft glossy sheen across the top third (plastic/anodised highlight)
-            var saved = g.Clip; g.SetClip(bp);
+            using var saved = g.Clip; g.SetClip(bp);
             using (var sheen = new LinearGradientBrush(new RectangleF(body.X, body.Y, body.Width, body.Height * 0.38f), Color.FromArgb(46, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
                 g.FillRectangle(sheen, body.X, body.Y, body.Width, body.Height * 0.38f);
             g.Clip = saved;
@@ -96,7 +96,7 @@ internal static class IpodArt
         using var scp = Theme.RoundedRect(screen, radius);
         // dark reflective glass (not a coloured glow — reads as a real iPod screen at any size)
         using (var scb = new LinearGradientBrush(screen, Color.FromArgb(22, 26, 32), Color.FromArgb(8, 10, 14), 90f)) g.FillPath(scb, scp);
-        var saved = g.Clip;
+        using var saved = g.Clip;
         g.SetClip(scp);
         // a soft diagonal glass reflection across the top
         using (var refl = new LinearGradientBrush(new RectangleF(screen.X, screen.Y - 1, screen.Width, screen.Height * 0.6f + 1), Color.FromArgb(34, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 60f))

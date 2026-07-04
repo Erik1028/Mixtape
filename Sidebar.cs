@@ -203,7 +203,7 @@ internal sealed class Sidebar : Panel
             {
                 var frame = new RectangleF(x + s * 0.20f, y + s * 0.24f, s * 0.60f, s * 0.52f);
                 using var fp = Theme.RoundedRect(frame, s * 0.11f);
-                var savedClip = g.Clip;
+                using var savedClip = g.Clip;
                 g.DrawPath(pen, fp);
                 g.SetClip(fp);
                 g.FillEllipse(br, x + s * 0.28f, y + s * 0.31f, s * 0.13f, s * 0.13f);
@@ -436,7 +436,7 @@ internal sealed class Sidebar : Panel
                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     using (var ip = Theme.RoundedRect(tile, Theme.RadTileSmall))
                     {
-                        var saved = g.Clip;
+                        using var saved = g.Clip;
                         g.SetClip(ip, CombineMode.Intersect);
                         g.DrawImage(row.Icon, tile);
                         g.Clip = saved;

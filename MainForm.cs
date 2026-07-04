@@ -619,7 +619,7 @@ internal sealed class MainForm : Form, IMessageFilter
                     float rad = sz * Theme.TileFrac;
                     using (var clip = Theme.RoundedRect(dest, rad))
                     {
-                        var saved = g0.Clip; g0.SetClip(clip, CombineMode.Intersect);
+                        using var saved = g0.Clip; g0.SetClip(clip, CombineMode.Intersect);
                         g0.DrawImage(cover, dest);
                         g0.Clip = saved;
                         using var edge = new Pen(Color.FromArgb(60, 0, 0, 0));   // subtle edge so light covers don't bleed into the row

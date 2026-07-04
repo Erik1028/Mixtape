@@ -129,7 +129,7 @@ internal sealed class UpNextPanel : Control
 
         // upcoming list (clipped)
         var clip = new Rectangle(0, ListTop, Width, ListViewH);
-        var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
+        using var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
         if (_items.Count == 0)
         {
             string msg = Loc.T("Nothing queued.\nRight-click songs → “Add to queue”.");
@@ -183,7 +183,7 @@ internal sealed class UpNextPanel : Control
     private static void DrawArt(Graphics g, Bitmap? art, Rectangle r)
     {
         using var clip = Theme.RoundedRect(new RectangleF(r.X, r.Y, r.Width, r.Height), Math.Max(3, r.Width * Theme.TileFrac));
-        var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
+        using var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
         if (art is not null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(art, r); }
         else using (var ph = new LinearGradientBrush(r, Theme.Blend(Theme.PanelBg, Color.White, 0.07), Theme.Blend(Theme.PanelBg, Color.Black, 0.18), 60f)) g.FillRectangle(ph, r);
         g.Clip = saved;

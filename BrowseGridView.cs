@@ -200,7 +200,7 @@ internal sealed class BrowseGridView : Panel
         bool hover = ReferenceEquals(c, _hover);
         using (var path = Theme.RoundedRect(cover, cr))
         {
-            var clip = g.Clip; g.SetClip(path, CombineMode.Intersect);
+            using var clip = g.Clip; g.SetClip(path, CombineMode.Intersect);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             // Both the cover (ArtworkService cache) and the MakeArt fallback (Theme.ArtCache) are
             // cache-owned — NEVER dispose them (a `using` here freed the cached gradient, so the next

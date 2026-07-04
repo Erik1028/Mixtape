@@ -308,7 +308,7 @@ internal sealed class PhotoGridView : Panel
                 double s = Math.Max((double)rect.Width / t.Thumb.Width, (double)rect.Height / t.Thumb.Height);
                 int w = Math.Max(1, (int)Math.Ceiling(t.Thumb.Width * s)), h = Math.Max(1, (int)Math.Ceiling(t.Thumb.Height * s));
                 var dest = new Rectangle(rect.X + (rect.Width - w) / 2, rect.Y + (rect.Height - h) / 2, w, h);
-                var clip = g.Clip;
+                using var clip = g.Clip;
                 g.SetClip(path, CombineMode.Intersect);
                 if (t.Fade < 1f) Theme.DrawImageAlpha(g, t.Thumb, new RectangleF(dest.X, dest.Y, dest.Width, dest.Height), t.Fade);
                 else g.DrawImage(t.Thumb, dest);

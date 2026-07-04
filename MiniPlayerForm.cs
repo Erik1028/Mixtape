@@ -528,7 +528,7 @@ internal sealed class MiniPlayerForm : Form
                 g.FillPath(sh, sp);
 
         using var clip = Theme.RoundedRect(new RectangleF(r.X, r.Y, r.Width, r.Height), rad);
-        var saved = g.Clip;
+        using var saved = g.Clip;
         g.SetClip(clip, CombineMode.Intersect);
         if (_cover is not null)
         {

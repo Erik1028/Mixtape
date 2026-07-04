@@ -223,7 +223,7 @@ internal static class Theme
         using var b = new SolidBrush(c);
         float sun = s * 0.11f;
         g.FillEllipse(b, fr.X + s * 0.28f - sun, fr.Y + s * 0.30f - sun, sun * 2, sun * 2);   // sun, top-left
-        var savedClip = g.Clip;
+        using var savedClip = g.Clip;
         using (var clip = RoundedRect(fr, s * 0.16f)) g.SetClip(clip);
         g.FillPolygon(b, new[] { new PointF(fr.X + s * 0.10f, fr.Bottom - s * 0.13f), new PointF(fr.X + s * 0.44f, fr.Y + s * 0.52f), new PointF(fr.Right - s * 0.10f, fr.Bottom - s * 0.13f) });   // mountain, clipped to the frame
         g.Clip = savedClip;
@@ -383,7 +383,7 @@ internal static class Theme
             SurroundColors = new[] { Color.FromArgb(0, color) },
             CenterPoint = new PointF(cx + d / 2, cy + d / 2),
         };
-        var saved = g.Clip; g.SetClip(clip);
+        using var saved = g.Clip; g.SetClip(clip);
         g.FillPath(pgb, path);
         g.Clip = saved;
     }
@@ -682,7 +682,7 @@ internal sealed class ThemedButton : Button
                    Theme.Blend(fill, Color.White, 0.13), Theme.Blend(fill, Color.Black, 0.06), 90f))
             g.FillPath(b, path);
         {
-            var saveClip = g.Clip; g.SetClip(path);
+            using var saveClip = g.Clip; g.SetClip(path);
             float sheenH = r.Height * 0.52f;
             using (var sheen = new LinearGradientBrush(new RectangleF(r.X, r.Y - 1, r.Width, sheenH + 1),
                        Color.FromArgb(disabled ? 0 : (Primary ? 48 : 30), 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))

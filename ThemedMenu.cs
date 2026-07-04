@@ -218,7 +218,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
         if (MenuGlass.FrostOf(ts) is { } frost)
         {
             // Liquid glass: blit the baked backdrop (blur+refract+tint) clipped to the rounded silhouette.
-            var clip = g.Clip;
+            using var clip = g.Clip;
             g.SetClip(path, CombineMode.Intersect);
             g.DrawImageUnscaled(frost, 0, 0);
             g.Clip = clip;

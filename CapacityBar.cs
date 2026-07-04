@@ -59,7 +59,7 @@ internal sealed class CapacityBar : Control
         {
             using (var tb = new SolidBrush(Theme.Blend(Theme.Bg, Color.White, 0.07))) g.FillPath(tb, track); // visible recessed groove
             // Clip to the rounded track so segments inherit the rounded ends.
-            var saved = g.Clip;
+            using var saved = g.Clip;
             g.SetClip(track, CombineMode.Intersect);
             float xExact = 0;
             foreach (var s in _segs)

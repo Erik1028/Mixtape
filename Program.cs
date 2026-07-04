@@ -1752,7 +1752,7 @@ internal static class Program
                     var rect = new Rectangle(px, cm, pw, ph);
                     using (var clip = Theme.RoundedRect(rect, 9f))
                     {
-                        var saved = g.Clip; g.SetClip(clip);
+                        using var saved = g.Clip; g.SetClip(clip);
                         var im = g.InterpolationMode; g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
                         g.DrawImage(frost, rect);
                         g.InterpolationMode = im;
