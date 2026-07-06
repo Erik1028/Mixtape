@@ -142,7 +142,9 @@ internal static class SmartPlaylist
         return def.Limit > 0 ? $"{head} · top {def.Limit} by {SortLabel(def.LimitSort)}" : head;
     }
 
-    private static double? DaysAgo(DateTime? d) => d.HasValue ? Math.Max(0, (DateTime.Now - d.Value).TotalDays) : (double?)null;
+    // The DB stores DateAdded/LastPlayed in UTC, so compare against UtcNow — using local Now skewed the
+    // "in the last N days" rules by the timezone offset (a track could match/miss near the boundary).
+    private static double? DaysAgo(DateTime? d) => d.HasValue ? Math.Max(0, (DateTime.UtcNow - d.Value).TotalDays) : (double?)null;
 
     private static bool TryNum(string? s, out double v) =>
         double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) || double.TryParse(s, out v);

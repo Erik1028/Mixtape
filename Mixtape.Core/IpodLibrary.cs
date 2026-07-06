@@ -70,7 +70,9 @@ internal sealed class IpodLibrary
         nt.MediaType = mediaType;
         var (location, _) = MusicCopier.Copy(Device, fileToCopy);
         nt.Location = location;
-        nt.UniqueId = Raw.MaxUniqueId() + 1;
+        uint maxId = Raw.MaxUniqueId();
+        if (maxId == uint.MaxValue) throw new InvalidOperationException("This iPod's track-id space is exhausted; can't add more tracks.");
+        nt.UniqueId = maxId + 1;   // guard the +1: wrapping to 0 would collide with an unset id
         nt.Dbid = RandomDbid();
         // Stage cover art (colour-screen devices only); link the track's mhit to its ArtworkDB image.
         if (Artwork is { SupportsArtwork: true } sink && !MediaType.IsVideo(mediaType) && sink.Stage(nt.Dbid, fileToCopy) is { } art)
@@ -137,7 +139,7 @@ internal sealed class IpodLibrary
         try
         {
             ChecksumWriter.Apply(bytes, Device.Profile.Scheme, Device.Profile.FirewireGuid); // sign for hash58 devices; no-op for NONE
-            SafeDbWriter.Write(Device, bytes, Raw.TrackCount);
+            SafeDbWriter.Write(Device, bytes, Raw.TrackCount, View.Warnings.Count, View.Playlists.Count(p => p.IsMaster));   // verify against the pre-write baselines
         }
         catch
         {
@@ -147,7 +149,15 @@ internal sealed class IpodLibrary
         // The iTunesDB is now safely on disk. Write the ArtworkDB after it (best-effort: a failure here
         // leaves tracks flagged for art with no thumbnails — the iPod simply shows none, never corruption).
         try { Artwork?.Commit(); } catch { }
-        if (fold is { } done) { try { File.Delete(done.path); } catch { } } // folded + written → clear so plays aren't re-added
+        if (fold is { } done)
+        {
+            // The fold is now persisted, so the "Play Counts" file MUST NOT be folded again — that would add the
+            // same plays a SECOND time (and keep compounding every save). Delete it; if the delete fails (a locked
+            // or read-only FAT handle — common on removable media), neutralize it by truncating to empty so a later
+            // FoldIntoRaw reads nothing. Two independent best-effort attempts close the realistic failure modes.
+            try { File.Delete(done.path); }
+            catch { try { File.WriteAllBytes(done.path, Array.Empty<byte>()); } catch { } }
+        }
         byte[] fresh = File.ReadAllBytes(Device.ITunesDbPath);
         View = ITunesDbReader.Read(fresh);
         Raw = RawDb.Parse(fresh);

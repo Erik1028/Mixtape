@@ -74,14 +74,31 @@ internal static class PlayCounts
             foreach (var e in entries) if (e.PlayCount > 0 || e.Rating > 0) { anyData = true; break; }
             if (!anyData) return null;
 
+            // SAFETY PRE-SCAN (the small-header fix). A play count is written at header offset 0x50, so it needs a
+            // HEADER length (field @0x04) of at least 0x54; a rating at 0x1F needs >= 0x20. Old small-header mhit
+            // (early Mini/Nano — the very devices this tool targets) are too short: RebuildTrack silently SKIPS the
+            // field but still returns a rebuilt array, so EditTrack reports success. If we folded + deleted the
+            // "Play Counts" file anyway, those plays would be ERASED. The guard must use the HEADER length (like
+            // RawDb's write guard), NOT the whole-chunk byte length (which is always long enough). So: if ANY delta
+            // can't actually be persisted, fold NOTHING and keep the file — the on-device counts stay and remain
+            // visible via Apply() on every load (not lost), instead of being half-written and then deleted.
+            for (int i = 0; i < rawTracks.Count; i++)
+            {
+                var e = entries[i];
+                if (e.PlayCount == 0 && e.Rating == 0) continue;
+                byte[] mhit = rawTracks[i];
+                int hdr = mhit.Length >= 0x08 ? (int)BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x04)) : 0;
+                int need = e.PlayCount > 0 ? 0x54 : 0x20;           // 0x50 slot for the count; 0x1F for the rating
+                if (hdr < need || hdr > mhit.Length) return null;   // a delta we can't safely persist → don't fold/delete anything
+            }
+
             byte[] preFold = lib.Raw.Serialize();   // snapshot BEFORE mutating, for safe rollback on a failed write
             bool folded = false;
             for (int i = 0; i < rawTracks.Count; i++)
             {
-                byte[] mhit = rawTracks[i];
-                if (mhit.Length <= 0x53) continue;                  // need play count @0x50..0x53
                 var e = entries[i];
                 if (e.PlayCount == 0 && e.Rating == 0) continue;
+                byte[] mhit = rawTracks[i];                          // pre-scan guaranteed a header long enough for every delta here
                 uint uid = BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x10));
                 var edit = new TrackEdit();
                 if (e.PlayCount > 0) edit.PlayCount = BinaryPrimitives.ReadUInt32LittleEndian(mhit.AsSpan(0x50)) + e.PlayCount; // add on-device plays
