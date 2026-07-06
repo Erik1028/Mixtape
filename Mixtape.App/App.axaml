@@ -6,6 +6,28 @@
   <Application.Styles>
     <FluentTheme />
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
+
+    <!-- Generic action buttons (Refresh / Open folder / Add folder / Add music / Done / empty-state CTAs) get the
+         app's hand-crafted "chip" look instead of default Fluent. Scoped with :not(...) so the classed buttons
+         (.play/.ghost/.winbtn/.star) keep their own explicit styling untouched. -->
+    <!-- literal greys (not StaticResource): resources aren't in scope yet when Application.Styles is built.
+         These are fixed brand greys (SubtleBrush #A8ACB0 / TextBrush #F2F2F3), never accent-retinted. -->
+    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star)">
+      <Setter Property="Background" Value="#1CFFFFFF"/>
+      <Setter Property="Foreground" Value="#A8ACB0"/>
+      <Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="Padding" Value="12,6"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#26FFFFFF"/>
+      <Setter Property="Foreground" Value="#F2F2F3"/>
+    </Style>
+    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#14FFFFFF"/>
+    </Style>
   </Application.Styles>
 
   <Application.Resources>

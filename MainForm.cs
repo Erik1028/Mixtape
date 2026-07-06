@@ -2632,6 +2632,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var nus = new ToolStripMenuItem(Loc.T("New Smart Playlist…"));
         nus.Click += (_, _) => CreateSmartPlaylist();
         m.Items.Add(nus);
+        m.Items.Add(SmartPresetMenu());
         m.Show(screen);
     }
 
@@ -2707,11 +2708,19 @@ internal sealed class MainForm : Form, IMessageFilter
             SectionLabel(Loc.T("STORAGE"));
             var hero = new DeviceHero { Width = cardW };
             // No iPod picture here — the page header already shows one; the hero centres its capacity donut instead.
-            hero.Set(null, total, free,
-                new DeviceHero.Seg(Loc.T("Music"), music, Theme.Accent),
-                new DeviceHero.Seg(Loc.T("Video"), video, Color.FromArgb(255, 149, 56)),
-                new DeviceHero.Seg(Loc.T("Photos"), photo, Color.FromArgb(54, 200, 110)),
-                new DeviceHero.Seg(Loc.T("Free"), free + other, Theme.Blend(Theme.Bg, Color.White, 0.07))); // "other" folded into free
+            var segs = new List<DeviceHero.Seg>
+            {
+                new(Loc.T("Music"), music, Theme.Accent),
+                new(Loc.T("Video"), video, Color.FromArgb(255, 149, 56)),
+                new(Loc.T("Photos"), photo, Color.FromArgb(54, 200, 110)),
+            };
+            // "Other/System": space used by neither media nor free — system files, or non-media content when a plain
+            // folder is opened on a large drive. Shown only when non-zero (a media-only iPod never gets an "Other 0 B"
+            // row), and it keeps the legend's "Free" equal to the REAL free — the same number the donut centre shows —
+            // instead of folding "other" into Free and contradicting the centre (43 GB centre vs "251 GB free" legend).
+            if (other > 0) segs.Add(new DeviceHero.Seg(Loc.T("Other"), other, Theme.Blend(Theme.Bg, Color.White, 0.14)));
+            segs.Add(new DeviceHero.Seg(Loc.T("Free"), free, Theme.Blend(Theme.Bg, Color.White, 0.07)));
+            hero.Set(null, total, free, segs.ToArray());
             Add(hero);
         }
 
@@ -4459,6 +4468,7 @@ internal sealed class MainForm : Form, IMessageFilter
             var sdel = new ToolStripMenuItem(Loc.T("Delete playlist (keep songs)")); sdel.Click += (_, _) => DeletePlaylist(sp); sm.Items.Add(sdel);
             sm.Items.Add(new ToolStripSeparator());
             var snew = new ToolStripMenuItem(Loc.T("New Smart Playlist…")); snew.Click += (_, _) => CreateSmartPlaylist(); sm.Items.Add(snew);
+            sm.Items.Add(SmartPresetMenu());
             sm.Show(screen);
             return;
         }
@@ -4491,6 +4501,7 @@ internal sealed class MainForm : Form, IMessageFilter
         var nus = new ToolStripMenuItem(Loc.T("New Smart Playlist…"));
         nus.Click += (_, _) => CreateSmartPlaylist();
         m.Items.Add(nus);
+        m.Items.Add(SmartPresetMenu());
         m.Show(screen);
     }
 
@@ -4667,8 +4678,17 @@ internal sealed class MainForm : Form, IMessageFilter
         var audio = AudioTracks();
         using var dlg = new SmartPlaylistDialog(audio, null);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        RunSmartPlaylist(dlg.Result);
+    }
+
+    /// <summary>Create a smart playlist from a ready-made or dialog-built definition, through the verified write path
+    /// (the same one --smarttest covers): create → evaluate → set members → save → remember the rules. Used by the
+    /// custom-rules dialog AND the one-click presets.</summary>
+    private void RunSmartPlaylist(SmartPlaylistDef def)
+    {
+        if (_lib is null || _db is null) return;
         if (!ConfirmWriteOnce()) return;
-        var def = dlg.Result;
+        var audio = AudioTracks();
         int n = 0;
         try
         {
@@ -4684,6 +4704,21 @@ internal sealed class MainForm : Form, IMessageFilter
         _settings.Save();
         ReloadAfterEdit();
         SetStatus(Loc.T("Created smart playlist “{0}” ({1} song(s)).", def.Name, n));
+    }
+
+    /// <summary>A "New Smart Playlist ▸" submenu of ready-made presets — each builds a <see cref="SmartPlaylistDef"/>
+    /// in code and runs the exact same create path as the custom dialog (no engine change, no new write format).</summary>
+    private ToolStripMenuItem SmartPresetMenu()
+    {
+        var parent = new ToolStripMenuItem(Loc.T("New Smart Playlist ▸"));
+        void Preset(string name, SmartPlaylistDef def) { def.Name = name; var it = new ToolStripMenuItem(name); it.Click += (_, _) => RunSmartPlaylist(def); parent.DropDownItems.Add(it); }
+        SmartRule R(string field, string op, string val) => new() { Field = field, Op = op, Value = val };
+        Preset(Loc.T("Recently Added"),  new SmartPlaylistDef { MatchAll = true, LimitSort = "Added",          Rules = { R("DateAdded", "within", "14") } });
+        Preset(Loc.T("Recently Played"), new SmartPlaylistDef { MatchAll = true, LimitSort = "RecentlyPlayed", Rules = { R("LastPlayed", "within", "14") } });
+        Preset(Loc.T("Top Rated"),       new SmartPlaylistDef { MatchAll = true, LimitSort = "HighestRated",   Rules = { R("Rating", "atleast", "4") } });
+        Preset(Loc.T("Most Played"),     new SmartPlaylistDef { MatchAll = true, LimitSort = "MostPlayed", Limit = 25, Rules = { R("PlayCount", "atleast", "1") } });
+        Preset(Loc.T("Never Played"),    new SmartPlaylistDef { MatchAll = true, LimitSort = "Added",          Rules = { R("PlayCount", "is", "0") } });
+        return parent;
     }
 
     private void EditSmartPlaylist(Playlist pl)

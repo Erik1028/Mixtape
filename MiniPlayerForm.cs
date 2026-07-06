@@ -404,6 +404,19 @@ internal sealed class MiniPlayerForm : Form
     }
 
     // ---- paint ----
+    // The background gradient depends only on the cover tint + window size, and the grain is fully invariant — so
+    // cache both instead of rebuilding them every frame (OnPaint runs ~30fps while a track plays / the bloom pulses).
+    private LinearGradientBrush? _bgBrush; private TextureBrush? _grainBrush; private (Color tint, Size size) _bgKey;
+    private void EnsureBrushes(int w, int h)
+    {
+        var key = (_tint, new Size(w, h));
+        if (_bgBrush is not null && _bgKey == key) return;
+        _bgBrush?.Dispose();
+        _bgBrush = new LinearGradientBrush(new Rectangle(0, 0, w, h), Theme.Blend(_tint, Color.Black, 0.58), Theme.Blend(_tint, Color.Black, 0.88), 90f);
+        _grainBrush ??= new TextureBrush(Noise()) { WrapMode = WrapMode.Tile };   // tiled + tint/size-independent → build once
+        _bgKey = key;
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
@@ -414,10 +427,10 @@ internal sealed class MiniPlayerForm : Form
 
         // adaptive background: a dark wash of the cover's dominant colour, with a soft bloom behind the art that
         // breathes with the music (see UpdatePulse). Idle / art-less falls back to the accent tint.
-        using (var bg = new LinearGradientBrush(new Rectangle(0, 0, w, h), Theme.Blend(_tint, Color.Black, 0.58), Theme.Blend(_tint, Color.Black, 0.88), 90f))
-            g.FillRectangle(bg, 0, 0, w, h);
+        EnsureBrushes(w, h);
+        g.FillRectangle(_bgBrush!, 0, 0, w, h);
         DrawBloom(g, l.Cover);
-        using (var grain = new TextureBrush(Noise()) { WrapMode = WrapMode.Tile }) g.FillRectangle(grain, 0, 0, w, h);
+        g.FillRectangle(_grainBrush!, 0, 0, w, h);
 
         // ---- title bar ----
         if (_iconBmp is not null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(_iconBmp, l.IconR); }
@@ -606,21 +619,24 @@ internal sealed class MiniPlayerForm : Form
         return _noise;
     }
 
+    // Glyph fonts + format are invariant across frames (only ~4 pixel sizes ever used) — cache them instead of
+    // allocating a Font + StringFormat per glyph (~9-11 glyphs × ~30fps = hundreds of GDI handles/sec otherwise).
+    private readonly Dictionary<float, Font> _glyphFonts = new();
+    private readonly StringFormat _glyphFmt = new() { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
     private void Glyph(Graphics g, Rectangle r, string glyph, Color c, float sizePx)
     {
         if (IconFont is null) return;
-        using var f = new Font(IconFont, sizePx, FontStyle.Regular, GraphicsUnit.Pixel);
-        using var b = new SolidBrush(c);
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        if (!_glyphFonts.TryGetValue(sizePx, out var f)) _glyphFonts[sizePx] = f = new Font(IconFont, sizePx, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(c);   // per-colour, but cheap relative to a Font handle
         var hint = g.TextRenderingHint;
         g.TextRenderingHint = TextRenderingHint.AntiAlias;
-        g.DrawString(glyph, f, b, new RectangleF(r.X, r.Y, r.Width, r.Height), sf);
+        g.DrawString(glyph, f, b, new RectangleF(r.X, r.Y, r.Width, r.Height), _glyphFmt);
         g.TextRenderingHint = hint;
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _anim?.Cancel(); _cover?.Dispose(); _coverScaled?.Dispose(); _backdrop?.Dispose(); _iconBmp?.Dispose(); _fName.Dispose(); _fTitleN.Dispose(); _fTitleC.Dispose(); _fArtistN.Dispose(); _fArtistC.Dispose(); _fTime.Dispose(); }
+        if (disposing) { _anim?.Cancel(); _cover?.Dispose(); _coverScaled?.Dispose(); _backdrop?.Dispose(); _iconBmp?.Dispose(); _fName.Dispose(); _fTitleN.Dispose(); _fTitleC.Dispose(); _fArtistN.Dispose(); _fArtistC.Dispose(); _fTime.Dispose(); _bgBrush?.Dispose(); _grainBrush?.Dispose(); _glyphFmt.Dispose(); foreach (var gf in _glyphFonts.Values) gf.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -15,6 +15,10 @@ internal static class ArtLoader
     private const int Cap = 384;                             // bound the cache (mirrors the WinForms ArtworkService/Theme caches)
     private static readonly SemaphoreSlim _gate = new(3);   // limit concurrent decodes
 
+    /// <summary>Cheap cache probe (no filesystem, no decode) so callers can skip a File.Exists + decode when the
+    /// cover is already known. Returns true if the key is cached (bmp may be null = "known to have no art").</summary>
+    public static bool TryGet(string key, out Bitmap? bmp) { lock (_cache) return _cache.TryGetValue(key, out bmp); }
+
     public static async Task<Bitmap?> LoadAsync(string path, string key)
     {
         lock (_cache) { if (_cache.TryGetValue(key, out var hit)) return hit; }

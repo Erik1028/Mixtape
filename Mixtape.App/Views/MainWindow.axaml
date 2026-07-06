@@ -257,20 +257,35 @@
           <!-- now playing -->
           <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasNowPlaying}" Height="64"
                   Background="{StaticResource PanelBrush}" CornerRadius="10" Margin="10,0,10,8">
-            <Grid Margin="14,0" ColumnDefinitions="220,Auto,*,Auto,Auto">
-              <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <Grid Margin="14,0" ColumnDefinitions="Auto,208,Auto,*,Auto,Auto">
+              <!-- now-playing cover thumbnail (placeholder shows through until the art decodes) -->
+              <Border Grid.Column="0" Width="44" Height="44" CornerRadius="8" ClipToBounds="True" VerticalAlignment="Center" Margin="0,0,12,0">
+                <Panel>
+                  <Border>
+                    <Border.Background>
+                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                        <GradientStop Offset="0" Color="#2E3A4A"/>
+                        <GradientStop Offset="1" Color="#1B2530"/>
+                      </LinearGradientBrush>
+                    </Border.Background>
+                    <TextBlock Text="♪" FontSize="18" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                  </Border>
+                  <Image Source="{Binding NowArt}" Stretch="UniformToFill"/>
+                </Panel>
+              </Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                 <TextBlock Text="{Binding NowSub}" Foreground="{StaticResource SubtleBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
               </StackPanel>
-              <Button Grid.Column="1" Classes="play" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
+              <Button Grid.Column="2" Classes="play" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
                       Margin="14,0" VerticalAlignment="Center"/>
-              <Grid Grid.Column="2" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
+              <Grid Grid.Column="3" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
                 <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" TextAlignment="Right"/>
                 <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PositionFraction, Mode=TwoWay}" Margin="8,0"/>
                 <TextBlock Grid.Column="2" Text="{Binding DurText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
               </Grid>
-              <ToggleButton Grid.Column="3" Content="EQ" IsChecked="{Binding EqOn, Mode=TwoWay}" Margin="14,0,10,0" VerticalAlignment="Center"/>
-              <Slider Grid.Column="4" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="92" VerticalAlignment="Center"/>
+              <ToggleButton Grid.Column="4" Content="EQ" IsChecked="{Binding EqOn, Mode=TwoWay}" Margin="14,0,10,0" VerticalAlignment="Center"/>
+              <Slider Grid.Column="5" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="92" VerticalAlignment="Center"/>
             </Grid>
           </Border>
 
@@ -356,6 +371,17 @@
               </LinearGradientBrush>
             </Border.Background>
           </Border>
+          <!-- in-content empty state: a glyph + headline + hint + optional CTA, centered over the (empty) grid -->
+          <StackPanel IsVisible="{Binding ShowEmptyState}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10" MaxWidth="380">
+            <Border Width="72" Height="72" CornerRadius="36" Background="#12FFFFFF" HorizontalAlignment="Center">
+              <TextBlock Text="{Binding EmptyGlyph}" FontSize="30" Foreground="{StaticResource SubtleBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <TextBlock Text="{Binding EmptyHeadline}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" HorizontalAlignment="Center"/>
+            <TextBlock Text="{Binding EmptyHint}" FontSize="12.5" Foreground="{StaticResource SubtleBrush}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+            <Button Content="+ Add folder"  Click="OnAddFolder" IsVisible="{Binding EmptyAddFolderCta}"   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Content="+ Add music"   Click="OnAddMusic"  IsVisible="{Binding EmptyAddMusicCta}"    HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Content="Clear search"  Click="OnClearSearch" IsVisible="{Binding EmptyClearSearchCta}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+          </StackPanel>
           </Grid>
 
         </DockPanel>

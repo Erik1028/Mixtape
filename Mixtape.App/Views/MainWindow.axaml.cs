@@ -54,6 +54,8 @@ public partial class MainWindow : Window
 
     private void OnRefresh(object? sender, RoutedEventArgs e) => _vm.Refresh();
 
+    private void OnClearSearch(object? sender, RoutedEventArgs e) => _vm.SearchText = "";
+
     // ---- custom title bar (we draw our own caption + window buttons) ----
     private void OnTitleBarPressed(object? sender, PointerPressedEventArgs e)
     {

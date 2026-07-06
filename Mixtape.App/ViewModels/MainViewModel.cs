@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Avalonia.Media.Imaging;
@@ -6,6 +7,21 @@ using Avalonia.Threading;
 using iPodCommander;   // the cross-platform engine in Mixtape.Core
 
 namespace Mixtape.App.ViewModels;
+
+/// <summary>An ObservableCollection with a bulk <see cref="ResetTo"/>: replace all items and raise ONE
+/// Reset notification instead of a Clear + N Adds. Rebuilding the song list on every search keystroke /
+/// nav used to fire N CollectionChanged events, which the DataGrid processed one at a time.</summary>
+public sealed class RangeObservableCollection<T> : ObservableCollection<T>
+{
+    public void ResetTo(IEnumerable<T> items)
+    {
+        Items.Clear();
+        foreach (var it in items) Items.Add(it);
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+    }
+}
 
 public enum SidebarKind { Device, AllSongs, Videos, Playlist, LocalMusic }
 
@@ -88,7 +104,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _localGen;
 
     public ObservableCollection<SidebarItem> SidebarItems { get; } = new();
-    public ObservableCollection<TrackRow> Tracks { get; } = new();
+    public RangeObservableCollection<TrackRow> Tracks { get; } = new();
 
     public MainViewModel()
     {
@@ -183,6 +199,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void OnSelect(SidebarItem? s)
     {
         if (s is null) return;
+        _searchTimer?.Stop();   // a pending debounce must not re-render the search over the view we're navigating to
         if (_searchText.Length > 0) { _searchText = ""; OnPropertyChanged(nameof(SearchText)); } // clear search on navigation
         IsLocalView = s.Kind == SidebarKind.LocalMusic;
         IsIpodView = _lib is not null && s.Kind is SidebarKind.AllSongs or SidebarKind.Videos or SidebarKind.Playlist or SidebarKind.Device;
@@ -315,7 +332,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _localView;
 
     private string _searchText = "";
-    public string SearchText { get => _searchText; set { if (Set(ref _searchText, value)) RenderCurrent(); } }
+    private DispatcherTimer? _searchTimer;
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!Set(ref _searchText, value)) return;
+            // Debounce: a fast typist would otherwise rebuild the whole list + restart the artwork sweep on EVERY
+            // keystroke. Coalesce to one render ~150ms after typing pauses. (Nav-driven clears call RenderCurrent
+            // directly, so results still appear instantly when switching views.)
+            _searchTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+            _searchTimer.Stop();
+            _searchTimer.Tick -= OnSearchTick;
+            _searchTimer.Tick += OnSearchTick;
+            _searchTimer.Start();
+        }
+    }
+    private void OnSearchTick(object? sender, EventArgs e) { _searchTimer?.Stop(); RenderCurrent(); }
 
     private void ShowTracks(IEnumerable<Track> tracks, string kicker, string title, string noun, bool preserveOrder = false)
     {
@@ -330,8 +364,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IEnumerable<Track> src = _currentFull;
         if (q.Length > 0) src = src.Where(t => Match(t, q));
         var shown = src.ToList();
-        Tracks.Clear();
-        foreach (var t in shown) Tracks.Add(TrackRow.From(t));
+        Tracks.ResetTo(shown.Select(TrackRow.From));   // one Reset, not Clear + N Adds — the DataGrid rebuilds once
         long ms = shown.Sum(t => (long)t.LengthMs);
         HeaderKicker = _curKicker;
         HeaderTitle = _curTitle;
@@ -341,7 +374,45 @@ public sealed class MainViewModel : INotifyPropertyChanged
                : $"{shown.Count} songs · {_localFolders.Count} folder{(_localFolders.Count == 1 ? "" : "s")}")
             : HeaderSubtitle;
 
+        UpdateEmptyState(shown.Count, q);
         LoadArtwork(Tracks.ToList());
+    }
+
+    // ---- in-content empty state (overlaid on the song grid when the current view has no rows) ----
+    private bool _showEmpty;         public bool ShowEmptyState    { get => _showEmpty;       set => Set(ref _showEmpty, value); }
+    private string _emptyGlyph = ""; public string EmptyGlyph      { get => _emptyGlyph;      set => Set(ref _emptyGlyph, value); }
+    private string _emptyHead = "";  public string EmptyHeadline   { get => _emptyHead;       set => Set(ref _emptyHead, value); }
+    private string _emptyHint = "";  public string EmptyHint       { get => _emptyHint;       set => Set(ref _emptyHint, value); }
+    private bool _ctaFolder;         public bool EmptyAddFolderCta { get => _ctaFolder;       set => Set(ref _ctaFolder, value); }
+    private bool _ctaMusic;          public bool EmptyAddMusicCta  { get => _ctaMusic;        set => Set(ref _ctaMusic, value); }
+    private bool _ctaClear;          public bool EmptyClearSearchCta { get => _ctaClear;      set => Set(ref _ctaClear, value); }
+
+    private void UpdateEmptyState(int count, string query)
+    {
+        EmptyAddFolderCta = EmptyAddMusicCta = EmptyClearSearchCta = false;
+        if (count > 0) { ShowEmptyState = false; return; }
+        if (query.Length > 0)
+        {
+            EmptyGlyph = "⌕"; EmptyHeadline = "No matches"; EmptyHint = $"No songs match “{query}”."; EmptyClearSearchCta = true;
+        }
+        else if (_localView)
+        {
+            EmptyGlyph = "♪";
+            if (_localFolders.Count == 0) { EmptyHeadline = "No music yet"; EmptyHint = "Add a folder of music from your PC to browse it here."; }
+            else { EmptyHeadline = "No playable audio"; EmptyHint = "None of the files in your folders are a supported audio format."; }
+            EmptyAddFolderCta = true;
+        }
+        else if (_lib is null || _device is null)
+        {
+            EmptyGlyph = "▣"; EmptyHeadline = "No iPod connected";
+            EmptyHint = "Plug in an iPod to browse its songs — or open a PC folder under “On this PC”.";
+        }
+        else
+        {
+            EmptyGlyph = "♪"; EmptyHeadline = "This iPod has no songs yet";
+            EmptyHint = "Copy music from your PC to fill it up."; EmptyAddMusicCta = CanWrite;
+        }
+        ShowEmptyState = true;
     }
 
     private Bitmap? _headerArt;
@@ -363,8 +434,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var t = r.Source;
                 if (t is null) continue;
                 string? path = t.LocalPath ?? (_device is not null ? t.ResolveFilePath(_device.MountRoot) : null);
-                if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                if (string.IsNullOrEmpty(path)) continue;
                 string key = string.IsNullOrEmpty(t.Album) ? path : (Norm(t.Artist) + "|" + Norm(t.Album));
+                // Probe the cache BEFORE touching the filesystem: an all-cached re-render (the common search-refine
+                // case) then costs zero File.Exists syscalls. Only a genuine miss pays the stat + decode.
+                if (ArtLoader.TryGet(key, out var cached))
+                {
+                    if (cached is not null) { r.Art = cached; if (!headerSet) { HeaderArt = cached; headerSet = true; } }
+                    continue;
+                }
+                if (!File.Exists(path)) continue;
                 var bmp = await ArtLoader.LoadAsync(path, key);
                 if (gen != _artGen) return;
                 if (bmp is not null)
@@ -487,6 +566,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly float[] _eqGains = { 5, 4, 2, 0, -1, -1, 0, 2, 4, 5 }; // gentle "smile" preset
 
     private bool _hasNow;   public bool HasNowPlaying { get => _hasNow; set => Set(ref _hasNow, value); }
+    private Bitmap? _nowArt; public Bitmap? NowArt { get => _nowArt; set => Set(ref _nowArt, value); }   // now-playing bar cover thumbnail
     private string _nowTitle = ""; public string NowTitle { get => _nowTitle; set => Set(ref _nowTitle, value); }
     private string _nowSub = "";   public string NowSub { get => _nowSub; set => Set(ref _nowSub, value); }
     private string _playGlyph = "▶"; public string PlayPauseGlyph { get => _playGlyph; set => Set(ref _playGlyph, value); }
@@ -527,6 +607,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _audio.SetEq(_eqOn, _eqGains);
             NowTitle = t.DisplayTitle;
             NowSub = string.Join("  —  ", new[] { t.Artist, t.Album }.Where(s => !string.IsNullOrEmpty(s)));
+            NowArt = row?.Art;   // the row's already-decoded cover (placeholder shows through if not loaded yet)
             HasNowPlaying = true;
             PlayPauseGlyph = "⏸";
             _tick!.Start();
