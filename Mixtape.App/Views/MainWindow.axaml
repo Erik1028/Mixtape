@@ -1,17 +1,35 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:app="using:Mixtape.App"
+        xmlns:controls="using:Mixtape.App.Controls"
         x:Class="Mixtape.App.Views.MainWindow"
         Title="Mixtape" Width="1040" Height="660"
         MinWidth="820" MinHeight="520"
-        Background="#0E0E10"
+        Background="#0D0E10"
         Foreground="{StaticResource TextBrush}"
         FontFamily="Inter"
         SystemDecorations="BorderOnly">
 
   <Window.Resources>
     <app:StarGlyphConverter x:Key="StarGlyph"/>
-    <SolidColorBrush x:Key="StarEmptyBrush" Color="#3AFFFFFF"/>
+    <app:StarBrushConverter x:Key="StarBrush"/>
+
+    <!-- Transport glyph geometries (24x24 space), revectored from the Windows NowPlayingBar so the icons
+         render identically on Linux where Segoe MDL2 Assets doesn't exist. Fill-based unless noted "stroke". -->
+    <StreamGeometry x:Key="GlyphPlay">M9,7 L9,17 L17,12 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphPause">M8.4,6.5 L10.8,6.5 L10.8,17.5 L8.4,17.5 Z M13.2,6.5 L15.6,6.5 L15.6,17.5 L13.2,17.5 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphPrev">M13,7 L13,17 L8,12 Z M5.5,7 L7,7 L7,17 L5.5,17 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphNext">M11,7 L11,17 L16,12 Z M17,7 L18.5,7 L18.5,17 L17,17 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphShuffleLines">M2.5,7 L8,7 L16,17 L20,17 M2.5,17 L8,17 L16,7 L20,7</StreamGeometry>
+    <StreamGeometry x:Key="GlyphShuffleHeads">M19.5,14 L19.5,20 L23,17 Z M19.5,4 L19.5,10 L23,7 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphRepeatRing">M9,5.5 L15,5.5 A3.5,3.5 0 0 1 18.5,9 L18.5,15 A3.5,3.5 0 0 1 15,18.5 L9,18.5 A3.5,3.5 0 0 1 5.5,15 L5.5,9 A3.5,3.5 0 0 1 9,5.5 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphRepeatHead">M12.2,2.6 L12.2,8.4 L16.4,5.5 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphRepeatOne">M12,9 L12,15 M12,9 L10.6,10.1</StreamGeometry>
+    <StreamGeometry x:Key="GlyphSpeaker">M4,10 L8,10 L13,6 L13,18 L8,14 L4,14 Z</StreamGeometry>
+    <StreamGeometry x:Key="GlyphWaves">M15,9 A4,4 0 0 1 15,15 M17.4,6.8 A6.6,6.6 0 0 1 17.4,17.2</StreamGeometry>
+    <StreamGeometry x:Key="GlyphMuteX">M15.5,9.5 L20,14 M20,9.5 L15.5,14</StreamGeometry>
+    <StreamGeometry x:Key="GlyphEqBars">M7,6 L7,18 M12,6 L12,18 M17,6 L17,18</StreamGeometry>
+    <StreamGeometry x:Key="GlyphQueue">M6,8 L18,8 M6,12 L18,12 M6,16 L12,16</StreamGeometry>
   </Window.Resources>
 
   <Window.Styles>
@@ -59,20 +77,75 @@
       <Setter Property="Background" Value="#22FFFFFF"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
     </Style>
 
-    <!-- circular accent play button (now-playing bar) -->
+    <!-- circular accent play button (now-playing bar): a 42px accent disc; the ▶/⏸ vector glyphs cross-fade -->
     <Style Selector="Button.play">
       <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-      <Setter Property="Foreground" Value="#0C1012"/>
+      <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}"/>
       <Setter Property="CornerRadius" Value="21"/>
       <Setter Property="Width" Value="42"/>
       <Setter Property="Height" Value="42"/>
-      <Setter Property="FontSize" Value="15"/>
       <Setter Property="Padding" Value="0"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
     </Style>
     <Style Selector="Button.play:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#33D3BB"/>
+      <Setter Property="Background" Value="{StaticResource AccentBrightBrush}"/>
+    </Style>
+    <!-- play↔pause cross-fade (160ms), driven by the .playing class the code-behind toggles from IsPlaying -->
+    <Style Selector="Button.play Path.pglyph">
+      <Setter Property="Transitions"><Transitions><DoubleTransition Property="Opacity" Duration="0:0:0.16"/></Transitions></Setter>
+    </Style>
+    <Style Selector="Button.play Path.playG">   <Setter Property="Opacity" Value="1"/></Style>
+    <Style Selector="Button.play Path.pauseG">  <Setter Property="Opacity" Value="0"/></Style>
+    <Style Selector="Button.play.playing Path.playG">  <Setter Property="Opacity" Value="0"/></Style>
+    <Style Selector="Button.play.playing Path.pauseG"> <Setter Property="Opacity" Value="1"/></Style>
+
+    <!-- transport nav buttons (prev / next): 30px, hover = a filled RowHover CIRCLE; glyph Subtle→Text on hover -->
+    <Style Selector="Button.xnav">
+      <Setter Property="Width" Value="30"/><Setter Property="Height" Value="30"/>
+      <Setter Property="Padding" Value="0"/><Setter Property="CornerRadius" Value="15"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.xnav:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource RowHoverBrush}"/>
+    </Style>
+    <Style Selector="Button.xnav:pointerover"><Setter Property="Foreground" Value="{StaticResource TextBrush}"/></Style>
+
+    <!-- transport toggle/icon buttons (shuffle / repeat / eq / queue / speaker): hover = RowHover PILL radius 8;
+         glyph Subtle→Text on hover; the .active class (shuffle/eq checked, repeat!=off, queue non-empty) → Accent -->
+    <Style Selector="Button.xicon">
+      <Setter Property="Width" Value="30"/><Setter Property="Height" Value="30"/>
+      <Setter Property="Padding" Value="0"/><Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.xicon:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource RowHoverBrush}"/>
+    </Style>
+    <Style Selector="Button.xicon:pointerover"><Setter Property="Foreground" Value="{StaticResource TextBrush}"/></Style>
+    <Style Selector="Button.xicon.active"><Setter Property="Foreground" Value="{StaticResource AccentBrush}"/></Style>
+
+    <!-- search field: the Windows SearchBox look — a recessed dark pill (Blend(Bg,Black,0.30)) with a 1px
+         Border-token outline, and NO focus/hover repaint (Fluent's white flash is overridden below) -->
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="{StaticResource SearchFillBrush}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="16"/>
+      <Setter Property="MinHeight" Value="33"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+    </Style>
+    <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{StaticResource SearchFillBrush}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}"/>
+    </Style>
+    <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{StaticResource SearchFillBrush}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}"/>
     </Style>
 
     <!-- track table: roomy rows, subtle small-caps headers, clean ellipsis -->
@@ -80,7 +153,7 @@
       <Setter Property="MinHeight" Value="50"/>
     </Style>
     <Style Selector="DataGridColumnHeader">
-      <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+      <Setter Property="Foreground" Value="{StaticResource FaintBrush}"/>
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Background" Value="Transparent"/>
@@ -95,7 +168,23 @@
 
     <!-- subtle row hover -->
     <Style Selector="DataGridRow:pointerover">
-      <Setter Property="Background" Value="#262A2E"/>
+      <Setter Property="Background" Value="{StaticResource RowHoverBrush}"/>
+    </Style>
+
+    <!-- selected row: the Windows "whisper" accent tint (opaque Blend(Bg,Accent,0.12)) at full opacity
+         instead of Fluent's dimmed grey-blue wash -->
+    <Style Selector="DataGridRow:selected /template/ Rectangle#BackgroundRectangle">
+      <Setter Property="Fill" Value="{StaticResource SelRowBrush}"/>
+      <Setter Property="Opacity" Value="1"/>
+    </Style>
+
+    <!-- rating stars: hidden on unrated rows until hovered (matches the Windows ghost-star behaviour,
+         and kills the wall of hollow stars) -->
+    <Style Selector="StackPanel.stars.norate">
+      <Setter Property="Opacity" Value="0"/>
+    </Style>
+    <Style Selector="DataGridRow:pointerover StackPanel.stars.norate">
+      <Setter Property="Opacity" Value="1"/>
     </Style>
 
     <!-- play overlay on the art thumbnail (fades in on hover) -->
@@ -110,23 +199,35 @@
     </Style>
   </Window.Styles>
 
-  <!-- Wallpaper: 58° gradient + soft accent glow, then the floating cards on top (repainted by ApplyWallpaper) -->
+  <!-- Wallpaper: the Windows Theme.PaintWallpaper — 60° 4-stop gradient (accent band at 0.62) + an
+       accent glow top-left + a hue-shifted second glow bottom-right (all repainted by ApplyWallpaper) -->
   <Grid x:Name="Root">
     <Grid.Background>
-      <LinearGradientBrush StartPoint="0%,0%" EndPoint="53%,85%">
-        <GradientStop Offset="0.0"  Color="#0E0E10"/>
-        <GradientStop Offset="0.45" Color="#0D2621"/>
-        <GradientStop Offset="1.0"  Color="#0B0C0D"/>
+      <LinearGradientBrush StartPoint="0%,0%" EndPoint="50%,86.6%">
+        <GradientStop Offset="0.0"  Color="#0D0E10"/>
+        <GradientStop Offset="0.30" Color="#0C0D0F"/>
+        <GradientStop Offset="0.62" Color="#0D2624"/>
+        <GradientStop Offset="1.0"  Color="#0A0B0C"/>
       </LinearGradientBrush>
     </Grid.Background>
 
-    <!-- top-left accent glow -->
-    <Ellipse x:Name="Glow" Width="780" Height="780" HorizontalAlignment="Left" VerticalAlignment="Top"
-             Margin="-220,-300,0,0" IsHitTestVisible="False">
+    <!-- top-left accent glow (box ≈ (-0.18W, -0.30H), d ≈ 0.95·max(W,H)) -->
+    <Ellipse x:Name="Glow" Width="990" Height="990" HorizontalAlignment="Left" VerticalAlignment="Top"
+             Margin="-190,-200,0,0" IsHitTestVisible="False">
       <Ellipse.Fill>
         <RadialGradientBrush>
-          <GradientStop Offset="0" Color="#3300C8AA"/>
+          <GradientStop Offset="0" Color="#3700C8AA"/>
           <GradientStop Offset="1" Color="#0000C8AA"/>
+        </RadialGradientBrush>
+      </Ellipse.Fill>
+    </Ellipse>
+    <!-- bottom-right hue-shifted companion glow (box ≈ (0.65W, 0.90H), d ≈ 0.85·max(W,H)) -->
+    <Ellipse x:Name="Glow2" Width="880" Height="880" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+             Margin="0,0,-510,-810" IsHitTestVisible="False">
+      <Ellipse.Fill>
+        <RadialGradientBrush>
+          <GradientStop Offset="0" Color="#28526AB7"/>
+          <GradientStop Offset="1" Color="#00526AB7"/>
         </RadialGradientBrush>
       </Ellipse.Fill>
     </Ellipse>
@@ -177,15 +278,15 @@
                 <Setter Property="Margin" Value="0,1"/>
                 <Setter Property="IsEnabled" Value="{Binding !IsHeader}"/>
               </Style>
-              <!-- active row: a soft pill + a 3px accent left-bar (matches the Windows sidebar), not a solid
-                   accent fill — keeps the label readable and the accent as a marker, following the theme accent -->
+              <!-- active row: the Windows sidebar's translucent accent-wash pill (alpha-48 accent over the
+                   rail) + a 3px bright-accent left bar — not a solid accent fill, keeps the label readable -->
               <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                <Setter Property="Background" Value="#1CFFFFFF"/>
-                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                <Setter Property="Background" Value="{StaticResource SidebarSelBrush}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource AccentBrightBrush}"/>
                 <Setter Property="BorderThickness" Value="3,0,0,0"/>
               </Style>
               <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                <Setter Property="Background" Value="#14FFFFFF"/>
+                <Setter Property="Background" Value="{StaticResource SidebarHoverBrush}"/>
               </Style>
             </ListBox.Styles>
             <ListBox.ItemTemplate>
@@ -193,7 +294,7 @@
                 <Panel>
                   <!-- section header row -->
                   <TextBlock Text="{Binding Title}" IsVisible="{Binding IsHeader}"
-                             Foreground="{StaticResource SubtleBrush}" FontSize="10.5" FontWeight="Bold"
+                             Foreground="{StaticResource FaintBrush}" FontSize="10.5" FontWeight="Bold"
                              Margin="2,10,0,2"/>
                   <!-- normal row -->
                   <StackPanel Orientation="Horizontal" Spacing="11" IsVisible="{Binding !IsHeader}">
@@ -218,28 +319,26 @@
           <Grid DockPanel.Dock="Top" Margin="22,20,22,10" ColumnDefinitions="Auto,*,Auto">
             <Border Grid.Column="0" Width="76" Height="76" CornerRadius="12" Margin="0,0,16,0" ClipToBounds="True">
               <Panel>
-                <Border>
-                  <Border.Background>
-                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-                      <GradientStop Offset="0" Color="#2E5C8A"/>
-                      <GradientStop Offset="1" Color="#1B3550"/>
-                    </LinearGradientBrush>
-                  </Border.Background>
-                  <TextBlock Text="♪" FontSize="30" Foreground="#80FFFFFF"
+                <!-- generated tile: per-title seeded teal→violet gradient (the Windows Theme.MakeArt),
+                     with the alpha-64 note + alpha-30 inner frame -->
+                <Border Background="{Binding HeaderTileBrush}">
+                  <TextBlock Text="♪" FontSize="30" Foreground="#40FFFFFF"
                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <Image Source="{Binding HeaderArt}" Stretch="UniformToFill"/>
+                <Border BorderBrush="#1EFFFFFF" BorderThickness="1" CornerRadius="12"/>
               </Panel>
             </Border>
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
-              <TextBlock Text="{Binding HeaderKicker}" Foreground="{StaticResource AccentBrush}" FontSize="11" FontWeight="Bold"/>
+              <TextBlock Text="{Binding HeaderKicker}" Foreground="{StaticResource KickerBrush}" FontSize="11" FontWeight="Bold"/>
               <TextBlock Text="{Binding HeaderTitle}" Foreground="{StaticResource TextBrush}" FontSize="26" FontWeight="Bold"/>
               <TextBlock Text="{Binding HeaderSubtitle}" Foreground="{StaticResource SubtleBrush}" FontSize="12"/>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-              <Button Content="+ Add music" Click="OnAddMusic" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
-              <Button Content="Delete" Click="OnDelete" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
-              <Button Content="+ Add folder" Click="OnAddFolder" IsVisible="{Binding IsLocalView}"/>
+              <Button Content="Cover Flow" Click="OnCoverFlow" IsVisible="{Binding CoverFlowAvailable}"/>
+              <Button Classes="primary" Content="+ Add music" Click="OnAddMusic" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
+              <Button Classes="danger" Content="Delete" Click="OnDelete" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
+              <Button Classes="primary" Content="+ Add folder" Click="OnAddFolder" IsVisible="{Binding IsLocalView}"/>
             </StackPanel>
           </Grid>
 
@@ -254,38 +353,161 @@
                        VerticalAlignment="Center" Margin="22,0,0,0" FontSize="12"/>
           </Border>
 
-          <!-- now playing -->
-          <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasNowPlaying}" Height="64"
-                  Background="{StaticResource PanelBrush}" CornerRadius="10" Margin="10,0,10,8">
-            <Grid Margin="14,0" ColumnDefinitions="Auto,208,Auto,*,Auto,Auto">
-              <!-- now-playing cover thumbnail (placeholder shows through until the art decodes) -->
-              <Border Grid.Column="0" Width="44" Height="44" CornerRadius="8" ClipToBounds="True" VerticalAlignment="Center" Margin="0,0,12,0">
+          <!-- now playing: the full Windows transport bar — cover, title, shuffle/prev/play/next/repeat,
+               seek + times, speaker/mute + volume, queue (Up Next) + EQ. Every glyph is a revectored icon. -->
+          <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasNowPlaying}" Height="72"
+                  Background="{StaticResource SidebarBrush}" CornerRadius="10" Margin="10,0,10,8">
+            <Grid Margin="14,0" ColumnDefinitions="Auto,168,Auto,*,Auto,Auto,Auto">
+              <!-- cover thumbnail (seeded tile shows through until the art decodes) -->
+              <Border Grid.Column="0" Width="48" Height="48" CornerRadius="7" ClipToBounds="True" VerticalAlignment="Center" Margin="0,0,12,0">
                 <Panel>
-                  <Border>
+                  <Border x:Name="NowTile">
                     <Border.Background>
-                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-                        <GradientStop Offset="0" Color="#2E3A4A"/>
-                        <GradientStop Offset="1" Color="#1B2530"/>
+                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="50%,86.6%">
+                        <GradientStop Offset="0" Color="#2A2B2E"/>
+                        <GradientStop Offset="1" Color="#141518"/>
                       </LinearGradientBrush>
                     </Border.Background>
-                    <TextBlock Text="♪" FontSize="18" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <TextBlock Text="♪" FontSize="18" Foreground="#78FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                   </Border>
                   <Image Source="{Binding NowArt}" Stretch="UniformToFill"/>
+                  <Border BorderBrush="#2D2E30" BorderThickness="1" CornerRadius="7"/>
                 </Panel>
               </Border>
               <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding NowTitle}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                 <TextBlock Text="{Binding NowSub}" Foreground="{StaticResource SubtleBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
               </StackPanel>
-              <Button Grid.Column="2" Classes="play" Content="{Binding PlayPauseGlyph}" Click="OnPlayPause"
-                      Margin="14,0" VerticalAlignment="Center"/>
-              <Grid Grid.Column="3" ColumnDefinitions="42,*,Auto" VerticalAlignment="Center">
-                <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" TextAlignment="Right"/>
+
+              <!-- transport cluster -->
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="8,0">
+                <Button Classes="xicon" Classes.active="{Binding Shuffle}" Click="OnShuffle" ToolTip.Tip="Shuffle">
+                  <Canvas Width="24" Height="24">
+                    <Path Data="{StaticResource GlyphShuffleLines}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.7" StrokeLineCap="Round" StrokeJoin="Round"/>
+                    <Path Data="{StaticResource GlyphShuffleHeads}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                  </Canvas>
+                </Button>
+                <Button Classes="xnav" Click="OnPrev" ToolTip.Tip="Previous">
+                  <Path Data="{StaticResource GlyphPrev}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Width="24" Height="24"/>
+                </Button>
+                <Button Classes="play" Classes.playing="{Binding IsPlaying}" x:Name="PlayBtn" Click="OnPlayPause" Margin="4,0">
+                  <Canvas Width="24" Height="24">
+                    <Path Classes="pglyph playG" Data="{StaticResource GlyphPlay}" Fill="{StaticResource OnAccentBrush}"/>
+                    <Path Classes="pglyph pauseG" Data="{StaticResource GlyphPause}" Fill="{StaticResource OnAccentBrush}"/>
+                  </Canvas>
+                </Button>
+                <Button Classes="xnav" Click="OnNext" ToolTip.Tip="Next">
+                  <Path Data="{StaticResource GlyphNext}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Width="24" Height="24"/>
+                </Button>
+                <Button Classes="xicon" Classes.active="{Binding RepeatActive}" Click="OnRepeat" ToolTip.Tip="Repeat">
+                  <Canvas Width="24" Height="24">
+                    <Path Data="{StaticResource GlyphRepeatRing}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.7" StrokeLineCap="Round"/>
+                    <Path Data="{StaticResource GlyphRepeatHead}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    <Path Data="{StaticResource GlyphRepeatOne}" IsVisible="{Binding RepeatOne}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeLineCap="Round"/>
+                  </Canvas>
+                </Button>
+              </StackPanel>
+
+              <!-- seek + times -->
+              <Grid Grid.Column="3" ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center" Margin="8,0">
+                <TextBlock Grid.Column="0" Text="{Binding PosText}" Foreground="{StaticResource FaintBrush}" FontSize="11" VerticalAlignment="Center" MinWidth="34" TextAlignment="Right"/>
                 <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding PositionFraction, Mode=TwoWay}" Margin="8,0"/>
-                <TextBlock Grid.Column="2" Text="{Binding DurText}" Foreground="{StaticResource SubtleBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding DurText}" Foreground="{StaticResource FaintBrush}" FontSize="11" VerticalAlignment="Center" MinWidth="34"/>
               </Grid>
-              <ToggleButton Grid.Column="4" Content="EQ" IsChecked="{Binding EqOn, Mode=TwoWay}" Margin="14,0,10,0" VerticalAlignment="Center"/>
-              <Slider Grid.Column="5" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="92" VerticalAlignment="Center"/>
+
+              <!-- speaker / mute -->
+              <Button Grid.Column="4" Classes="xicon" Click="OnMute" ToolTip.Tip="Mute" VerticalAlignment="Center">
+                <Canvas Width="24" Height="24">
+                  <Path Data="{StaticResource GlyphSpeaker}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                  <Path Data="{StaticResource GlyphWaves}" IsVisible="{Binding !Muted}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeLineCap="Round"/>
+                  <Path Data="{StaticResource GlyphMuteX}" IsVisible="{Binding Muted}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeLineCap="Round"/>
+                </Canvas>
+              </Button>
+              <Slider Grid.Column="5" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" Width="84" VerticalAlignment="Center" Margin="0,0,6,0"/>
+
+              <!-- queue (Up Next) + EQ -->
+              <StackPanel Grid.Column="6" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                <Button x:Name="QueueBtn" Classes="xicon" Classes.active="{Binding HasQueue}" Click="OnQueue" ToolTip.Tip="Up Next">
+                  <Path Data="{StaticResource GlyphQueue}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="2" StrokeLineCap="Round" Width="24" Height="24"/>
+                  <FlyoutBase.AttachedFlyout>
+                    <Flyout Placement="TopEdgeAlignedRight">
+                      <Border Width="316" Background="{StaticResource SidebarBrush}" CornerRadius="12" Padding="0">
+                        <DockPanel MaxHeight="460">
+                          <!-- header: Up Next + count + Clear -->
+                          <Grid DockPanel.Dock="Top" Margin="16,14,12,8" ColumnDefinitions="Auto,Auto,*,Auto">
+                            <TextBlock Grid.Column="0" Text="Up Next" Foreground="{StaticResource TextBrush}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="{Binding QueueCount}" Foreground="{StaticResource FaintBrush}" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center" IsVisible="{Binding HasQueue}"/>
+                            <Button Grid.Column="3" Classes="ghost" Content="Clear" Width="52" Click="OnQueueClear" IsVisible="{Binding HasQueue}"/>
+                          </Grid>
+                          <TextBlock DockPanel.Dock="Bottom" Text="{Binding UpNextHint}" Foreground="{StaticResource FaintBrush}" FontSize="11"
+                                     Margin="16,4,16,12" TextWrapping="Wrap" IsVisible="{Binding UpNextHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                          <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding UpNext}" Margin="8,0,8,8">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                  <Border Background="{Binding IsNowPlaying, Converter={x:Static app:NowPlayingBgConverter.Instance}}"
+                                          CornerRadius="8" Padding="8,6" Margin="0,1" Tapped="OnQueueRowTapped">
+                                    <Grid ColumnDefinitions="40,10,*,Auto">
+                                      <Border Grid.Column="0" Width="40" Height="40" CornerRadius="6" ClipToBounds="True">
+                                        <Panel>
+                                          <Border Background="{Binding Tile}"/>
+                                          <Image Source="{Binding Art}" Stretch="UniformToFill"/>
+                                        </Panel>
+                                      </Border>
+                                      <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="1">
+                                        <TextBlock Text="NOW PLAYING" Foreground="{StaticResource AccentBrush}" FontSize="9.5" FontWeight="Bold" IsVisible="{Binding IsNowPlaying}"/>
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextBrush}" FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Sub}" Foreground="{StaticResource SubtleBrush}" FontSize="10.5" TextTrimming="CharacterEllipsis"/>
+                                      </StackPanel>
+                                      <Button Grid.Column="3" Classes="ghost" Content="✕" FontSize="11" Width="26" Height="26"
+                                              VerticalAlignment="Center" Click="OnQueueRemove" IsVisible="{Binding !IsNowPlaying}"/>
+                                    </Grid>
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </ScrollViewer>
+                        </DockPanel>
+                      </Border>
+                    </Flyout>
+                  </FlyoutBase.AttachedFlyout>
+                </Button>
+                <Button x:Name="EqBtn" Classes="xicon" Classes.active="{Binding EqOn}" Click="OnEq" ToolTip.Tip="Equalizer">
+                  <Canvas Width="24" Height="24">
+                    <Path Data="{StaticResource GlyphEqBars}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="2" StrokeLineCap="Round"/>
+                    <Ellipse Width="5.2" Height="5.2" Canvas.Left="4.4" Canvas.Top="10.4" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    <Ellipse Width="5.2" Height="5.2" Canvas.Left="9.4" Canvas.Top="6.4" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    <Ellipse Width="5.2" Height="5.2" Canvas.Left="14.4" Canvas.Top="12.4" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                  </Canvas>
+                  <FlyoutBase.AttachedFlyout>
+                    <Flyout Placement="TopEdgeAlignedRight">
+                      <Border Width="360" Background="{StaticResource SidebarBrush}" CornerRadius="12" Padding="16,14">
+                        <StackPanel Spacing="12">
+                          <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                            <TextBlock Grid.Column="0" Text="Equalizer" Foreground="{StaticResource TextBrush}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <Button Grid.Column="2" Classes="ghost" Content="Flat" Width="46" Click="OnEqFlat" Margin="0,0,8,0"/>
+                            <ToggleSwitch Grid.Column="3" IsChecked="{Binding EqOn, Mode=TwoWay}" OnContent="On" OffContent="Off"/>
+                          </Grid>
+                          <ItemsControl ItemsSource="{Binding EqBands}">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center"/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <StackPanel Width="30" Spacing="4">
+                                  <Slider Orientation="Vertical" Height="120" Minimum="-12" Maximum="12"
+                                          Value="{Binding Gain, Mode=TwoWay}" HorizontalAlignment="Center"/>
+                                  <TextBlock Text="{Binding Label}" Foreground="{StaticResource FaintBrush}" FontSize="9.5" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Border>
+                    </Flyout>
+                  </FlyoutBase.AttachedFlyout>
+                </Button>
+              </StackPanel>
             </Grid>
           </Border>
 
@@ -294,10 +516,17 @@
           <DataGrid x:Name="SongGrid" ItemsSource="{Binding Tracks}" Margin="0"
                     DoubleTapped="OnSongDoubleTapped"
                     Background="Transparent" Foreground="{StaticResource TextBrush}"
-                    GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource HairlineBrush}"
+                    GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource RowDividerBrush}"
                     HeadersVisibility="Column" IsReadOnly="True" AutoGenerateColumns="False"
                     CanUserResizeColumns="False" CanUserReorderColumns="False"
                     CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
+            <DataGrid.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="Play" Click="OnCtxPlay"/>
+                <MenuItem Header="Play next" Click="OnCtxPlayNext"/>
+                <MenuItem Header="Add to queue" Click="OnCtxAddQueue"/>
+              </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
               <DataGridTemplateColumn Header="" Width="56" CanUserSort="False">
                 <DataGridTemplateColumn.CellTemplate>
@@ -306,14 +535,9 @@
                             ClipToBounds="True" VerticalAlignment="Center" Background="Transparent"
                             Tapped="OnArtTapped" Cursor="Hand">
                       <Panel>
-                        <Border>
-                          <Border.Background>
-                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-                              <GradientStop Offset="0" Color="#2E3A4A"/>
-                              <GradientStop Offset="1" Color="#1B2530"/>
-                            </LinearGradientBrush>
-                          </Border.Background>
-                          <TextBlock Text="♪" FontSize="15" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <!-- per-album seeded tile until the real cover decodes (the Windows MakeArt colours) -->
+                        <Border Background="{Binding TileBrush}">
+                          <TextBlock Text="♪" FontSize="15" Foreground="#40FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <Image Source="{Binding Art}" Stretch="UniformToFill"/>
                         <Border Classes="playover" Background="#99000000">
@@ -332,38 +556,40 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*"/>
-              <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*"/>
+              <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*" Foreground="{StaticResource SubtleBrush}"/>
+              <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*" Foreground="{StaticResource SubtleBrush}"/>
               <DataGridTemplateColumn Header="RATING" Width="110">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
-                      <Button Classes="star" Tag="1" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=1}"/>
-                      <Button Classes="star" Tag="2" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=2}"/>
-                      <Button Classes="star" Tag="3" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=3}"/>
-                      <Button Classes="star" Tag="4" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=4}"/>
-                      <Button Classes="star" Tag="5" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=5}"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0"
+                                Classes="stars" Classes.norate="{Binding !HasRating}">
+                      <Button Classes="star" Tag="1" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=1}" Foreground="{Binding RatingValue, Converter={StaticResource StarBrush}, ConverterParameter=1}"/>
+                      <Button Classes="star" Tag="2" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=2}" Foreground="{Binding RatingValue, Converter={StaticResource StarBrush}, ConverterParameter=2}"/>
+                      <Button Classes="star" Tag="3" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=3}" Foreground="{Binding RatingValue, Converter={StaticResource StarBrush}, ConverterParameter=3}"/>
+                      <Button Classes="star" Tag="4" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=4}" Foreground="{Binding RatingValue, Converter={StaticResource StarBrush}, ConverterParameter=4}"/>
+                      <Button Classes="star" Tag="5" Click="OnStarClick" Content="{Binding RatingValue, Converter={StaticResource StarGlyph}, ConverterParameter=5}" Foreground="{Binding RatingValue, Converter={StaticResource StarBrush}, ConverterParameter=5}"/>
                     </StackPanel>
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="88"/>
+              <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="88" Foreground="{StaticResource SubtleBrush}"/>
               <DataGridTemplateColumn Header="ADDED" Width="104">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <Panel VerticalAlignment="Center">
                       <!-- Today/Yesterday tint accent ("what's new" pops); older dates stay subtle -->
-                      <TextBlock Text="{Binding Added}" IsVisible="{Binding AddedRecent}" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+                      <TextBlock Text="{Binding Added}" IsVisible="{Binding AddedRecent}" Foreground="{StaticResource AccentBrightBrush}" VerticalAlignment="Center"/>
                       <TextBlock Text="{Binding Added}" IsVisible="{Binding !AddedRecent}" Foreground="{StaticResource SubtleBrush}" VerticalAlignment="Center"/>
                     </Panel>
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74"/>
+              <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74" Foreground="{StaticResource SubtleBrush}"/>
             </DataGrid.Columns>
           </DataGrid>
-          <!-- the fade sits just under the column header, so the first rows melt into the card -->
-          <Border VerticalAlignment="Top" Height="20" Margin="0,32,0,0" IsHitTestVisible="False">
+          <!-- the fade sits just under the column header, so the first rows melt into the card
+               (its colour follows the card Bg — repainted per theme by ApplyWallpaper) -->
+          <Border x:Name="ScrollFade" VerticalAlignment="Top" Height="20" Margin="0,32,0,0" IsHitTestVisible="False">
             <Border.Background>
               <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
                 <GradientStop Offset="0" Color="#1D1E22"/>
@@ -378,10 +604,14 @@
             </Border>
             <TextBlock Text="{Binding EmptyHeadline}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" HorizontalAlignment="Center"/>
             <TextBlock Text="{Binding EmptyHint}" FontSize="12.5" Foreground="{StaticResource SubtleBrush}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
-            <Button Content="+ Add folder"  Click="OnAddFolder" IsVisible="{Binding EmptyAddFolderCta}"   HorizontalAlignment="Center" Margin="0,4,0,0"/>
-            <Button Content="+ Add music"   Click="OnAddMusic"  IsVisible="{Binding EmptyAddMusicCta}"    HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Classes="primary" Content="+ Add folder"  Click="OnAddFolder" IsVisible="{Binding EmptyAddFolderCta}"   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Classes="primary" Content="+ Add music"   Click="OnAddMusic"  IsVisible="{Binding EmptyAddMusicCta}"    HorizontalAlignment="Center" Margin="0,4,0,0"/>
             <Button Content="Clear search"  Click="OnClearSearch" IsVisible="{Binding EmptyClearSearchCta}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
           </StackPanel>
+
+          <!-- Cover Flow overlay: covers the song list only (header + search + transport stay visible),
+               opened by the header "Cover Flow" button, closed by its own × / Esc -->
+          <controls:CoverFlowView x:Name="CoverFlow" IsVisible="False"/>
           </Grid>
 
         </DockPanel>

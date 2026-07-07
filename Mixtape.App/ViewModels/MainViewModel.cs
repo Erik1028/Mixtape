@@ -50,7 +50,11 @@ public sealed class TrackRow : INotifyPropertyChanged
     // Rating is live (click-to-rate updates it in place without a full grid rebuild). 0–5 stars.
     // (The RATING column binds RatingValue via the per-star buttons; the old `Stars` string is gone — nothing bound it.)
     private int _rating;
-    public int RatingValue { get => _rating; set { if (_rating != value) { _rating = value; OnChanged(nameof(RatingValue)); } } }
+    public int RatingValue { get => _rating; set { if (_rating != value) { _rating = value; OnChanged(nameof(RatingValue)); OnChanged(nameof(HasRating)); } } }
+    public bool HasRating => _rating > 0;   // unrated rows hide their stars until hovered (matches Windows)
+
+    // Per-album seeded placeholder tile (the Windows Theme.MakeArt colours) shown until the cover decodes.
+    public Avalonia.Media.IBrush TileBrush { get; init; } = Avalonia.Media.Brushes.Transparent;
 
     private Bitmap? _art;
     public Bitmap? Art { get => _art; set { _art = value; OnChanged(nameof(Art)); } }
@@ -71,6 +75,7 @@ public sealed class TrackRow : INotifyPropertyChanged
             AddedRecent = recent,
             Time = t.DurationStr,
             Source = t,
+            TileBrush = AppTheme.ArtTileBrush(string.IsNullOrEmpty(t.Album) ? t.DisplayTitle : t.Album!),
         };
     }
 
@@ -108,6 +113,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public MainViewModel()
     {
+        var (sh, rep) = AppConfig.LoadModes();
+        RestoreModes(sh, rep);
+        BuildEqBands();
         Refresh();
         // Optional: `Mixtape.App <folder>` opens that PC folder as Local Music on launch.
         var folderArg = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault(Directory.Exists);
@@ -119,7 +127,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     // ---- bound header / status ----
     private string _headerKicker = "LIBRARY", _headerTitle = "Mixtape", _headerSubtitle = "", _status = "";
     public string HeaderKicker { get => _headerKicker; set => Set(ref _headerKicker, value); }
-    public string HeaderTitle { get => _headerTitle; set => Set(ref _headerTitle, value); }
+    public string HeaderTitle { get => _headerTitle; set { if (Set(ref _headerTitle, value)) OnPropertyChanged(nameof(HeaderTileBrush)); } }
+    /// <summary>Generated header artwork tile: per-title seeded gradient (the Windows Theme.MakeArt).</summary>
+    public Avalonia.Media.IBrush HeaderTileBrush => AppTheme.ArtTileBrush(_headerTitle);
     public string HeaderSubtitle { get => _headerSubtitle; set => Set(ref _headerSubtitle, value); }
     public string Status { get => _status; set => Set(ref _status, value); }
 
@@ -559,17 +569,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : $"{t.Seconds} s";
     }
 
-    // ---- playback (LibVLC via AudioService) ----
+    // ============================ playback engine (LibVLC via AudioService) ============================
+    // Mirrors the Windows player: a play CONTEXT (the view we started from) drives sequential/shuffle
+    // advance; an explicit Up-Next QUEUE overrides it forward (FIFO); nav HISTORY drives Prev; Repeat
+    // cycles Off→All→One (One restarts only at track-end, manual Next still advances). Pure-random
+    // shuffle each step (no bag), only guaranteeing i!=current. No play-count writes on advance.
+    public enum RepeatMode { Off, All, One }
+
     private AudioService? _audio;
     private DispatcherTimer? _tick;
     private bool _updatingFromTimer;
     private readonly float[] _eqGains = { 5, 4, 2, 0, -1, -1, 0, 2, 4, 5 }; // gentle "smile" preset
+    private static readonly Random _rng = new();
+
+    private readonly List<TrackRow> _ctx = new();       // play context snapshot (the view playback started from)
+    private int _ctxIndex = -1;                          // index of the now-playing row within _ctx
+    private readonly List<TrackRow> _queue = new();      // explicit "Up Next" override (takes priority forward)
+    private readonly List<TrackRow> _history = new();    // departed rows, newest last → Prev retraces the real path
+    private TrackRow? _nowRow;
 
     private bool _hasNow;   public bool HasNowPlaying { get => _hasNow; set => Set(ref _hasNow, value); }
-    private Bitmap? _nowArt; public Bitmap? NowArt { get => _nowArt; set => Set(ref _nowArt, value); }   // now-playing bar cover thumbnail
+    private bool _isPlaying; public bool IsPlaying { get => _isPlaying; set => Set(ref _isPlaying, value); }   // drives play↔pause morph
+    private Bitmap? _nowArt; public Bitmap? NowArt { get => _nowArt; set => Set(ref _nowArt, value); }
     private string _nowTitle = ""; public string NowTitle { get => _nowTitle; set => Set(ref _nowTitle, value); }
     private string _nowSub = "";   public string NowSub { get => _nowSub; set => Set(ref _nowSub, value); }
-    private string _playGlyph = "▶"; public string PlayPauseGlyph { get => _playGlyph; set => Set(ref _playGlyph, value); }
     private string _posText = "0:00"; public string PosText { get => _posText; set => Set(ref _posText, value); }
     private string _durText = "0:00"; public string DurText { get => _durText; set => Set(ref _durText, value); }
 
@@ -580,20 +603,106 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (Set(ref _posFrac, value) && !_updatingFromTimer) _audio?.SeekFraction(value); }
     }
 
-    private int _volume = 90;
-    public int Volume { get => _volume; set { if (Set(ref _volume, value) && _audio is not null) _audio.Volume = value; } }
+    private int _volume = 90, _preMuteVolume = 90;
+    public int Volume
+    {
+        get => _volume;
+        set { if (Set(ref _volume, value)) { if (_audio is not null) _audio.Volume = value; if (value > 0 && _muted) { _muted = false; OnPropertyChanged(nameof(Muted)); } } }
+    }
+    private bool _muted;
+    public bool Muted { get => _muted; set => Set(ref _muted, value); }
+    public void ToggleMute()
+    {
+        if (_muted) { Muted = false; Volume = _preMuteVolume > 0 ? _preMuteVolume : 60; }
+        else { _preMuteVolume = _volume; Muted = true; Volume = 0; }
+    }
 
     private bool _eqOn;
-    public bool EqOn { get => _eqOn; set { if (Set(ref _eqOn, value)) _audio?.SetEq(value, _eqGains); } }
+    public bool EqOn { get => _eqOn; set { if (Set(ref _eqOn, value)) _audio?.SetEq(value, EqGains); } }
+    public float[] EqGains => _eqGains;
 
+    /// <summary>One EQ band, bound to a vertical slider in the equalizer flyout; moving it writes into the
+    /// shared gain array and re-applies the EQ live (auto-enabling it, like the Windows EqualizerDialog).</summary>
+    public sealed class EqBand : INotifyPropertyChanged
+    {
+        private readonly int _i; private readonly MainViewModel _vm; private double _gain;
+        public EqBand(MainViewModel vm, int i, string label, double gain) { _vm = vm; _i = i; Label = label; _gain = gain; }
+        public string Label { get; }
+        public double Gain
+        {
+            get => _gain;
+            set { if (Math.Abs(_gain - value) > 0.001) { _gain = value; _vm._eqGains[_i] = (float)value; if (!_vm.EqOn) _vm.EqOn = true; else _vm.ApplyEq(); PropertyChanged?.Invoke(this, new(nameof(Gain))); } }
+        }
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
+    public ObservableCollection<EqBand> EqBands { get; } = new();
+    private void BuildEqBands()
+    {
+        EqBands.Clear();
+        for (int i = 0; i < AudioService.BandCount; i++)
+        {
+            int hz = AudioService.BandFrequencies[i];
+            EqBands.Add(new EqBand(this, i, hz >= 1000 ? $"{hz / 1000}k" : hz.ToString(), _eqGains[i]));
+        }
+    }
+    /// <summary>Re-apply the EQ after a band slider moved (the EQ flyout mutates <see cref="EqGains"/> in place).</summary>
+    public void ApplyEq() { if (_eqOn) _audio?.SetEq(true, _eqGains); }
+    /// <summary>Flat preset: zero every band (and refresh the sliders).</summary>
+    public void EqFlat() { for (int i = 0; i < _eqGains.Length; i++) _eqGains[i] = 0; BuildEqBands(); ApplyEq(); }
+
+    // ---- shuffle / repeat (persisted to the shared settings.json, like the Windows app) ----
+    private bool _shuffle;
+    public bool Shuffle
+    {
+        get => _shuffle;
+        set { if (Set(ref _shuffle, value)) { AppConfig.SaveModes(_shuffle, _repeat.ToString()); RebuildUpNext(); } }
+    }
+    private RepeatMode _repeat = RepeatMode.Off;
+    public RepeatMode Repeat
+    {
+        get => _repeat;
+        set { if (Set(ref _repeat, value)) { OnPropertyChanged(nameof(RepeatActive)); OnPropertyChanged(nameof(RepeatOne)); AppConfig.SaveModes(_shuffle, _repeat.ToString()); } }
+    }
+    public bool RepeatActive => _repeat != RepeatMode.Off;   // tints the repeat glyph accent
+    public bool RepeatOne => _repeat == RepeatMode.One;      // shows the "1" overlay
+    public void CycleRepeat() => Repeat = (RepeatMode)(((int)_repeat + 1) % 3);
+    public void ToggleShuffle() => Shuffle = !_shuffle;
+
+    /// <summary>Restore the saved shuffle/repeat once, at construction (without re-saving).</summary>
+    private void RestoreModes(bool shuffle, string repeat)
+    {
+        _shuffle = shuffle;
+        _repeat = repeat == "All" ? RepeatMode.All : repeat == "One" ? RepeatMode.One : RepeatMode.Off;
+        OnPropertyChanged(nameof(Shuffle)); OnPropertyChanged(nameof(Repeat));
+        OnPropertyChanged(nameof(RepeatActive)); OnPropertyChanged(nameof(RepeatOne));
+    }
+
+    /// <summary>Start playback of <paramref name="row"/>, snapshotting the CURRENT view as the play context.</summary>
     public void PlayRow(TrackRow? row)
     {
-        var t = row?.Source;
-        if (t is null) return;
+        if (row is null) return;
+        _ctx.Clear();
+        _ctx.AddRange(Tracks);
+        _ctxIndex = _ctx.IndexOf(row);
+        _history.Clear();
+        PlayInternal(row);
+    }
+
+    private string? ResolvePath(TrackRow row)
+    {
+        var t = row.Source;
+        if (t is null) return null;
         string? path = t.LocalPath;
         if (string.IsNullOrEmpty(path) && _device is not null) path = t.ResolveFilePath(_device.MountRoot);
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) { Status = "Can't find the audio file for this track."; return; }
+        return path;
+    }
 
+    private void PlayInternal(TrackRow row)
+    {
+        var t = row.Source;
+        if (t is null) return;
+        string? path = ResolvePath(row);
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) { Status = "Can't find the audio file for this track."; return; }
         try
         {
             EnsureAudio();
@@ -605,13 +714,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _audio.Play(path);
             _audio.Volume = _volume;
             _audio.SetEq(_eqOn, _eqGains);
+            _nowRow = row;
             NowTitle = t.DisplayTitle;
             NowSub = string.Join("  —  ", new[] { t.Artist, t.Album }.Where(s => !string.IsNullOrEmpty(s)));
-            NowArt = row?.Art;   // the row's already-decoded cover (placeholder shows through if not loaded yet)
+            NowArt = row.Art;
             HasNowPlaying = true;
-            PlayPauseGlyph = "⏸";
+            IsPlaying = true;
             _tick!.Start();
             Status = "Playing: " + t.DisplayTitle;
+            RebuildUpNext();
         }
         catch (Exception ex) { Status = "Playback error: " + ex.Message; }
     }
@@ -620,13 +731,80 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (_audio is null) return;
         _audio.TogglePause();
-        PlayPauseGlyph = _audio.IsPlaying ? "⏸" : "▶";
+        IsPlaying = _audio.IsPlaying;
     }
+
+    // ---- next / previous / auto-advance ----
+    private bool Playable(TrackRow row)
+    {
+        var p = ResolvePath(row);
+        return !string.IsNullOrEmpty(p) && File.Exists(p);
+    }
+
+    public void Next() => Advance(+1, auto: false);
+    public void Previous() => Advance(-1, auto: false);
+
+    private void OnTrackEnded()
+    {
+        // Repeat One restarts the SAME track; otherwise auto-advance forward (Off/All handled by Advance's wrap).
+        if (_repeat == RepeatMode.One && _nowRow is not null) { PlayInternal(_nowRow); return; }
+        Advance(+1, auto: true);
+    }
+
+    private void Advance(int dir, bool auto)
+    {
+        if (_nowRow is null || _ctx.Count == 0) return;
+
+        if (dir > 0)
+        {
+            // (1) explicit queue wins — pop the head; drop unplayable queued rows.
+            while (_queue.Count > 0)
+            {
+                var q = _queue[0]; _queue.RemoveAt(0);
+                if (Playable(q)) { Depart(); SyncCtxIndex(q); PlayInternal(q); RebuildUpNext(); return; }
+            }
+            // (2) shuffle — a pure random playable pick that isn't the current row.
+            if (_shuffle)
+            {
+                var pool = new List<int>();
+                for (int i = 0; i < _ctx.Count; i++) if (i != _ctxIndex && Playable(_ctx[i])) pool.Add(i);
+                if (pool.Count > 0) { int pick = pool[_rng.Next(pool.Count)]; Depart(); _ctxIndex = pick; PlayInternal(_ctx[pick]); RebuildUpNext(); return; }
+                if (_repeat == RepeatMode.One) { PlayInternal(_nowRow); return; }
+            }
+        }
+        else
+        {
+            // Prev retraces the real path via history first (correct under shuffle).
+            while (_history.Count > 0)
+            {
+                var prev = _history[^1]; _history.RemoveAt(_history.Count - 1);
+                int hi = _ctx.IndexOf(prev);
+                if (hi >= 0 && Playable(prev)) { _ctxIndex = hi; PlayInternal(prev); RebuildUpNext(); return; }
+            }
+        }
+
+        // (3) sequential scan in the given direction.
+        for (int i = _ctxIndex + dir; i >= 0 && i < _ctx.Count; i += dir)
+            if (Playable(_ctx[i])) { if (dir > 0) Depart(); _ctxIndex = i; PlayInternal(_ctx[i]); RebuildUpNext(); return; }
+
+        // (4) edge: Repeat All wraps; otherwise rest paused on the current track.
+        if (_repeat == RepeatMode.All)
+        {
+            int start = dir > 0 ? 0 : _ctx.Count - 1;
+            for (int i = start; i >= 0 && i < _ctx.Count; i += dir)
+                if (Playable(_ctx[i])) { if (dir > 0) Depart(); _ctxIndex = i; PlayInternal(_ctx[i]); RebuildUpNext(); return; }
+        }
+        if (auto) IsPlaying = false;   // reached the end with Repeat Off → stop
+    }
+
+    private void Depart() { if (_nowRow is not null) { _history.Add(_nowRow); if (_history.Count > 200) _history.RemoveAt(0); } }
+    private void SyncCtxIndex(TrackRow row) { int i = _ctx.IndexOf(row); if (i >= 0) _ctxIndex = i; }
 
     private void EnsureAudio()
     {
         if (_audio is not null) return;
         _audio = new AudioService();
+        _audio.Ended += () => Dispatcher.UIThread.Post(OnTrackEnded);   // marshal off the VLC thread (no sync player calls there)
         _tick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _tick.Tick += (_, _) => UpdateTransport();
     }
@@ -640,7 +818,121 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _updatingFromTimer = false;
         PosText = FmtClock(pos);
         DurText = FmtClock(dur);
-        PlayPauseGlyph = _audio.IsPlaying ? "⏸" : "▶";
+        IsPlaying = _audio.IsPlaying;
+    }
+
+    // ---- Up Next queue (explicit "Play next" / "Add to queue") ----
+    public sealed class QueueRow
+    {
+        public string Title { get; init; } = "";
+        public string Sub { get; init; } = "";
+        public Bitmap? Art { get; init; }
+        public Avalonia.Media.IBrush Tile { get; init; } = Avalonia.Media.Brushes.Transparent;
+        public bool IsNowPlaying { get; init; }
+        internal TrackRow? Row { get; init; }
+    }
+    public ObservableCollection<QueueRow> UpNext { get; } = new();
+    private int _queueCount; public int QueueCount { get => _queueCount; set { if (Set(ref _queueCount, value)) OnPropertyChanged(nameof(HasQueue)); } }
+    public bool HasQueue => _queueCount > 0;
+    private string _upNextHint = ""; public string UpNextHint { get => _upNextHint; set => Set(ref _upNextHint, value); }
+
+    private static QueueRow ToQueueRow(TrackRow r, bool now) => new()
+    {
+        Title = r.Title,
+        Sub = string.Join("  ·  ", new[] { r.Artist, r.Album }.Where(s => !string.IsNullOrEmpty(s))),
+        Art = r.Art,
+        Tile = AppTheme.ArtTileBrush(string.IsNullOrEmpty(r.Album) ? r.Title : r.Album),
+        IsNowPlaying = now,
+        Row = r,
+    };
+
+    private void RebuildUpNext()
+    {
+        UpNext.Clear();
+        if (_nowRow is not null) UpNext.Add(ToQueueRow(_nowRow, now: true));
+        foreach (var q in _queue) UpNext.Add(ToQueueRow(q, now: false));
+        // then the upcoming context rows (skip ones already in the explicit queue) — a preview of what plays next
+        if (!_shuffle)
+            for (int i = _ctxIndex + 1; i < _ctx.Count; i++)
+                if (!_queue.Contains(_ctx[i])) UpNext.Add(ToQueueRow(_ctx[i], now: false));
+        QueueCount = _queue.Count;
+        UpNextHint = _queue.Count > 0 && _repeat == RepeatMode.One ? "Repeat One is on — Next still steps the queue." : "";
+    }
+
+    public void QueuePlayNext(IEnumerable<TrackRow> rows)
+    {
+        int i = 0; bool any = false;
+        foreach (var r in rows) if (!_queue.Contains(r)) { _queue.Insert(i++, r); any = true; }
+        if (any) RebuildUpNext();
+    }
+    public void QueueAdd(IEnumerable<TrackRow> rows)
+    {
+        bool any = false;
+        foreach (var r in rows) if (!_queue.Contains(r)) { _queue.Add(r); any = true; }
+        if (any) RebuildUpNext();
+    }
+    // ---- Cover Flow ---------------------------------------------------------------------------------
+    public bool CoverFlowAvailable => Tracks.Count > 0;
+
+    /// <summary>Build the deck for a browse mode from the CURRENT view's rows. Songs = one card per track;
+    /// Albums / Artists = one card per group (sorted, seeded tile + the group's first decoded cover). Returns
+    /// the cards, the index to centre on (the now-playing item, else 0), and the Tag to mark "Now Playing".</summary>
+    public (List<Controls.CoverFlowView.CoverItem> items, int start, object? playing) BuildCoverFlow(string mode)
+    {
+        var rows = Tracks.ToList();
+        var items = new List<Controls.CoverFlowView.CoverItem>();
+        object? playing = null;
+        int start = 0;
+
+        static string AlbumKey(TrackRow r) => Norm(r.Album);
+        static string ArtistKey(TrackRow r) => Norm(r.Artist);
+
+        if (mode == "Songs")
+        {
+            foreach (var r in rows.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase))
+            {
+                items.Add(new(r.Art, AppTheme.ArtTileBrush(string.IsNullOrEmpty(r.Album) ? r.Title : r.Album),
+                    r.Title, string.Join("   ·   ", new[] { r.Artist, r.Album }.Where(s => !string.IsNullOrEmpty(s))), r));
+                if (ReferenceEquals(r, _nowRow)) { playing = r; start = items.Count - 1; }
+            }
+        }
+        else if (mode == "Artists")
+        {
+            foreach (var g in rows.GroupBy(ArtistKey).OrderBy(g => g.Key == "" ? "￿" : g.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var rep = g.First();
+                string name = string.IsNullOrEmpty(rep.Artist) ? "Unknown Artist" : rep.Artist;
+                int albums = g.Select(AlbumKey).Distinct().Count();
+                items.Add(new(rep.Art, AppTheme.ArtTileBrush(name), name,
+                    $"{albums} album{(albums == 1 ? "" : "s")}   ·   {g.Count()} song{(g.Count() == 1 ? "" : "s")}", rep));
+                if (_nowRow is not null && ArtistKey(_nowRow) == g.Key) { playing = rep; start = items.Count - 1; }
+            }
+        }
+        else // Albums
+        {
+            foreach (var g in rows.GroupBy(AlbumKey).OrderBy(g => g.First().Album ?? "", StringComparer.OrdinalIgnoreCase))
+            {
+                var rep = g.First();
+                string name = string.IsNullOrEmpty(rep.Album) ? "Unknown Album" : rep.Album;
+                items.Add(new(rep.Art, AppTheme.ArtTileBrush(name), name,
+                    $"{(string.IsNullOrEmpty(rep.Artist) ? "Unknown Artist" : rep.Artist)}   ·   {g.Count()} song{(g.Count() == 1 ? "" : "s")}", rep));
+                if (_nowRow is not null && AlbumKey(_nowRow) == g.Key) { playing = rep; start = items.Count - 1; }
+            }
+        }
+        return (items, start, playing);
+    }
+
+    /// <summary>Activate a cover: play its representative row (context = the current view, so Next/Prev walk it).</summary>
+    public void CoverFlowActivate(object? tag) { if (tag is TrackRow r) PlayRow(r); }
+
+    public void QueueClear() { if (_queue.Count > 0) { _queue.Clear(); RebuildUpNext(); } }
+    public void QueueRemove(TrackRow? r) { if (r is not null && _queue.Remove(r)) RebuildUpNext(); }
+    public void JumpTo(TrackRow? r)
+    {
+        if (r is null) return;
+        if (_queue.Remove(r)) { Depart(); SyncCtxIndex(r); PlayInternal(r); RebuildUpNext(); return; }
+        int i = _ctx.IndexOf(r);
+        if (i >= 0 && Playable(r)) { Depart(); _ctxIndex = i; PlayInternal(r); RebuildUpNext(); }
     }
 
     private static string FmtClock(long ms)

@@ -7,31 +7,65 @@
     <FluentTheme />
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
 
-    <!-- Generic action buttons (Refresh / Open folder / Add folder / Add music / Done / empty-state CTAs) get the
-         app's hand-crafted "chip" look instead of default Fluent. Scoped with :not(...) so the classed buttons
-         (.play/.ghost/.winbtn/.star) keep their own explicit styling untouched. -->
-    <!-- literal greys (not StaticResource): resources aren't in scope yet when Application.Styles is built.
-         These are fixed brand greys (SubtleBrush #A8ACB0 / TextBrush #F2F2F3), never accent-retinted. -->
-    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star)">
-      <Setter Property="Background" Value="#1CFFFFFF"/>
-      <Setter Property="Foreground" Value="#A8ACB0"/>
-      <Setter Property="CornerRadius" Value="8"/>
+    <!-- Generic action buttons (Refresh / Open folder / Cover Flow / Done / empty-state CTAs) get the
+         Windows app's ThemedButton chip look: RowBg fill, 1px lightened border, TextCol semibold label,
+         full-pill corners, hover goes slightly DARKER (RowHover). Scoped with :not(...) so the classed
+         buttons (.play/.ghost/.winbtn/.star) keep their own explicit styling untouched.
+         DynamicResource (not StaticResource): resources aren't in scope yet while Application.Styles is
+         parsed — Dynamic defers the lookup and also follows the theme retint. -->
+    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):not(.xicon):not(.xnav):not(.cfseg):not(.cfclose)">
+      <Setter Property="Background" Value="{DynamicResource RowBgBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipBorderBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="15"/>
       <Setter Property="Padding" Value="12,6"/>
-      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
     </Style>
-    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#26FFFFFF"/>
-      <Setter Property="Foreground" Value="#F2F2F3"/>
+    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):not(.xicon):not(.xnav):not(.cfseg):not(.cfclose):pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource RowHoverBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource ChipBorderBrush}"/>
     </Style>
-    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):pressed /template/ ContentPresenter">
-      <Setter Property="Background" Value="#14FFFFFF"/>
+    <Style Selector="Button:not(.play):not(.ghost):not(.winbtn):not(.star):not(.xicon):not(.xnav):not(.cfseg):not(.cfclose):pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource RowHoverBrush}"/>
+    </Style>
+
+    <!-- primary action (+ Add music / + Add folder): accent fill, near-black OnAccent label
+         (Avalonia applies styles in declaration order, so these later rules win over the base chip) -->
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}"/>
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PrimaryHoverBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}"/>
+    </Style>
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+    </Style>
+
+    <!-- danger action (Delete): chip fill with the error-red label + red-washed border -->
+    <Style Selector="Button.danger">
+      <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}"/>
+    </Style>
+    <Style Selector="Button.danger:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource DangerHoverBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}"/>
     </Style>
   </Application.Styles>
 
   <Application.Resources>
-    <!-- Match the WinForms app's "Graphite + Teal" palette. -->
+    <!-- Match the WinForms app's palette. Every brush below is retinted in place by AppTheme.Apply
+         (same instance, mutated Color), so StaticResource users follow accent/variant changes live.
+         The values here are only the pre-Apply defaults (Graphite + Teal). -->
     <Color x:Key="SystemAccentColor">#00C8AA</Color>
     <Color x:Key="SystemAccentColorDark1">#00B49A</Color>
     <Color x:Key="SystemAccentColorDark2">#009E88</Color>
@@ -40,13 +74,42 @@
     <Color x:Key="SystemAccentColorLight2">#5BDDCB</Color>
     <Color x:Key="SystemAccentColorLight3">#84E7DB</Color>
 
-    <SolidColorBrush x:Key="WallpaperBrush" Color="#0E0F10"/>
+    <SolidColorBrush x:Key="WallpaperBrush" Color="#0D0E10"/>
     <SolidColorBrush x:Key="SidebarBrush" Color="#16171A"/>
     <SolidColorBrush x:Key="AppBrush" Color="#1D1E22"/>
     <SolidColorBrush x:Key="PanelBrush" Color="#282B30"/>
     <SolidColorBrush x:Key="AccentBrush" Color="#00C8AA"/>
+    <SolidColorBrush x:Key="AccentBrightBrush" Color="#47D7C1"/>
+    <SolidColorBrush x:Key="OnAccentBrush" Color="#0C1012"/>
     <SolidColorBrush x:Key="TextBrush" Color="#F2F2F3"/>
     <SolidColorBrush x:Key="SubtleBrush" Color="#A8ACB0"/>
+    <SolidColorBrush x:Key="FaintBrush" Color="#8A8F98"/>
     <SolidColorBrush x:Key="HairlineBrush" Color="#2C2E33"/>
+    <SolidColorBrush x:Key="OutlineBrush" Color="#2C2F31"/>
+    <SolidColorBrush x:Key="RowHoverBrush" Color="#262A2E"/>
+    <SolidColorBrush x:Key="RowBgBrush" Color="#32353A"/>
+    <SolidColorBrush x:Key="RowDividerBrush" Color="#232428"/>
+    <SolidColorBrush x:Key="ChipBorderBrush" Color="#454749"/>
+    <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#23CFB5"/>
+    <SolidColorBrush x:Key="PrimaryBorderBrush" Color="#1ECEB4"/>
+    <SolidColorBrush x:Key="ErrorBrush" Color="#FF786E"/>
+    <SolidColorBrush x:Key="DangerBorderBrush" Color="#AB6B66"/>
+    <SolidColorBrush x:Key="DangerHoverBrush" Color="#4E3E41"/>
+    <SolidColorBrush x:Key="SearchFillBrush" Color="#141517"/>
+    <SolidColorBrush x:Key="KickerBrush" Color="#04AE95"/>
+    <SolidColorBrush x:Key="SelRowBrush" Color="#193232"/>
+    <SolidColorBrush x:Key="SidebarSelBrush" Color="#3000C8AA"/>
+    <SolidColorBrush x:Key="SidebarHoverBrush" Color="#232427"/>
+
+    <!-- Fluent DataGrid selection: the accent whisper tint at full strength (the theme's default
+         dims these colours with fractional opacities; the colours themselves are pre-blended). -->
+    <x:Double x:Key="DataGridRowSelectedBackgroundOpacity">1</x:Double>
+    <x:Double x:Key="DataGridRowSelectedUnfocusedBackgroundOpacity">1</x:Double>
+    <x:Double x:Key="DataGridRowSelectedHoveredBackgroundOpacity">1</x:Double>
+    <x:Double x:Key="DataGridRowSelectedHoveredUnfocusedBackgroundOpacity">1</x:Double>
+    <Color x:Key="DataGridRowSelectedBackgroundColor">#193232</Color>
+    <Color x:Key="DataGridRowSelectedUnfocusedBackgroundColor">#193232</Color>
+    <Color x:Key="DataGridRowSelectedHoveredBackgroundColor">#1A3B39</Color>
+    <Color x:Key="DataGridRowSelectedHoveredUnfocusedBackgroundColor">#1A3B39</Color>
   </Application.Resources>
 </Application>

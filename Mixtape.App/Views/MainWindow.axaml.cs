@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
@@ -23,6 +24,10 @@ public partial class MainWindow : Window
         var (accent, variant) = AppConfig.Load();
         AppTheme.Apply(accent, variant);
 
+        // The 60° gradient's endpoint depends on the window's aspect ratio (GDI+ angle-mode brushes
+        // normalise the stops over the rect's projection onto the axis) — recompute on resize.
+        SizeChanged += (_, _) => ApplyWallpaper();
+
         // Test aid: `--theme <accent> <variant>` previews a theme without saving (for screenshots).
         var cli = System.Environment.GetCommandLineArgs();
         int ti = System.Array.IndexOf(cli, "--theme");
@@ -33,6 +38,38 @@ public partial class MainWindow : Window
         {
             var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             t.Tick += (_, _) => { t.Stop(); if (_vm.Tracks.Count > 0) { SongGrid.SelectedItem = _vm.Tracks[0]; _vm.PlayRow(_vm.Tracks[0]); } };
+            t.Start();
+        }
+        // Test aid: `--showflyout upnext|eq` queues a couple tracks (for upnext) then opens the flyout.
+        var foArgs = Environment.GetCommandLineArgs();
+        int foi = System.Array.IndexOf(foArgs, "--showflyout");
+        if (foi >= 0 && foi + 1 < foArgs.Length)
+        {
+            string which = foArgs[foi + 1];
+            var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+            t.Tick += (_, _) =>
+            {
+                if (!_vm.CoverFlowAvailable) return;   // wait for the scan
+                t.Stop();
+                Activate();
+                if (_vm.Tracks.Count > 0) _vm.PlayRow(_vm.Tracks[0]);
+                if (which == "upnext" && _vm.Tracks.Count > 2) _vm.QueueAdd(new[] { _vm.Tracks[1], _vm.Tracks[2] });
+                // let the now-playing bar realise before opening its attached flyout
+                var t2 = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+                t2.Tick += (_, _) => { t2.Stop(); FlyoutBase.ShowAttachedFlyout(which == "upnext" ? QueueBtn : EqBtn); };
+                t2.Start();
+            };
+            t.Start();
+        }
+
+        // Test aid: `--coverflow [mode]` auto-opens Cover Flow shortly after launch (for headless screenshotting).
+        var cfArgs = Environment.GetCommandLineArgs();
+        if (cfArgs.Contains("--coverflow"))
+        {
+            int mi = System.Array.IndexOf(cfArgs, "--coverflow");
+            if (mi >= 0 && mi + 1 < cfArgs.Length && !cfArgs[mi + 1].StartsWith("-")) CoverFlow.SetMode(cfArgs[mi + 1]);
+            var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            t.Tick += (_, _) => { if (_vm.CoverFlowAvailable) { t.Stop(); OnCoverFlow(this, new RoutedEventArgs()); } };
             t.Start();
         }
     }
@@ -125,23 +162,105 @@ public partial class MainWindow : Window
         => _vm.PlayRow(SongGrid.SelectedItem as TrackRow);
 
     private void OnPlayPause(object? sender, RoutedEventArgs e) => _vm.PlayPause();
+    private void OnPrev(object? sender, RoutedEventArgs e) => _vm.Previous();
+    private void OnNext(object? sender, RoutedEventArgs e) => _vm.Next();
+    private void OnShuffle(object? sender, RoutedEventArgs e) => _vm.ToggleShuffle();
+    private void OnRepeat(object? sender, RoutedEventArgs e) => _vm.CycleRepeat();
+    private void OnMute(object? sender, RoutedEventArgs e) => _vm.ToggleMute();
+    private void OnEq(object? sender, RoutedEventArgs e) { if (sender is Control c) FlyoutBase.ShowAttachedFlyout(c); }
+    private void OnEqFlat(object? sender, RoutedEventArgs e) => _vm.EqFlat();
+    private void OnQueue(object? sender, RoutedEventArgs e) { if (sender is Control c) FlyoutBase.ShowAttachedFlyout(c); }
+    private void OnQueueClear(object? sender, RoutedEventArgs e) => _vm.QueueClear();
+    private void OnQueueRemove(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: MainViewModel.QueueRow q }) _vm.QueueRemove(q.Row);
+    }
+    private void OnQueueRowTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is Control { DataContext: MainViewModel.QueueRow q } && !q.IsNowPlaying) _vm.JumpTo(q.Row);
+    }
+
+    private System.Collections.Generic.List<TrackRow> SelectedRows()
+        => SongGrid.SelectedItems.OfType<TrackRow>().ToList();
+    private void OnCtxPlay(object? sender, RoutedEventArgs e)
+    {
+        var r = SongGrid.SelectedItem as TrackRow ?? SelectedRows().FirstOrDefault();
+        if (r is not null) _vm.PlayRow(r);
+    }
+    private void OnCtxPlayNext(object? sender, RoutedEventArgs e) => _vm.QueuePlayNext(SelectedRows());
+    private void OnCtxAddQueue(object? sender, RoutedEventArgs e) => _vm.QueueAdd(SelectedRows());
+
+    // ---- Cover Flow ----
+    private bool _coverFlowWired;
+    private void OnCoverFlow(object? sender, RoutedEventArgs e)
+    {
+        if (!_coverFlowWired)
+        {
+            CoverFlow.Activated += it => { _vm.CoverFlowActivate(it.Tag); CoverFlow.PlayingTag = it.Tag; };
+            CoverFlow.CloseRequested += () => CoverFlow.IsVisible = false;
+            CoverFlow.ModeChanged += _ => PopulateCoverFlow();
+            _coverFlowWired = true;
+        }
+        PopulateCoverFlow();
+        CoverFlow.IsVisible = true;
+        CoverFlow.Focus();
+    }
+    private void PopulateCoverFlow()
+    {
+        var (items, start, playing) = _vm.BuildCoverFlow(CoverFlow.Mode);
+        CoverFlow.PlayingTag = playing;
+        CoverFlow.SetItems(items, start);
+    }
 
     private void OnSettings(object? sender, RoutedEventArgs e) => new SettingsWindow().ShowDialog(this);
 
-    // Repaint the wallpaper gradient + accent glow for the current theme.
+    // Repaint the wallpaper (60° 4-stop gradient + both glows) and the theme-baked gradients
+    // (scroll-edge fade, idle now-playing tile) for the current theme.
     private void ApplyWallpaper()
     {
-        var (top, mid, bot, glow) = AppTheme.Wallpaper();
+        var (a0, a1, mid, a3, glow1, glow2) = AppTheme.Wallpaper();
+        // GDI+ angle-mode gradient at 60°: stops 0..1 span the rect's projection onto the 60° axis,
+        // so the axis endpoint is the far corner's projection — aspect-ratio dependent.
+        double w = Math.Max(1, Root.Bounds.Width > 0 ? Root.Bounds.Width : Width);
+        double h = Math.Max(1, Root.Bounds.Height > 0 ? Root.Bounds.Height : Height);
+        const double cos60 = 0.5, sin60 = 0.8660254;
+        double pmax = w * cos60 + h * sin60;
         Root.Background = new LinearGradientBrush
         {
             StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-            EndPoint = new RelativePoint(0.53, 0.85, RelativeUnit.Relative),
-            GradientStops = { new GradientStop(top, 0), new GradientStop(mid, 0.45), new GradientStop(bot, 1) },
+            EndPoint = new RelativePoint(pmax * cos60 / w, pmax * sin60 / h, RelativeUnit.Relative),
+            GradientStops =
+            {
+                new GradientStop(a0, 0), new GradientStop(a1, 0.30),
+                new GradientStop(mid, 0.62), new GradientStop(a3, 1),
+            },
         };
-        Background = new SolidColorBrush(top);
+        Background = new SolidColorBrush(a0);
         Glow.Fill = new RadialGradientBrush
         {
-            GradientStops = { new GradientStop(glow, 0), new GradientStop(Color.FromArgb(0, glow.R, glow.G, glow.B), 1) },
+            GradientStops = { new GradientStop(glow1, 0), new GradientStop(Color.FromArgb(0, glow1.R, glow1.G, glow1.B), 1) },
+        };
+        Glow2.Fill = new RadialGradientBrush
+        {
+            GradientStops = { new GradientStop(glow2, 0), new GradientStop(Color.FromArgb(0, glow2.R, glow2.G, glow2.B), 1) },
+        };
+
+        // Scroll-edge fade: rows dissolve into the CARD colour, so it must follow the theme's Bg.
+        var bg = (Application.Current?.Resources["AppBrush"] as SolidColorBrush)?.Color ?? Color.Parse("#1D1E22");
+        ScrollFade.Background = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+            GradientStops = { new GradientStop(bg, 0), new GradientStop(Color.FromArgb(0, bg.R, bg.G, bg.B), 1) },
+        };
+
+        // Idle now-playing art placeholder: neutral sidebar-derived tile.
+        var (tileTop, tileBot) = AppTheme.IdleTile();
+        NowTile.Background = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0.5, 0.866, RelativeUnit.Relative),
+            GradientStops = { new GradientStop(tileTop, 0), new GradientStop(tileBot, 1) },
         };
     }
 

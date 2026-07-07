@@ -22,13 +22,37 @@ internal static class AppConfig
         return ("Teal", "Graphite");
     }
 
-    public static void Save(string accent, string variant)
+    /// <summary>Shuffle + repeat mode, shared with the Windows app (keys "Shuffle" bool + "RepeatMode" enum name).</summary>
+    public static (bool shuffle, string repeat) LoadModes()
+    {
+        try
+        {
+            if (File.Exists(FilePath) && JsonNode.Parse(File.ReadAllText(FilePath)) is JsonObject o)
+                return (o["Shuffle"]?.GetValue<bool>() ?? false, o["RepeatMode"]?.GetValue<string>() ?? "Off");
+        }
+        catch { }
+        return (false, "Off");
+    }
+
+    public static void SaveModes(bool shuffle, string repeat) => Merge(o =>
+    {
+        o["Shuffle"] = shuffle;
+        o["RepeatMode"] = repeat;
+    });
+
+    public static void Save(string accent, string variant) => Merge(o =>
+    {
+        o["Accent"] = accent;
+        o["ThemeVariant"] = variant;
+    });
+
+    /// <summary>Read-modify-write the shared settings.json atomically, preserving every key the other app wrote.</summary>
+    private static void Merge(Action<JsonObject> mutate)
     {
         try
         {
             JsonObject o = (File.Exists(FilePath) && JsonNode.Parse(File.ReadAllText(FilePath)) is JsonObject e) ? e : new JsonObject();
-            o["Accent"] = accent;
-            o["ThemeVariant"] = variant;
+            mutate(o);
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             // Atomic write (temp + replace), mirroring the WinForms AppSettings.Save — so a crash mid-write can't
             // truncate the settings.json the two apps share and wipe the Windows app's library/playlist/cover data.

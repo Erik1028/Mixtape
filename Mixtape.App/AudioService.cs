@@ -23,6 +23,11 @@ public sealed class AudioService : IDisposable
     /// <summary>Raised (on a VLC thread) when time/length/state changes — marshal to the UI yourself.</summary>
     public event Action? Changed;
 
+    /// <summary>Raised (on a VLC thread) when the current track reaches its end — the VM uses this to
+    /// auto-advance the queue. CAUTION: you must NOT call player methods synchronously from this handler
+    /// (LibVLC deadlocks); marshal to the UI thread (Dispatcher.Post) before touching playback.</summary>
+    public event Action? Ended;
+
     public AudioService()
     {
         try
@@ -35,7 +40,7 @@ public sealed class AudioService : IDisposable
             _player.Playing += (_, _) => Changed?.Invoke();
             _player.Paused += (_, _) => Changed?.Invoke();
             _player.Stopped += (_, _) => Changed?.Invoke();
-            _player.EndReached += (_, _) => Changed?.Invoke();
+            _player.EndReached += (_, _) => { Changed?.Invoke(); Ended?.Invoke(); };
         }
         catch (Exception ex)
         {
