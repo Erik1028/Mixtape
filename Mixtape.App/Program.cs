@@ -9,6 +9,12 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // Language is fixed for the process (restart-to-apply), resolved once before any UI is built so the
+        // {l:Loc} markup extension and VM strings pick it up. Shared with the Windows app via settings.json.
+        // `--lang hu|en` forces it (test/preview aid), overriding the saved setting.
+        int li = Array.IndexOf(args, "--lang");
+        Loc.Lang = li >= 0 && li + 1 < args.Length ? Loc.Resolve(args[li + 1]) : Loc.Resolve(AppConfig.LoadLanguage());
+
         // Headless self-tests (no GUI).
         if (args.Length >= 2 && args[0] == "--audiotest") { AudioSelfTest(args[1]); return; }
         if (args.Length >= 2 && args[0] == "--makesandbox") { MakeSandbox(args[1]); return; }

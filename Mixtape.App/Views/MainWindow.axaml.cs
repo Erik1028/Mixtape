@@ -7,6 +7,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Mixtape.App.ViewModels;
+using iPodCommander;   // the shared engine (Playlist etc.) lives in the iPodCommander namespace (Mixtape.Core)
 
 namespace Mixtape.App.Views;
 
@@ -40,6 +41,14 @@ public partial class MainWindow : Window
             t.Tick += (_, _) => { t.Stop(); if (_vm.Tracks.Count > 0) { SongGrid.SelectedItem = _vm.Tracks[0]; _vm.PlayRow(_vm.Tracks[0]); } };
             t.Start();
         }
+        // Test aid: `--newplaylist` opens the create-playlist prompt shortly after launch (dialog screenshot).
+        if (Environment.GetCommandLineArgs().Contains("--newplaylist"))
+        {
+            var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            t.Tick += (_, _) => { t.Stop(); Activate(); OnNewPlaylist(this, new RoutedEventArgs()); };
+            t.Start();
+        }
+
         // Test aid: `--showflyout upnext|eq` queues a couple tracks (for upnext) then opens the flyout.
         var foArgs = Environment.GetCommandLineArgs();
         int foi = System.Array.IndexOf(foArgs, "--showflyout");
@@ -189,6 +198,53 @@ public partial class MainWindow : Window
     }
     private void OnCtxPlayNext(object? sender, RoutedEventArgs e) => _vm.QueuePlayNext(SelectedRows());
     private void OnCtxAddQueue(object? sender, RoutedEventArgs e) => _vm.QueueAdd(SelectedRows());
+
+    // ---- playlist editing ----
+    private async void OnNewPlaylist(object? sender, RoutedEventArgs e)
+    {
+        var name = await Dialogs.PromptAsync(this, "New playlist", "Create", "New Playlist");
+        if (!string.IsNullOrWhiteSpace(name)) _vm.CreatePlaylist(name);
+    }
+    private async void OnRenamePlaylist(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: SidebarItem { Playlist: { } pl } }) return;
+        var name = await Dialogs.PromptAsync(this, "Rename playlist", "Rename", pl.Name ?? "");
+        if (!string.IsNullOrWhiteSpace(name)) _vm.RenamePlaylist(pl, name);
+    }
+    private async void OnDeletePlaylist(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: SidebarItem { Playlist: { } pl } }) return;
+        var nm = string.IsNullOrEmpty(pl.Name) ? "this playlist" : $"“{pl.Name}”";
+        if (await Dialogs.ConfirmAsync(this, "Delete playlist", $"Delete {nm}? The songs stay in your library.", "Delete"))
+            _vm.DeletePlaylist(pl);
+    }
+    private void OnCtxRemoveFromPlaylist(object? sender, RoutedEventArgs e) => _vm.RemoveFromCurrentPlaylist(SelectedRows());
+
+    // Populate the "Add to playlist ▸" submenu each time the song context menu opens (playlists change).
+    private void OnSongMenuOpening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        AddToPlaylistMenu.Items.Clear();
+        var rows = SelectedRows();
+        var newItem = new MenuItem { Header = "New playlist…" };
+        newItem.Click += async (_, _) =>
+        {
+            var name = await Dialogs.PromptAsync(this, "New playlist", "Create & add", "New Playlist");
+            if (string.IsNullOrWhiteSpace(name)) return;
+            _vm.CreatePlaylist(name);
+            var pl = _vm.EditablePlaylists.FirstOrDefault(p => p.Name == name.Trim());
+            if (pl is not null) _vm.AddToPlaylist(pl, rows);
+        };
+        AddToPlaylistMenu.Items.Add(newItem);
+        var pls = _vm.EditablePlaylists;
+        if (pls.Count > 0) AddToPlaylistMenu.Items.Add(new Separator());
+        foreach (var pl in pls)
+        {
+            var mi = new MenuItem { Header = string.IsNullOrEmpty(pl.Name) ? "Untitled playlist" : pl.Name };
+            var target = pl;
+            mi.Click += (_, _) => _vm.AddToPlaylist(target, rows);
+            AddToPlaylistMenu.Items.Add(mi);
+        }
+    }
 
     // ---- Cover Flow ----
     private bool _coverFlowWired;

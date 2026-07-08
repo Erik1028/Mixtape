@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:app="using:Mixtape.App"
+        xmlns:l="using:Mixtape.App"
         xmlns:controls="using:Mixtape.App.Controls"
         x:Class="Mixtape.App.Views.MainWindow"
         Title="Mixtape" Width="1040" Height="660"
@@ -263,9 +264,9 @@
 
           <!-- footer: Refresh + Open folder, pinned at the bottom (matches the Windows build) -->
           <Grid DockPanel.Dock="Bottom" Margin="10,6,10,10" ColumnDefinitions="*,8,*">
-            <Button Grid.Column="0" Content="Refresh" Click="OnRefresh"
+            <Button Grid.Column="0" Content="{l:Loc 'Refresh'}" Click="OnRefresh"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-            <Button Grid.Column="2" Content="Open folder" Click="OnOpenFolder"
+            <Button Grid.Column="2" Content="{l:Loc 'Open folder'}" Click="OnOpenFolder"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
           </Grid>
 
@@ -292,16 +293,28 @@
             <ListBox.ItemTemplate>
               <DataTemplate>
                 <Panel>
-                  <!-- section header row -->
-                  <TextBlock Text="{Binding Title}" IsVisible="{Binding IsHeader}"
-                             Foreground="{StaticResource FaintBrush}" FontSize="10.5" FontWeight="Bold"
-                             Margin="2,10,0,2"/>
+                  <!-- section header row (the PLAYLISTS one carries a "+" to create a playlist) -->
+                  <Grid IsVisible="{Binding IsHeader}" ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="{Binding Title}"
+                               Foreground="{StaticResource FaintBrush}" FontSize="10.5" FontWeight="Bold"
+                               Margin="2,10,0,2" VerticalAlignment="Bottom"/>
+                    <Button Grid.Column="1" Classes="ghost" Content="+" FontSize="15" Width="22" Height="22" Margin="0,6,2,0"
+                            IsVisible="{Binding IsPlaylistsHeader}"
+                            IsEnabled="{Binding DataContext.CanEditPlaylists, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                            Click="OnNewPlaylist" ToolTip.Tip="{l:Loc 'New playlist'}"/>
+                  </Grid>
                   <!-- normal row -->
                   <StackPanel Orientation="Horizontal" Spacing="11" IsVisible="{Binding !IsHeader}">
                     <TextBlock Text="{Binding Glyph}" FontSize="13" Width="16"
                                Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextBrush}"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                    <StackPanel.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="{l:Loc 'Rename…'}" Click="OnRenamePlaylist" IsVisible="{Binding IsPlaylist}"/>
+                        <MenuItem Header="{l:Loc 'Delete playlist'}" Click="OnDeletePlaylist" IsVisible="{Binding IsPlaylist}"/>
+                      </ContextMenu>
+                    </StackPanel.ContextMenu>
                   </StackPanel>
                 </Panel>
               </DataTemplate>
@@ -335,16 +348,16 @@
               <TextBlock Text="{Binding HeaderSubtitle}" Foreground="{StaticResource SubtleBrush}" FontSize="12"/>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-              <Button Content="Cover Flow" Click="OnCoverFlow" IsVisible="{Binding CoverFlowAvailable}"/>
-              <Button Classes="primary" Content="+ Add music" Click="OnAddMusic" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
-              <Button Classes="danger" Content="Delete" Click="OnDelete" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
-              <Button Classes="primary" Content="+ Add folder" Click="OnAddFolder" IsVisible="{Binding IsLocalView}"/>
+              <Button Content="{l:Loc 'Cover Flow'}" Click="OnCoverFlow" IsVisible="{Binding CoverFlowAvailable}"/>
+              <Button Classes="primary" Content="{l:Loc '+ Add music'}" Click="OnAddMusic" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
+              <Button Classes="danger" Content="{l:Loc 'Delete'}" Click="OnDelete" IsVisible="{Binding IsIpodView}" IsEnabled="{Binding CanWrite}"/>
+              <Button Classes="primary" Content="{l:Loc '+ Add folder'}" Click="OnAddFolder" IsVisible="{Binding IsLocalView}"/>
             </StackPanel>
           </Grid>
 
           <!-- search -->
           <TextBox DockPanel.Dock="Top" Margin="22,0,22,8"
-                   Watermark="Search songs, artists, albums…"
+                   Watermark="{l:Loc 'Search songs, artists, albums…'}"
                    Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
           <!-- status bar -->
@@ -381,13 +394,13 @@
 
               <!-- transport cluster -->
               <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="8,0">
-                <Button Classes="xicon" Classes.active="{Binding Shuffle}" Click="OnShuffle" ToolTip.Tip="Shuffle">
+                <Button Classes="xicon" Classes.active="{Binding Shuffle}" Click="OnShuffle" ToolTip.Tip="{l:Loc 'Shuffle'}">
                   <Canvas Width="24" Height="24">
                     <Path Data="{StaticResource GlyphShuffleLines}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.7" StrokeLineCap="Round" StrokeJoin="Round"/>
                     <Path Data="{StaticResource GlyphShuffleHeads}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                   </Canvas>
                 </Button>
-                <Button Classes="xnav" Click="OnPrev" ToolTip.Tip="Previous">
+                <Button Classes="xnav" Click="OnPrev" ToolTip.Tip="{l:Loc 'Previous'}">
                   <Path Data="{StaticResource GlyphPrev}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Width="24" Height="24"/>
                 </Button>
                 <Button Classes="play" Classes.playing="{Binding IsPlaying}" x:Name="PlayBtn" Click="OnPlayPause" Margin="4,0">
@@ -396,10 +409,10 @@
                     <Path Classes="pglyph pauseG" Data="{StaticResource GlyphPause}" Fill="{StaticResource OnAccentBrush}"/>
                   </Canvas>
                 </Button>
-                <Button Classes="xnav" Click="OnNext" ToolTip.Tip="Next">
+                <Button Classes="xnav" Click="OnNext" ToolTip.Tip="{l:Loc 'Next'}">
                   <Path Data="{StaticResource GlyphNext}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Width="24" Height="24"/>
                 </Button>
-                <Button Classes="xicon" Classes.active="{Binding RepeatActive}" Click="OnRepeat" ToolTip.Tip="Repeat">
+                <Button Classes="xicon" Classes.active="{Binding RepeatActive}" Click="OnRepeat" ToolTip.Tip="{l:Loc 'Repeat'}">
                   <Canvas Width="24" Height="24">
                     <Path Data="{StaticResource GlyphRepeatRing}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.7" StrokeLineCap="Round"/>
                     <Path Data="{StaticResource GlyphRepeatHead}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
@@ -435,9 +448,9 @@
                         <DockPanel MaxHeight="460">
                           <!-- header: Up Next + count + Clear -->
                           <Grid DockPanel.Dock="Top" Margin="16,14,12,8" ColumnDefinitions="Auto,Auto,*,Auto">
-                            <TextBlock Grid.Column="0" Text="Up Next" Foreground="{StaticResource TextBrush}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="0" Text="{l:Loc 'Up Next'}" Foreground="{StaticResource TextBrush}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
                             <TextBlock Grid.Column="1" Text="{Binding QueueCount}" Foreground="{StaticResource FaintBrush}" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center" IsVisible="{Binding HasQueue}"/>
-                            <Button Grid.Column="3" Classes="ghost" Content="Clear" Width="52" Click="OnQueueClear" IsVisible="{Binding HasQueue}"/>
+                            <Button Grid.Column="3" Classes="ghost" Content="{l:Loc 'Clear'}" Width="52" Click="OnQueueClear" IsVisible="{Binding HasQueue}"/>
                           </Grid>
                           <TextBlock DockPanel.Dock="Bottom" Text="{Binding UpNextHint}" Foreground="{StaticResource FaintBrush}" FontSize="11"
                                      Margin="16,4,16,12" TextWrapping="Wrap" IsVisible="{Binding UpNextHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
@@ -484,8 +497,8 @@
                       <Border Width="360" Background="{StaticResource SidebarBrush}" CornerRadius="12" Padding="16,14">
                         <StackPanel Spacing="12">
                           <Grid ColumnDefinitions="Auto,*,Auto,Auto">
-                            <TextBlock Grid.Column="0" Text="Equalizer" Foreground="{StaticResource TextBrush}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                            <Button Grid.Column="2" Classes="ghost" Content="Flat" Width="46" Click="OnEqFlat" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="0" Text="{l:Loc 'Equalizer'}" Foreground="{StaticResource TextBrush}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <Button Grid.Column="2" Classes="ghost" Content="{l:Loc 'Flat'}" Width="46" Click="OnEqFlat" Margin="0,0,8,0"/>
                             <ToggleSwitch Grid.Column="3" IsChecked="{Binding EqOn, Mode=TwoWay}" OnContent="On" OffContent="Off"/>
                           </Grid>
                           <ItemsControl ItemsSource="{Binding EqBands}">
@@ -521,10 +534,13 @@
                     CanUserResizeColumns="False" CanUserReorderColumns="False"
                     CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
             <DataGrid.ContextMenu>
-              <ContextMenu>
-                <MenuItem Header="Play" Click="OnCtxPlay"/>
-                <MenuItem Header="Play next" Click="OnCtxPlayNext"/>
-                <MenuItem Header="Add to queue" Click="OnCtxAddQueue"/>
+              <ContextMenu Opening="OnSongMenuOpening">
+                <MenuItem Header="{l:Loc 'Play'}" Click="OnCtxPlay"/>
+                <MenuItem Header="{l:Loc 'Play next'}" Click="OnCtxPlayNext"/>
+                <MenuItem Header="{l:Loc 'Add to queue'}" Click="OnCtxAddQueue"/>
+                <Separator IsVisible="{Binding CanEditPlaylists}"/>
+                <MenuItem x:Name="AddToPlaylistMenu" Header="{l:Loc 'Add to playlist'}" IsVisible="{Binding CanEditPlaylists}"/>
+                <MenuItem Header="{l:Loc 'Remove from this playlist'}" Click="OnCtxRemoveFromPlaylist" IsVisible="{Binding IsPlaylistView}"/>
               </ContextMenu>
             </DataGrid.ContextMenu>
             <DataGrid.Columns>
@@ -548,7 +564,7 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTemplateColumn Header="SONG" Width="2*">
+              <DataGridTemplateColumn Header="{l:Loc 'SONG'}" Width="2*">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <TextBlock Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center"
@@ -556,9 +572,9 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="ARTIST" Binding="{Binding Artist}" Width="1.4*" Foreground="{StaticResource SubtleBrush}"/>
-              <DataGridTextColumn Header="ALBUM"  Binding="{Binding Album}"  Width="1.6*" Foreground="{StaticResource SubtleBrush}"/>
-              <DataGridTemplateColumn Header="RATING" Width="110">
+              <DataGridTextColumn Header="{l:Loc 'ARTIST'}" Binding="{Binding Artist}" Width="1.4*" Foreground="{StaticResource SubtleBrush}"/>
+              <DataGridTextColumn Header="{l:Loc 'ALBUM'}"  Binding="{Binding Album}"  Width="1.6*" Foreground="{StaticResource SubtleBrush}"/>
+              <DataGridTemplateColumn Header="{l:Loc 'RATING'}" Width="110">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0"
@@ -572,8 +588,8 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="PLAYS"  Binding="{Binding Plays}"  Width="88" Foreground="{StaticResource SubtleBrush}"/>
-              <DataGridTemplateColumn Header="ADDED" Width="104">
+              <DataGridTextColumn Header="{l:Loc 'PLAYS'}"  Binding="{Binding Plays}"  Width="88" Foreground="{StaticResource SubtleBrush}"/>
+              <DataGridTemplateColumn Header="{l:Loc 'ADDED'}" Width="104">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <Panel VerticalAlignment="Center">
@@ -584,7 +600,7 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="TIME"   Binding="{Binding Time}"   Width="74" Foreground="{StaticResource SubtleBrush}"/>
+              <DataGridTextColumn Header="{l:Loc 'TIME'}"   Binding="{Binding Time}"   Width="74" Foreground="{StaticResource SubtleBrush}"/>
             </DataGrid.Columns>
           </DataGrid>
           <!-- the fade sits just under the column header, so the first rows melt into the card
@@ -604,9 +620,9 @@
             </Border>
             <TextBlock Text="{Binding EmptyHeadline}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" HorizontalAlignment="Center"/>
             <TextBlock Text="{Binding EmptyHint}" FontSize="12.5" Foreground="{StaticResource SubtleBrush}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
-            <Button Classes="primary" Content="+ Add folder"  Click="OnAddFolder" IsVisible="{Binding EmptyAddFolderCta}"   HorizontalAlignment="Center" Margin="0,4,0,0"/>
-            <Button Classes="primary" Content="+ Add music"   Click="OnAddMusic"  IsVisible="{Binding EmptyAddMusicCta}"    HorizontalAlignment="Center" Margin="0,4,0,0"/>
-            <Button Content="Clear search"  Click="OnClearSearch" IsVisible="{Binding EmptyClearSearchCta}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Classes="primary" Content="{l:Loc '+ Add folder'}"  Click="OnAddFolder" IsVisible="{Binding EmptyAddFolderCta}"   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Classes="primary" Content="{l:Loc '+ Add music'}"   Click="OnAddMusic"  IsVisible="{Binding EmptyAddMusicCta}"    HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            <Button Content="{l:Loc 'Clear search'}"  Click="OnClearSearch" IsVisible="{Binding EmptyClearSearchCta}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
           </StackPanel>
 
           <!-- Cover Flow overlay: covers the song list only (header + search + transport stay visible),

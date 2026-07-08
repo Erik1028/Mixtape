@@ -14,6 +14,24 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         BuildAccents();
         BuildVariants();
+        BuildLanguages();
+    }
+
+    private void BuildLanguages()
+    {
+        string cur = iPodCommander.Loc.Lang;
+        foreach (var (code, native) in iPodCommander.Loc.Languages)
+        {
+            var btn = new Button { Content = native, Tag = code, FontWeight = code == cur ? FontWeight.Bold : FontWeight.Normal };
+            btn.Click += (_, _) =>
+            {
+                AppConfig.SaveLanguage(code);
+                foreach (var b in LanguagePanel.Children.OfType<Button>())
+                    b.FontWeight = (string?)b.Tag == code ? FontWeight.Bold : FontWeight.Normal;
+                RestartNote.IsVisible = code != iPodCommander.Loc.Lang;   // only prompt when it actually differs from the running language
+            };
+            LanguagePanel.Children.Add(btn);
+        }
     }
 
     private void BuildAccents()

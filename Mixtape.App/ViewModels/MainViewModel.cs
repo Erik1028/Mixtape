@@ -32,6 +32,8 @@ public sealed class SidebarItem
     public string Glyph { get; init; } = "";
     public SidebarKind Kind { get; init; }
     public bool IsHeader { get; init; }   // section label (DEVICE / LIBRARY / …) — not selectable
+    public bool IsPlaylistsHeader { get; init; }   // the PLAYLISTS header row (shows the "+" create affordance)
+    public bool IsPlaylist => Kind == SidebarKind.Playlist;   // gates the rename/delete context menu
     internal Playlist? Playlist { get; init; }
 }
 
@@ -154,7 +156,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void Refresh()
     {
         _devices.Clear();
-        try { _devices.AddRange(DeviceDetector.DetectAll()); }
+        try
+        {
+            // Test aid: `--ipod <mount>` forces a specific iPod folder (a sandbox) instead of scanning drives.
+            var cli = Environment.GetCommandLineArgs();
+            int ii = Array.IndexOf(cli, "--ipod");
+            if (ii >= 0 && ii + 1 < cli.Length && DeviceDetector.Build(cli[ii + 1]) is { } forced) _devices.Add(forced);
+            else _devices.AddRange(DeviceDetector.DetectAll());
+        }
         catch (Exception ex) { Status = "Couldn't scan for iPods: " + ex.Message; }
 
         _device = _devices.FirstOrDefault();
@@ -170,22 +179,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
                           ?? SidebarItems.FirstOrDefault(s => s.Kind == SidebarKind.LocalMusic);
     }
 
-    private static SidebarItem Header(string t) => new() { IsHeader = true, Title = t };
+    private static SidebarItem Header(string t, bool playlists = false) => new() { IsHeader = true, Title = t, IsPlaylistsHeader = playlists };
 
     private void BuildSidebar()
     {
         SidebarItems.Clear();
         if (_device is not null)
         {
-            SidebarItems.Add(Header("DEVICE"));
+            SidebarItems.Add(Header(Loc.T("DEVICE")));
             SidebarItems.Add(new SidebarItem { Kind = SidebarKind.Device, Glyph = "◉", Title = _device.Profile.ModelName ?? _device.Profile.ModelNumber ?? "iPod" });
         }
         if (_lib is not null)
         {
-            SidebarItems.Add(Header("LIBRARY"));
-            SidebarItems.Add(new SidebarItem { Kind = SidebarKind.AllSongs, Glyph = "♪", Title = "All songs" });
+            SidebarItems.Add(Header(Loc.T("LIBRARY")));
+            SidebarItems.Add(new SidebarItem { Kind = SidebarKind.AllSongs, Glyph = "♪", Title = Loc.T("All songs") });
             if (_lib.View.Tracks.Any(t => MediaType.IsVideo(t.MediaType)))
-                SidebarItems.Add(new SidebarItem { Kind = SidebarKind.Videos, Glyph = "▶", Title = "Videos" });
+                SidebarItems.Add(new SidebarItem { Kind = SidebarKind.Videos, Glyph = "▶", Title = Loc.T("Videos") });
 
             var seen = new HashSet<ulong>();
             var playlists = new List<SidebarItem>();
@@ -195,14 +204,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 if (pl.PersistentId != 0 && !seen.Add(pl.PersistentId)) continue;
                 playlists.Add(new SidebarItem { Kind = SidebarKind.Playlist, Glyph = "☰", Title = string.IsNullOrEmpty(pl.Name) ? "Untitled playlist" : pl.Name, Playlist = pl });
             }
-            if (playlists.Count > 0)
-            {
-                SidebarItems.Add(Header("PLAYLISTS"));
-                foreach (var p in playlists) SidebarItems.Add(p);
-            }
+            // The PLAYLISTS header is always shown (so its "+" can create the first list on a writable iPod).
+            SidebarItems.Add(Header(Loc.T("PLAYLISTS"), playlists: true));
+            foreach (var p in playlists) SidebarItems.Add(p);
         }
-        SidebarItems.Add(Header("ON THIS PC"));
-        SidebarItems.Add(new SidebarItem { Kind = SidebarKind.LocalMusic, Glyph = "▣", Title = "Local Music" });
+        SidebarItems.Add(Header(Loc.T("ON THIS PC")));
+        SidebarItems.Add(new SidebarItem { Kind = SidebarKind.LocalMusic, Glyph = "▣", Title = Loc.T("Local Music") });
     }
 
     // ---- view switching (mirrors ShowCurrent) ----
@@ -213,18 +220,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_searchText.Length > 0) { _searchText = ""; OnPropertyChanged(nameof(SearchText)); } // clear search on navigation
         IsLocalView = s.Kind == SidebarKind.LocalMusic;
         IsIpodView = _lib is not null && s.Kind is SidebarKind.AllSongs or SidebarKind.Videos or SidebarKind.Playlist or SidebarKind.Device;
+        _viewingPlaylist = s.Kind == SidebarKind.Playlist ? s.Playlist : null;
         OnPropertyChanged(nameof(CanWrite));
+        OnPropertyChanged(nameof(IsPlaylistView));
         switch (s.Kind)
         {
             case SidebarKind.LocalMusic: ShowLocalMusic(); break;
             case SidebarKind.Videos when _lib is not null:
-                ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsVideo(t.MediaType)), "LIBRARY", "Videos", "video"); break;
+                ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsVideo(t.MediaType)), Loc.T("LIBRARY"), Loc.T("Videos"), "video"); break;
             case SidebarKind.Playlist when s.Playlist is not null && _lib is not null:
                 ShowPlaylist(s.Playlist); break;
             case SidebarKind.Device when _lib is not null:
-                ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)), "DEVICE", _device?.Profile.ModelName ?? "iPod", "song"); break;
+                ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)), Loc.T("DEVICE"), _device?.Profile.ModelName ?? "iPod", "song"); break;
             case SidebarKind.AllSongs when _lib is not null:
-                ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)), "LIBRARY", "All songs", "song"); break;
+                ShowTracks(_lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)), Loc.T("LIBRARY"), Loc.T("All songs"), "song"); break;
         }
     }
 
@@ -320,6 +329,126 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SelectedSidebar = SidebarItems.FirstOrDefault(s => s.Kind == SidebarKind.AllSongs) ?? SidebarItems.FirstOrDefault();
     }
 
+    /// <summary>Reload the library from disk but keep the user where they are — re-selecting the same view
+    /// (or the playlist with <paramref name="selectPid"/>, e.g. a just-created one) after the sidebar rebuilds.</summary>
+    private void ReloadPreservingView(ulong? selectPid = null)
+    {
+        if (_device is null) return;
+        // remember the current selection so we can restore it after the rebuild
+        var cur = SelectedSidebar;
+        SidebarKind? kind = cur?.Kind;
+        ulong pid = selectPid ?? cur?.Playlist?.PersistentId ?? 0;
+
+        try { _lib = IpodLibrary.Load(_device); } catch { }
+        BuildSidebar();
+
+        SidebarItem? pick = null;
+        if (selectPid is not null || kind == SidebarKind.Playlist)
+            pick = SidebarItems.FirstOrDefault(s => s.IsPlaylist && s.Playlist?.PersistentId == pid);
+        pick ??= (kind is { } k && !(selectPid is not null))
+            ? SidebarItems.FirstOrDefault(s => s.Kind == k && !s.IsHeader)
+            : null;
+        SelectedSidebar = pick ?? SidebarItems.FirstOrDefault(s => s.Kind == SidebarKind.AllSongs) ?? SidebarItems.FirstOrDefault();
+    }
+
+    // ---- playlist editing (create / rename / delete / add / remove / reorder) --------------------------
+    private Playlist? _viewingPlaylist;
+    public bool IsPlaylistView => _viewingPlaylist is not null;
+    /// <summary>True when playlists can be created/edited (a writable iPod is connected).</summary>
+    public bool CanEditPlaylists => _lib is not null && _device is not null && _device.Profile.CanWrite;
+    /// <summary>The user's editable playlists, for the "Add to playlist ▸" submenu. Internal because Playlist
+    /// is an internal engine type (visible to this assembly via InternalsVisibleTo).</summary>
+    internal IReadOnlyList<Playlist> EditablePlaylists =>
+        _lib?.View.Playlists.Where(p => !p.IsMaster && !p.IsPodcast).ToList() ?? new List<Playlist>();
+
+    private static IEnumerable<uint> Ids(IEnumerable<TrackRow> rows) =>
+        rows.Select(r => r.Source?.UniqueId ?? 0).Where(id => id != 0);
+
+    public void CreatePlaylist(string name)
+    {
+        if (!CanEditPlaylists || _lib is null || string.IsNullOrWhiteSpace(name)) return;
+        try
+        {
+            ulong pid = _lib.CreatePlaylist(name.Trim());
+            _lib.Save();
+            ReloadPreservingView(selectPid: pid);
+            Status = $"Created playlist “{name.Trim()}”.";
+        }
+        catch (Exception ex) { Status = "Couldn't create the playlist (a backup was kept): " + ex.Message; }
+    }
+
+    internal void RenamePlaylist(Playlist? pl, string newName)
+    {
+        if (!CanEditPlaylists || _lib is null || pl is null || string.IsNullOrWhiteSpace(newName)) return;
+        try
+        {
+            if (!_lib.RenamePlaylist(pl, newName.Trim())) { Status = "That playlist can't be renamed."; return; }
+            _lib.Save();
+            ReloadPreservingView(selectPid: pl.PersistentId);
+            Status = $"Renamed to “{newName.Trim()}”.";
+        }
+        catch (Exception ex) { Status = "Rename failed (a backup was kept): " + ex.Message; }
+    }
+
+    internal void DeletePlaylist(Playlist? pl)
+    {
+        if (!CanEditPlaylists || _lib is null || pl is null) return;
+        try
+        {
+            if (!_lib.RemovePlaylist(pl)) { Status = "That playlist can't be deleted."; return; }
+            _lib.Save();
+            bool wasViewing = ReferenceEquals(pl, _viewingPlaylist);
+            ReloadLibrary();   // fall back to All songs (the playlist is gone)
+            Status = $"Deleted the playlist “{(string.IsNullOrEmpty(pl.Name) ? "Untitled" : pl.Name)}” (songs kept).";
+            _ = wasViewing;
+        }
+        catch (Exception ex) { Status = "Delete failed (a backup was kept): " + ex.Message; }
+    }
+
+    internal void AddToPlaylist(Playlist? pl, IEnumerable<TrackRow> rows)
+    {
+        if (!CanEditPlaylists || _lib is null || pl is null) return;
+        var ids = Ids(rows).ToList();
+        if (ids.Count == 0) return;
+        try
+        {
+            if (!_lib.AddToPlaylist(pl.PersistentId, ids)) { Status = "Those songs are already in that playlist."; return; }
+            _lib.Save();
+            ReloadPreservingView();
+            Status = $"Added {ids.Count} song{(ids.Count == 1 ? "" : "s")} to “{(string.IsNullOrEmpty(pl.Name) ? "Untitled" : pl.Name)}”.";
+        }
+        catch (Exception ex) { Status = "Couldn't add to the playlist (a backup was kept): " + ex.Message; }
+    }
+
+    public void RemoveFromCurrentPlaylist(IEnumerable<TrackRow> rows)
+    {
+        if (!CanEditPlaylists || _lib is null || _viewingPlaylist is null) return;
+        var ids = Ids(rows).ToList();
+        if (ids.Count == 0) return;
+        try
+        {
+            if (!_lib.RemoveFromPlaylist(_viewingPlaylist, ids)) { Status = "Nothing to remove."; return; }
+            _lib.Save();
+            ReloadPreservingView(selectPid: _viewingPlaylist.PersistentId);
+            Status = $"Removed {ids.Count} song{(ids.Count == 1 ? "" : "s")} from the playlist (kept in the library).";
+        }
+        catch (Exception ex) { Status = "Remove failed (a backup was kept): " + ex.Message; }
+    }
+
+    /// <summary>Persist a drag-reordered playlist. <paramref name="order"/> is the new full unique-id order.</summary>
+    public void ReorderCurrentPlaylist(IList<uint> order)
+    {
+        if (!CanEditPlaylists || _lib is null || _viewingPlaylist is null || order.Count == 0) return;
+        try
+        {
+            if (!_lib.ReorderPlaylist(_viewingPlaylist, order)) return;   // no-op (already in that order)
+            _lib.Save();
+            ReloadPreservingView(selectPid: _viewingPlaylist.PersistentId);
+            Status = "Playlist reordered.";
+        }
+        catch (Exception ex) { Status = "Reorder failed (a backup was kept): " + ex.Message; }
+    }
+
     private static string AudioKey(string? title, string? artist, string? album)
         => Norm(title) + "" + Norm(artist) + "" + Norm(album);
     private static string Norm(string? s)
@@ -334,7 +463,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var list = new List<Track>();
         foreach (var id in pl.TrackIds)
             if (_lib.View.FindByUniqueId(id) is { } t) list.Add(t);
-        ShowTracks(list, "PLAYLIST", string.IsNullOrEmpty(pl.Name) ? "Untitled playlist" : pl.Name, "song", preserveOrder: true);
+        ShowTracks(list, Loc.T("PLAYLIST"), string.IsNullOrEmpty(pl.Name) ? Loc.T("Untitled playlist") : pl.Name, "song", preserveOrder: true);
     }
 
     private List<Track> _currentFull = new();
@@ -378,10 +507,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         long ms = shown.Sum(t => (long)t.LengthMs);
         HeaderKicker = _curKicker;
         HeaderTitle = _curTitle;
-        HeaderSubtitle = $"{shown.Count} {_curNoun}{(shown.Count == 1 ? "" : "s")} · {FormatTotal(ms)}";
+        // Localize the noun via en-key pairs (Hungarian doesn't pluralize after a number → "dal"/"dal").
+        HeaderSubtitle = $"{shown.Count} {Loc.T(shown.Count == 1 ? _curNoun : _curNoun + "s")} · {FormatTotal(ms)}";
         Status = _localView
-            ? (_localFolders.Count == 0 ? "Click “Add folder” to add music from your PC."
-               : $"{shown.Count} songs · {_localFolders.Count} folder{(_localFolders.Count == 1 ? "" : "s")}")
+            ? (_localFolders.Count == 0 ? Loc.T("Click “Add folder” to add music from your PC.")
+               : $"{shown.Count} {Loc.T("songs")} · {_localFolders.Count} {Loc.T(_localFolders.Count == 1 ? "folder" : "folders")}")
             : HeaderSubtitle;
 
         UpdateEmptyState(shown.Count, q);
@@ -403,24 +533,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (count > 0) { ShowEmptyState = false; return; }
         if (query.Length > 0)
         {
-            EmptyGlyph = "⌕"; EmptyHeadline = "No matches"; EmptyHint = $"No songs match “{query}”."; EmptyClearSearchCta = true;
+            EmptyGlyph = "⌕"; EmptyHeadline = Loc.T("No matches"); EmptyHint = Loc.T("No songs match “{0}”.", query); EmptyClearSearchCta = true;
         }
         else if (_localView)
         {
             EmptyGlyph = "♪";
-            if (_localFolders.Count == 0) { EmptyHeadline = "No music yet"; EmptyHint = "Add a folder of music from your PC to browse it here."; }
-            else { EmptyHeadline = "No playable audio"; EmptyHint = "None of the files in your folders are a supported audio format."; }
+            if (_localFolders.Count == 0) { EmptyHeadline = Loc.T("No music yet"); EmptyHint = Loc.T("Add a folder of music from your PC to browse it here."); }
+            else { EmptyHeadline = Loc.T("No playable audio"); EmptyHint = Loc.T("None of the files in your folders are a supported audio format."); }
             EmptyAddFolderCta = true;
         }
         else if (_lib is null || _device is null)
         {
-            EmptyGlyph = "▣"; EmptyHeadline = "No iPod connected";
-            EmptyHint = "Plug in an iPod to browse its songs — or open a PC folder under “On this PC”.";
+            EmptyGlyph = "▣"; EmptyHeadline = Loc.T("No iPod connected");
+            EmptyHint = Loc.T("Plug in an iPod to browse its songs — or open a PC folder under “On this PC”.");
         }
         else
         {
-            EmptyGlyph = "♪"; EmptyHeadline = "This iPod has no songs yet";
-            EmptyHint = "Copy music from your PC to fill it up."; EmptyAddMusicCta = CanWrite;
+            EmptyGlyph = "♪"; EmptyHeadline = Loc.T("This iPod has no songs yet");
+            EmptyHint = Loc.T("Copy music from your PC to fill it up."); EmptyAddMusicCta = CanWrite;
         }
         ShowEmptyState = true;
     }
@@ -475,7 +605,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void ShowLocalMusic()
     {
         _currentFull = _localTracks.ToList();
-        _curKicker = "ON THIS PC"; _curTitle = "Local Music"; _curNoun = "song"; _localView = true;
+        _curKicker = Loc.T("ON THIS PC"); _curTitle = Loc.T("Local Music"); _curNoun = "song"; _localView = true;
         RenderCurrent();
     }
 

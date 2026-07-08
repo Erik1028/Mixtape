@@ -40,6 +40,20 @@ internal static class AppConfig
         o["RepeatMode"] = repeat;
     });
 
+    /// <summary>UI language, shared with the Windows app ("" = auto-detect, "en", "hu").</summary>
+    public static string LoadLanguage()
+    {
+        try
+        {
+            if (File.Exists(FilePath) && JsonNode.Parse(File.ReadAllText(FilePath)) is JsonObject o)
+                return o["Language"]?.GetValue<string>() ?? "";
+        }
+        catch { }
+        return "";
+    }
+
+    public static void SaveLanguage(string code) => Merge(o => o["Language"] = code);
+
     public static void Save(string accent, string variant) => Merge(o =>
     {
         o["Accent"] = accent;
