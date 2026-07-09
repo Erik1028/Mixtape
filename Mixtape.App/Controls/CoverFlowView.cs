@@ -39,7 +39,14 @@ public sealed class CoverFlowView : UserControl
     private double _animFrom, _animTo, _animDur, _animT;
     private string _mode = "Albums";
 
-    public object? PlayingTag { get; set; }
+    private object? _playingTag;
+    private bool _showNp;   // cached "is the playing item in this deck?" — recomputed only when PlayingTag / _items change
+    public object? PlayingTag
+    {
+        get => _playingTag;
+        set { _playingTag = value; RecomputeNp(); if (IsVisible && Bounds.Width > 0) Relayout(); }
+    }
+    private void RecomputeNp() => _showNp = _playingTag is not null && _items.Any(x => Equals(x.Tag, _playingTag));
     public event Action<CoverItem>? Activated;
     public event Action? CloseRequested;
     public event Action<string>? ModeChanged;
@@ -96,11 +103,13 @@ public sealed class CoverFlowView : UserControl
     // ============================ data ============================
     public void SetItems(IReadOnlyList<CoverItem> items, int start)
     {
+        StopAnim(); _animT = 0;   // cancel an in-flight coast so a mode-switch mid-flick can't lurch to a stale index
         _items.Clear();
         _items.AddRange(items);
         foreach (var b in _cards.Values) _deck.Children.Remove(b);
         _cards.Clear();
         _pos = _target = Math.Clamp(start, 0, Math.Max(0, _items.Count - 1));
+        RecomputeNp();
         Relayout();
         Focus();
     }
@@ -268,9 +277,8 @@ public sealed class CoverFlowView : UserControl
         double alpha = Math.Clamp(1 - Math.Abs(_pos - ci), 0, 1);
         _title.Opacity = alpha; _sub.Opacity = alpha;
 
-        // now-playing chip visibility
-        bool showNp = PlayingTag is not null && _items.Any(x => Equals(x.Tag, PlayingTag));
-        _npChip.IsVisible = showNp;
+        // now-playing chip visibility (cached — the scan runs only on PlayingTag/_items change, not per frame)
+        _npChip.IsVisible = _showNp;
     }
 
     private Border BuildCard(CoverItem item)

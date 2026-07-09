@@ -47,6 +47,13 @@ internal static partial class LocHu
         ["{0} photos"] = "{0} fénykép",
         ["{0} videos"] = "{0} videó",
 
+        // ---- Avalonia app: count-noun words (Hungarian doesn't pluralize after a number) + buttons + durations ----
+        ["song"] = "dal", ["songs"] = "dal", ["video"] = "videó", ["videos"] = "videó",
+        ["folder"] = "mappa", ["folders"] = "mappa",
+        ["+ Add music"] = "+ Zene", ["+ Add folder"] = "+ Mappa",
+        ["{0} min"] = "{0} p", ["{0} s"] = "{0} mp",
+        ["{0} songs · {1} folder"] = "{0} dal · {1} mappa",
+
         // ---- Column headers ----
         ["SONG"] = "DAL",
         ["ARTIST"] = "ELŐADÓ",

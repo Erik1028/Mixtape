@@ -110,6 +110,12 @@ public partial class MainWindow : Window
         BeginMoveDrag(e);
     }
 
+    protected override void OnClosed(EventArgs e)
+    {
+        _vm.Shutdown();   // stop the transport timer + release native libvlc
+        base.OnClosed(e);
+    }
+
     private void OnMinimize(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void OnMaxRestore(object? sender, RoutedEventArgs e) => ToggleMaximize();
     private void OnClose(object? sender, RoutedEventArgs e) => Close();
@@ -161,10 +167,16 @@ public partial class MainWindow : Window
         if (paths.Length > 0) _vm.AddMusicToIpod(paths);
     }
 
-    private void OnDelete(object? sender, RoutedEventArgs e)
+    private async void OnDelete(object? sender, RoutedEventArgs e)
     {
         var rows = SongGrid.SelectedItems.OfType<TrackRow>().ToList();
-        if (rows.Count > 0) _vm.DeleteSelected(rows);
+        if (rows.Count == 0) return;
+        // Deleting from the iPod permanently erases the files — confirm first (there is no undo).
+        string msg = rows.Count == 1
+            ? $"Delete “{rows[0].Title}” from the iPod? This permanently removes the file."
+            : $"Delete {rows.Count} songs from the iPod? This permanently removes the files.";
+        if (await Dialogs.ConfirmAsync(this, "Delete from iPod", msg, "Delete"))
+            _vm.DeleteSelected(rows);
     }
 
     private void OnSongDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
@@ -219,6 +231,8 @@ public partial class MainWindow : Window
             _vm.DeletePlaylist(pl);
     }
     private void OnCtxRemoveFromPlaylist(object? sender, RoutedEventArgs e) => _vm.RemoveFromCurrentPlaylist(SelectedRows());
+    private void OnCtxMoveUp(object? sender, RoutedEventArgs e) => _vm.MoveInPlaylist(SongGrid.SelectedItem as TrackRow, -1);
+    private void OnCtxMoveDown(object? sender, RoutedEventArgs e) => _vm.MoveInPlaylist(SongGrid.SelectedItem as TrackRow, +1);
 
     // Populate the "Add to playlist ▸" submenu each time the song context menu opens (playlists change).
     private void OnSongMenuOpening(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -229,10 +243,7 @@ public partial class MainWindow : Window
         newItem.Click += async (_, _) =>
         {
             var name = await Dialogs.PromptAsync(this, "New playlist", "Create & add", "New Playlist");
-            if (string.IsNullOrWhiteSpace(name)) return;
-            _vm.CreatePlaylist(name);
-            var pl = _vm.EditablePlaylists.FirstOrDefault(p => p.Name == name.Trim());
-            if (pl is not null) _vm.AddToPlaylist(pl, rows);
+            if (!string.IsNullOrWhiteSpace(name)) _vm.CreatePlaylistAndAdd(name, rows);   // targets the new list by pid
         };
         AddToPlaylistMenu.Items.Add(newItem);
         var pls = _vm.EditablePlaylists;

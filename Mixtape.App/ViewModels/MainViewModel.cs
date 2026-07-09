@@ -364,17 +364,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static IEnumerable<uint> Ids(IEnumerable<TrackRow> rows) =>
         rows.Select(r => r.Source?.UniqueId ?? 0).Where(id => id != 0);
 
-    public void CreatePlaylist(string name)
+    /// <summary>Create an empty playlist; returns its persistent id (0 on failure).</summary>
+    public ulong CreatePlaylist(string name)
     {
-        if (!CanEditPlaylists || _lib is null || string.IsNullOrWhiteSpace(name)) return;
+        if (!CanEditPlaylists || _lib is null || string.IsNullOrWhiteSpace(name)) return 0;
         try
         {
             ulong pid = _lib.CreatePlaylist(name.Trim());
             _lib.Save();
             ReloadPreservingView(selectPid: pid);
             Status = $"Created playlist “{name.Trim()}”.";
+            return pid;
         }
-        catch (Exception ex) { Status = "Couldn't create the playlist (a backup was kept): " + ex.Message; }
+        catch (Exception ex) { Status = "Couldn't create the playlist (a backup was kept): " + ex.Message; return 0; }
+    }
+
+    /// <summary>Create a playlist and add the given rows to it — targeting the NEW list by its pid, so a name
+    /// collision with an existing playlist can't misroute the songs into the older same-named list.</summary>
+    public void CreatePlaylistAndAdd(string name, IEnumerable<TrackRow> rows)
+    {
+        ulong pid = CreatePlaylist(name);
+        if (pid == 0) return;
+        var pl = _lib?.View.Playlists.FirstOrDefault(p => p.PersistentId == pid);
+        if (pl is not null) AddToPlaylist(pl, rows);
     }
 
     internal void RenamePlaylist(Playlist? pl, string newName)
@@ -395,12 +407,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (!CanEditPlaylists || _lib is null || pl is null) return;
         try
         {
+            bool wasViewing = ReferenceEquals(pl, _viewingPlaylist);
             if (!_lib.RemovePlaylist(pl)) { Status = "That playlist can't be deleted."; return; }
             _lib.Save();
-            bool wasViewing = ReferenceEquals(pl, _viewingPlaylist);
-            ReloadLibrary();   // fall back to All songs (the playlist is gone)
+            // Only jump to All songs if we were actually viewing the deleted list; otherwise keep the user's place.
+            if (wasViewing) ReloadLibrary(); else ReloadPreservingView();
             Status = $"Deleted the playlist “{(string.IsNullOrEmpty(pl.Name) ? "Untitled" : pl.Name)}” (songs kept).";
-            _ = wasViewing;
         }
         catch (Exception ex) { Status = "Delete failed (a backup was kept): " + ex.Message; }
     }
@@ -412,10 +424,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (ids.Count == 0) return;
         try
         {
+            var existing = new HashSet<uint>(pl.TrackIds);
+            int added = ids.Count(id => !existing.Contains(id));   // the real delta — duplicates are skipped by the engine
             if (!_lib.AddToPlaylist(pl.PersistentId, ids)) { Status = "Those songs are already in that playlist."; return; }
             _lib.Save();
             ReloadPreservingView();
-            Status = $"Added {ids.Count} song{(ids.Count == 1 ? "" : "s")} to “{(string.IsNullOrEmpty(pl.Name) ? "Untitled" : pl.Name)}”.";
+            Status = $"Added {added} song{(added == 1 ? "" : "s")} to “{(string.IsNullOrEmpty(pl.Name) ? "Untitled" : pl.Name)}”.";
         }
         catch (Exception ex) { Status = "Couldn't add to the playlist (a backup was kept): " + ex.Message; }
     }
@@ -433,6 +447,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Status = $"Removed {ids.Count} song{(ids.Count == 1 ? "" : "s")} from the playlist (kept in the library).";
         }
         catch (Exception ex) { Status = "Remove failed (a backup was kept): " + ex.Message; }
+    }
+
+    /// <summary>Move a song up (-1) or down (+1) within the current playlist and persist the new order.
+    /// Operates on the full playlist order (unaffected by search/sort).</summary>
+    public void MoveInPlaylist(TrackRow? row, int delta)
+    {
+        if (!CanEditPlaylists || _viewingPlaylist is null || row?.Source is not { } t) return;
+        var order = _currentFull.Select(x => x.UniqueId).Where(id => id != 0).ToList();
+        int i = order.IndexOf(t.UniqueId);
+        int j = i + delta;
+        if (i < 0 || j < 0 || j >= order.Count) return;
+        (order[i], order[j]) = (order[j], order[i]);
+        ReorderCurrentPlaylist(order);
     }
 
     /// <summary>Persist a drag-reordered playlist. <paramref name="order"/> is the new full unique-id order.</summary>
@@ -515,6 +542,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : HeaderSubtitle;
 
         UpdateEmptyState(shown.Count, q);
+        OnPropertyChanged(nameof(CoverFlowAvailable));   // Tracks changed → refresh the header "Cover Flow" button's visibility
         LoadArtwork(Tracks.ToList());
     }
 
@@ -631,10 +659,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var f in folders)
             if (!_localFolders.Any(p => string.Equals(p, f, StringComparison.OrdinalIgnoreCase)))
                 _localFolders.Add(f);
-        // jump to the Local Music view, then scan
+        // jump to the Local Music view through the setter, so OnSelect syncs IsLocalView/IsIpodView/_viewingPlaylist
+        // (and the header buttons) — assigning the backing field directly left those stale over Local Music content.
         var local = SidebarItems.FirstOrDefault(s => s.Kind == SidebarKind.LocalMusic);
-        if (local is not null) _selectedSidebar = local; // set without re-triggering scan loop
-        OnPropertyChanged(nameof(SelectedSidebar));
+        if (local is not null) SelectedSidebar = local;
         ScanLocal();
     }
 
@@ -694,9 +722,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static string FormatTotal(long ms)
     {
         var t = TimeSpan.FromMilliseconds(ms);
-        return t.TotalHours >= 1 ? $"{(int)t.TotalHours} hr {t.Minutes} min"
-            : t.TotalMinutes >= 1 ? $"{t.Minutes} min"
-            : $"{t.Seconds} s";
+        return t.TotalHours >= 1 ? Loc.T("{0} hr {1} min", (int)t.TotalHours, t.Minutes)
+            : t.TotalMinutes >= 1 ? Loc.T("{0} min", t.Minutes)
+            : Loc.T("{0} s", t.Seconds);
     }
 
     // ============================ playback engine (LibVLC via AudioService) ============================
@@ -844,7 +872,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _audio.Play(path);
             _audio.Volume = _volume;
             _audio.SetEq(_eqOn, _eqGains);
+            if (_nowRow is not null) _nowRow.PropertyChanged -= OnNowRowChanged;
             _nowRow = row;
+            row.PropertyChanged += OnNowRowChanged;   // so NowArt fills in when the cover finishes decoding
             NowTitle = t.DisplayTitle;
             NowSub = string.Join("  —  ", new[] { t.Artist, t.Album }.Where(s => !string.IsNullOrEmpty(s)));
             NowArt = row.Art;
@@ -862,6 +892,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_audio is null) return;
         _audio.TogglePause();
         IsPlaying = _audio.IsPlaying;
+        if (IsPlaying) _tick?.Start(); else _tick?.Stop();   // don't poll libvlc while paused (battery)
+    }
+
+    private void OnNowRowChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TrackRow.Art) && sender is TrackRow r && ReferenceEquals(r, _nowRow))
+            NowArt = r.Art;
     }
 
     // ---- next / previous / auto-advance ----
@@ -874,8 +911,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void Next() => Advance(+1, auto: false);
     public void Previous() => Advance(-1, auto: false);
 
-    private void OnTrackEnded()
+    private void OnTrackEnded(TrackRow? ended)
     {
+        // Ignore a stale end delivered for a track the user already moved past (double-tap / Next landing right as
+        // the previous track hits EOF), which would otherwise skip a song and pollute Prev history.
+        if (!ReferenceEquals(ended, _nowRow)) return;
         // Repeat One restarts the SAME track; otherwise auto-advance forward (Off/All handled by Advance's wrap).
         if (_repeat == RepeatMode.One && _nowRow is not null) { PlayInternal(_nowRow); return; }
         Advance(+1, auto: true);
@@ -924,7 +964,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             for (int i = start; i >= 0 && i < _ctx.Count; i += dir)
                 if (Playable(_ctx[i])) { if (dir > 0) Depart(); _ctxIndex = i; PlayInternal(_ctx[i]); RebuildUpNext(); return; }
         }
-        if (auto) IsPlaying = false;   // reached the end with Repeat Off → stop
+        if (auto) { IsPlaying = false; _tick?.Stop(); }   // reached the end with Repeat Off → stop + quit polling
     }
 
     private void Depart() { if (_nowRow is not null) { _history.Add(_nowRow); if (_history.Count > 200) _history.RemoveAt(0); } }
@@ -934,9 +974,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (_audio is not null) return;
         _audio = new AudioService();
-        _audio.Ended += () => Dispatcher.UIThread.Post(OnTrackEnded);   // marshal off the VLC thread (no sync player calls there)
+        // Capture the row that ended AT fire time; marshal to the UI thread (no sync player calls on the VLC thread).
+        _audio.Ended += () => { var ended = _nowRow; Dispatcher.UIThread.Post(() => OnTrackEnded(ended)); };
         _tick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _tick.Tick += (_, _) => UpdateTransport();
+    }
+
+    /// <summary>Stop playback + polling and release native libvlc (called from the window's OnClosed).</summary>
+    public void Shutdown()
+    {
+        _tick?.Stop();
+        try { _audio?.Dispose(); } catch { }
+        _audio = null;
     }
 
     private void UpdateTransport()

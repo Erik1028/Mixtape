@@ -532,7 +532,7 @@
                     GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource RowDividerBrush}"
                     HeadersVisibility="Column" IsReadOnly="True" AutoGenerateColumns="False"
                     CanUserResizeColumns="False" CanUserReorderColumns="False"
-                    CanUserSortColumns="True" SelectionMode="Extended" RowBackground="Transparent">
+                    CanUserSortColumns="False" SelectionMode="Extended" RowBackground="Transparent">
             <DataGrid.ContextMenu>
               <ContextMenu Opening="OnSongMenuOpening">
                 <MenuItem Header="{l:Loc 'Play'}" Click="OnCtxPlay"/>
@@ -540,6 +540,8 @@
                 <MenuItem Header="{l:Loc 'Add to queue'}" Click="OnCtxAddQueue"/>
                 <Separator IsVisible="{Binding CanEditPlaylists}"/>
                 <MenuItem x:Name="AddToPlaylistMenu" Header="{l:Loc 'Add to playlist'}" IsVisible="{Binding CanEditPlaylists}"/>
+                <MenuItem Header="{l:Loc 'Move up'}" Click="OnCtxMoveUp" IsVisible="{Binding IsPlaylistView}"/>
+                <MenuItem Header="{l:Loc 'Move down'}" Click="OnCtxMoveDown" IsVisible="{Binding IsPlaylistView}"/>
                 <MenuItem Header="{l:Loc 'Remove from this playlist'}" Click="OnCtxRemoveFromPlaylist" IsVisible="{Binding IsPlaylistView}"/>
               </ContextMenu>
             </DataGrid.ContextMenu>
