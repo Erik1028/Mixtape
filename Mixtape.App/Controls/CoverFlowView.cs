@@ -35,8 +35,9 @@ public sealed class CoverFlowView : UserControl
     private readonly Border _npChip;
     private readonly Ellipse _glow = new();
 
-    private DispatcherTimer? _anim;
-    private double _animFrom, _animTo, _animDur, _animT;
+    private bool _animActive;   // a coast is in flight, driven by the compositor's frame callback
+    private readonly System.Diagnostics.Stopwatch _animSw = new();
+    private double _animFrom, _animTo, _animDur;
     private string _mode = "Albums";
 
     private object? _playingTag;
@@ -103,7 +104,7 @@ public sealed class CoverFlowView : UserControl
     // ============================ data ============================
     public void SetItems(IReadOnlyList<CoverItem> items, int start)
     {
-        StopAnim(); _animT = 0;   // cancel an in-flight coast so a mode-switch mid-flick can't lurch to a stale index
+        StopAnim();   // cancel an in-flight coast so a mode-switch mid-flick can't lurch to a stale index
         _items.Clear();
         _items.AddRange(items);
         foreach (var b in _cards.Values) _deck.Children.Remove(b);
@@ -189,27 +190,44 @@ public sealed class CoverFlowView : UserControl
         _target = Math.Clamp(target, 0, Math.Max(0, _items.Count - 1));
         double dist = Math.Abs(_target - _pos);
         if (dist < 0.001) { StopAnim(); Relayout(); return; }
-        _animFrom = _pos; _animTo = _target; _animT = 0;
+        _animFrom = _pos; _animTo = _target; _animSw.Restart();
         _animDur = Math.Clamp(260 + 95 * Math.Sqrt(dist), 260, 620);
         StartAnim();
     }
 
     private static readonly QuinticEaseOut _ease = new();
+
+    // The coast rides the compositor's frame callback (vsync-paced) instead of a 15 ms DispatcherTimer:
+    // one tick per display frame, and progress is Stopwatch-timed, so a late frame skips ahead rather
+    // than slowing the whole animation down. Retargeting mid-flight just updates from/to/duration —
+    // the running loop picks the new values up on its next frame.
+    // A generation stamp keeps exactly ONE loop alive: a stop (or a restart in the same frame) bumps it,
+    // so an already-queued callback from the old loop sees a stale stamp and simply dies instead of
+    // running in parallel with the new one.
+    private int _animGen;
+
     private void StartAnim()
     {
-        _anim ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(15) };
-        _anim.Tick -= OnAnimTick; _anim.Tick += OnAnimTick;
-        _anim.Start();
+        if (_animActive) return;
+        _animActive = true;
+        RequestFrame(++_animGen);
     }
-    private void StopAnim() => _anim?.Stop();
+    private void StopAnim() { _animActive = false; _animGen++; }
 
-    private void OnAnimTick(object? s, EventArgs e)
+    private void RequestFrame(int gen)
     {
-        _animT += 15;
-        double v = Math.Clamp(_animT / _animDur, 0, 1);
+        if (TopLevel.GetTopLevel(this) is { } tl) tl.RequestAnimationFrame(_ => OnAnimFrame(gen));
+        else _animActive = false;   // not attached (shouldn't happen mid-interaction) — land instantly next layout
+    }
+
+    private void OnAnimFrame(int gen)
+    {
+        if (!_animActive || gen != _animGen) return;
+        double v = Math.Clamp(_animSw.Elapsed.TotalMilliseconds / Math.Max(1, _animDur), 0, 1);
         _pos = _animFrom + (_animTo - _animFrom) * _ease.Ease(v);
         Relayout();
-        if (v >= 1) { _pos = _animTo; StopAnim(); Relayout(); }
+        if (v >= 1) { _pos = _animTo; _animActive = false; Relayout(); return; }
+        RequestFrame(gen);
     }
 
     // ============================ layout / rendering ============================

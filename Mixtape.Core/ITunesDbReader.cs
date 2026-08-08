@@ -169,7 +169,11 @@ internal static class ITunesDbReader
             uint total = r.U32(p + 0x08);
             if (total < itemHeaderLen || total > (uint)(r.Length - p)) break;
             var pl = ReadPlaylist(r, p, db);
-            db.Playlists.Add(pl);
+            // iTunes-style DBs mirror the FULL playlist set into both playlist datasets (mhsd type 2
+            // and type 3) — list each playlist once. A same-pid entry seen again is the mirror copy,
+            // not a distinct list (pid 0 can't be matched reliably, so those are kept as-is).
+            if (pl.PersistentId == 0 || !db.Playlists.Any(x => x.PersistentId == pl.PersistentId))
+                db.Playlists.Add(pl);
             p += (int)total;
         }
         if (read < count)

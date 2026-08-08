@@ -11,9 +11,11 @@ internal static class SafeDbWriter
     /// <param name="maxWarnings">The pre-write library's structural-warning count. The read-back must not EXCEED it
     /// (a NEW warning means the write malformed something) — passing the baseline instead of 0 avoids false-rejecting
     /// a DB that already had a benign warning before we touched it.</param>
-    /// <param name="expectedMasterCount">The pre-write master-playlist count. Checked RELATIVE to the baseline, not
-    /// against an absolute 1 — some real DBs carry 2 IsMaster lists, so the invariant is "a write must not drop or
-    /// duplicate the master(s)", never "there is exactly one".</param>
+    /// <param name="expectedMasterCount">The pre-write master-playlist count, counted at the RAW level
+    /// (<see cref="RawDb.MasterPlaylistCount"/>) — iTunes mirrors the playlist list into mhsd type 2 AND type 3, and
+    /// the reader's view collapses those copies, so a view-level count could not tell "master dropped from one
+    /// mirror" from "healthy". Checked RELATIVE to the baseline, not against an absolute 1: the invariant is
+    /// "a write must not drop or duplicate the master(s)", never "there is exactly one".</param>
     public static void Write(IPodDevice device, byte[] bytes, int expectedTrackCount, int maxWarnings, int expectedMasterCount)
     {
         string db = device.ITunesDbPath;
@@ -52,14 +54,15 @@ internal static class SafeDbWriter
         // 4) Verify by reading the just-written DB back; roll back on any problem.
         try
         {
-            var check = ITunesDbReader.ReadFile(db);
+            byte[] written = File.ReadAllBytes(db);
+            var check = ITunesDbReader.Read(written);
             if (check.Tracks.Count != expectedTrackCount)
                 throw new InvalidDataException($"Verify failed: wrote {check.Tracks.Count} tracks, expected {expectedTrackCount}.");
             // Structure sanity, not just the count: a malformed playlist/mhip can leave the track count right yet the
             // library broken — the reader is TOLERANT (it records a Warning and reads on rather than throwing), so the
             // count alone can't catch it. Both checks are RELATIVE to the pre-write baseline, so an unusual-but-valid
             // DB (e.g. one that already carries 2 masters, or a benign warning) is never false-rejected.
-            int masters = 0; foreach (var p in check.Playlists) if (p.IsMaster) masters++;
+            int masters = RawDb.Parse(written).MasterPlaylistCount();   // raw: sees BOTH mirror copies
             if (masters != expectedMasterCount)
                 throw new InvalidDataException($"Verify failed: the written DB has {masters} master playlists (expected {expectedMasterCount}) — the master was dropped or duplicated.");
             if (check.Warnings.Count > maxWarnings)

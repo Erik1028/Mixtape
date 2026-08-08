@@ -247,5 +247,29 @@ internal static partial class LocHu
         ["{0} hr"] = "{0} ó",
         ["{0} hr {1} min"] = "{0} ó {1} p",
         ["{0} min"] = "{0} p",
+
+        // ---- Song info: full tag editor + stats ----
+        // (label column is a fixed 96px — keep these short; "Legutóbb"/"Albumelőadó" instead of the
+        //  longer natural phrases, which clip)
+        ["Composer"] = "Zeneszerző",
+        ["Comment"] = "Megjegyzés",
+        ["Disc #"] = "Lemez #",
+        ["Plays"] = "Lejátszások",
+        ["Last played"] = "Legutóbb",
+        ["Format"] = "Formátum",
+        ["Path"] = "Útvonal",
+        ["Album artist"] = "Albumelőadó",   // curated override: LocHuGen's "Album előadója" clips at 96px
+
+        // ---- Eject reminder ----
+        ["Mixtape wrote to this iPod and it hasn't been ejected yet.\n\nEjecting before you unplug makes sure Windows finishes writing everything to it."] =
+            "A Mixtape írt erre az iPodra, és még nincs leválasztva.\n\nHa kihúzás előtt leválasztod, a Windows biztosan mindent kiír rá.",
+        ["Mixtape wrote to {0} connected iPods that haven't been ejected yet.\n\nEjecting before you unplug makes sure Windows finishes writing everything to them."] =
+            "A Mixtape {0} csatlakoztatott iPodra írt, amelyek még nincsenek leválasztva.\n\nHa kihúzás előtt leválasztod őket, a Windows biztosan mindent kiír rájuk.",
+        ["Mixtape is still writing to the iPod. Please wait for it to finish before closing."] =
+            "A Mixtape még ír az iPodra. Várd meg, amíg befejezi, mielőtt bezárod.",
+        ["Close anyway"] = "Bezárás így is",
+        ["Eject & close"] = "Leválasztás és bezárás",
+        ["⚠ The iPod was unplugged without ejecting — use Eject after copying so every write is finished."] =
+            "⚠ Az iPod leválasztás nélkül lett kihúzva — másolás után használd a Leválasztást, hogy minden írás befejeződjön.",
     };
 }

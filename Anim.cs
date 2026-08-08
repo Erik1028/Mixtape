@@ -10,8 +10,15 @@ namespace iPodCommander;
 /// </summary>
 internal static class Anim
 {
-    private static readonly System.Windows.Forms.Timer _timer = new() { Interval = 15 }; // ~66 fps
+    private static readonly System.Windows.Forms.Timer _timer = new() { Interval = 10 }; // ~60-100 fps (paint-limited)
     private static readonly List<Tween> _active = new();
+    private static bool _hiRes;   // winmm hi-res timer period held ONLY while tweens run
+
+    // WinForms timers ride the 15.6 ms system tick, so a "15 ms" interval really fires at ~32 ms
+    // half the time — visible judder. Holding a 1 ms multimedia period while (and only while) tweens
+    // are active makes ticks land on schedule; each tween is Stopwatch-timed so pacing stays exact.
+    [System.Runtime.InteropServices.DllImport("winmm.dll")] private static extern uint timeBeginPeriod(uint ms);
+    [System.Runtime.InteropServices.DllImport("winmm.dll")] private static extern uint timeEndPeriod(uint ms);
 
     /// <summary>Respect the OS "show animations in Windows" preference; can be forced off for tests.</summary>
     public static bool MotionEnabled { get; set; } = SystemInformation.UIEffectsEnabled;
@@ -36,7 +43,11 @@ internal static class Anim
         tw.Sw.Start();
         try { onTick(0); } catch { } // paint the first frame now so there's no flash before the first tick
         _active.Add(tw);
-        if (!_timer.Enabled) _timer.Start();
+        if (!_timer.Enabled)
+        {
+            if (!_hiRes) { try { timeBeginPeriod(1); _hiRes = true; } catch { } }
+            _timer.Start();
+        }
         return tw;
     }
 
@@ -57,7 +68,11 @@ internal static class Anim
                 try { tw.OnDone?.Invoke(); } catch { }
             }
         }
-        if (_active.Count == 0) _timer.Stop();
+        if (_active.Count == 0)
+        {
+            _timer.Stop();
+            if (_hiRes) { try { timeEndPeriod(1); } catch { } _hiRes = false; }
+        }
     }
 }
 

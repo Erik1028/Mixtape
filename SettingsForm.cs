@@ -304,7 +304,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildAbout()
     {
-        Row("Mixtape", Loc.T("Version {0}", "0.16.0"), null);
+        Row("Mixtape", Loc.T("Version {0}", "0.17.0"), null);
         Row(Loc.T("A friendly manager for classic iPods"), Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes."), null);
     }
 

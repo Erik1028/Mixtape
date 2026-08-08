@@ -270,7 +270,7 @@
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
           </Grid>
 
-          <ListBox ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebar, Mode=TwoWay}"
+          <ListBox x:Name="SidebarList" ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebar, Mode=TwoWay}"
                    Background="Transparent" BorderThickness="0" Padding="8,4">
             <ListBox.Styles>
               <Style Selector="ListBoxItem">
@@ -288,6 +288,13 @@
               </Style>
               <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
                 <Setter Property="Background" Value="{StaticResource SidebarHoverBrush}"/>
+              </Style>
+              <!-- drop target while dragging songs from the grid: full accent outline (distinct from
+                   the selected row's left bar) -->
+              <Style Selector="ListBoxItem.drophover /template/ ContentPresenter">
+                <Setter Property="Background" Value="{StaticResource SidebarSelBrush}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource AccentBrightBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
               </Style>
             </ListBox.Styles>
             <ListBox.ItemTemplate>
@@ -636,5 +643,13 @@
       </Border>
     </Grid>
     </DockPanel>
+
+    <!-- floating count badge while dragging songs onto a sidebar playlist (code-behind positions it) -->
+    <Border x:Name="DragBadge" IsVisible="False" IsHitTestVisible="False"
+            HorizontalAlignment="Left" VerticalAlignment="Top"
+            Background="#F01D1F24" BorderBrush="{StaticResource AccentBrightBrush}" BorderThickness="1"
+            CornerRadius="10" Padding="10,5">
+      <TextBlock x:Name="DragBadgeText" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"/>
+    </Border>
   </Grid>
 </Window>

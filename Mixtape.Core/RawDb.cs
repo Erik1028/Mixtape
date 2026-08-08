@@ -192,9 +192,10 @@ internal sealed class RawDb
     }
 
     /// <summary>
-    /// Edit a track's metadata in place: numeric fields (rating @0x1F, year @0x34, track# @0x2C) are
-    /// patched directly in the mhit header; the managed string mhods (title=1, artist=4, album=3,
-    /// genre=5, album-artist=22) are replaced/added/cleared while EVERY other mhod (location, file
+    /// Edit a track's metadata in place: numeric fields (rating @0x1F, year @0x34, track# @0x2C,
+    /// total tracks @0x30, disc # @0x5C, total discs @0x60) are patched directly in the mhit header;
+    /// the managed string mhods (title=1, artist=4, album=3, genre=5, comment=8, composer=12,
+    /// album-artist=22) are replaced/added/cleared while EVERY other mhod (location, file
     /// type, sort keys, smart-playlist blobs…) and any header field we don't touch is preserved
     /// verbatim. Returns false if the track id isn't found or the chunk is malformed (then unchanged).
     /// </summary>
@@ -279,11 +280,15 @@ internal sealed class RawDb
         if (e.Year is uint yr && headerLen >= 0x38) PatchU32(header, 0x34, yr);
         if (e.TrackNumber is uint tn && headerLen >= 0x30) PatchU32(header, 0x2C, tn);
         if (e.PlayCount is uint pc && headerLen >= 0x54) PatchU32(header, 0x50, pc);   // play count (@0x50)
+        if (e.TotalTracks is uint tt && headerLen >= 0x34) PatchU32(header, 0x30, tt); // tracks on album (@0x30)
+        if (e.DiscNumber is uint dn && headerLen >= 0x60) PatchU32(header, 0x5C, dn);  // disc n (@0x5C)
+        if (e.TotalDiscs is uint td && headerLen >= 0x64) PatchU32(header, 0x60, td);  // of m discs (@0x60)
 
         // managed string mhod types → new value ("" means clear/remove); null entries aren't added.
         var managed = new Dictionary<uint, string>();
         void M(uint type, string? v) { if (v is not null) managed[type] = v; }
         M(1, e.Title); M(4, e.Artist); M(3, e.Album); M(5, e.Genre); M(22, e.AlbumArtist);
+        M(12, e.Composer); M(8, e.Comment);
 
         var bodies = new List<byte[]>();
         var seen = new HashSet<uint>();
@@ -499,6 +504,20 @@ internal sealed class RawDb
     }
 
     private static bool IsMaster(RawPlaylist pl) => pl.Prefix.Length > 0x14 && pl.Prefix[0x14] != 0;
+
+    /// <summary>Master (library) playlists counted across EVERY playlist dataset. iTunes mirrors the
+    /// playlist list into mhsd type 2 AND type 3, so a healthy DB reports one master per dataset. The
+    /// reader's view deliberately collapses those mirror copies, so only this raw count can catch a
+    /// write that drops the master from just ONE copy — which is exactly what the post-write verify
+    /// exists to prevent (the iPod's Music menu is driven by the master list).</summary>
+    public int MasterPlaylistCount()
+    {
+        int n = 0;
+        foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
+            foreach (var pl in ds.Playlists!)
+                if (IsMaster(pl)) n++;
+        return n;
+    }
 
     /// <summary>True if this playlist carries smart-playlist preference (mhod type 50) or rule (type 51)
     /// mhods — i.e. it's a smart/special list whose header must not be cloned into a plain user playlist.</summary>
@@ -725,8 +744,13 @@ internal sealed class TrackEdit
     public string? Album;
     public string? AlbumArtist;
     public string? Genre;
+    public string? Composer;
+    public string? Comment;
     public uint? Year;
     public uint? TrackNumber;
+    public uint? TotalTracks;  // tracks on the album (@0x30)
+    public uint? DiscNumber;   // disc n (@0x5C)
+    public uint? TotalDiscs;   // of m discs (@0x60)
     public byte? Rating;
     public uint? PlayCount;   // absolute play count (@0x50); the caller folds on-device deltas in
 }

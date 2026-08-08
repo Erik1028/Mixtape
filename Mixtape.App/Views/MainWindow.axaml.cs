@@ -6,6 +6,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
 using Mixtape.App.ViewModels;
 using iPodCommander;   // the shared engine (Playlist etc.) lives in the iPodCommander namespace (Mixtape.Core)
 
@@ -28,6 +29,20 @@ public partial class MainWindow : Window
         // The 60° gradient's endpoint depends on the window's aspect ratio (GDI+ angle-mode brushes
         // normalise the stops over the rect's projection onto the axis) — recompute on resize.
         SizeChanged += (_, _) => ApplyWallpaper();
+
+        // Drag songs from the grid onto a sidebar playlist. A manual pointer-drag (floating count
+        // badge + accent outline on the hovered playlist) instead of OS drag-drop, which would only
+        // show the "blocked" cursor over our own window.
+        SongGrid.AddHandler(PointerPressedEvent, OnSongGridPointerPressed, RoutingStrategies.Tunnel);
+        AddHandler(PointerMovedEvent, OnDragPointerMoved, RoutingStrategies.Tunnel);
+        AddHandler(PointerReleasedEvent, OnDragPointerReleased, RoutingStrategies.Tunnel);
+        // A drag can lose its release event (Alt-Tab, a focus-stealing popup, capture loss) — without
+        // these the badge would wedge on and a LATER unrelated click could commit the stale payload.
+        // PointerCaptureLost is a DIRECT event: it reaches only the element that held the capture, so it
+        // goes on the grid — registering it on the window (tunnelling) would never fire at all. The
+        // load-bearing guards are the button-state self-heal in OnDragPointerMoved and Deactivated.
+        SongGrid.AddHandler(PointerCaptureLostEvent, OnDragCaptureLost, RoutingStrategies.Direct);
+        Deactivated += (_, _) => { _dragArmed = false; EndDrag(); };
 
         // Test aid: `--theme <accent> <variant>` previews a theme without saving (for screenshots).
         var cli = System.Environment.GetCommandLineArgs();
@@ -101,6 +116,96 @@ public partial class MainWindow : Window
     private void OnRefresh(object? sender, RoutedEventArgs e) => _vm.Refresh();
 
     private void OnClearSearch(object? sender, RoutedEventArgs e) => _vm.SearchText = "";
+
+    // ---- drag songs from the grid onto a sidebar playlist ----
+
+    private bool _dragArmed, _dragging;
+    private Point _dragStart;
+    private TrackRow? _dragPressedRow;
+    private List<TrackRow> _pressSelection = new();   // selection AT PRESS — the grid collapses it on press
+    private List<TrackRow> _dragRows = new();
+    private ListBoxItem? _dropItem;
+
+    private void OnSongGridPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _dragArmed = false;
+        if (_dragging || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (!_vm.CanEditPlaylists) return;   // nothing to drop onto without a writable iPod
+        if ((e.Source as Visual)?.FindAncestorOfType<DataGridRow>(includeSelf: true) is not { DataContext: TrackRow row }) return;
+        // Snapshot the selection HERE: this tunnel handler runs before the DataGrid cell handler
+        // collapses a multi-selection to the clicked row, so a multi-song drag keeps all its songs.
+        _pressSelection = SongGrid.SelectedItems?.OfType<TrackRow>().ToList() ?? new List<TrackRow>();
+        _dragPressedRow = row; _dragStart = e.GetPosition(this); _dragArmed = true;
+    }
+
+    private void OnDragPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragArmed && !_dragging) return;
+        // Self-heal: no left button held → whatever we thought was in flight is over (a lost release).
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { _dragArmed = false; EndDrag(); return; }
+        var pos = e.GetPosition(this);
+        if (!_dragging)
+        {
+            if (Math.Abs(pos.X - _dragStart.X) < 6 && Math.Abs(pos.Y - _dragStart.Y) < 6) return; // a click, not a drag
+            var sel = _pressSelection;   // the pre-collapse selection captured on press
+            _dragRows = _dragPressedRow is { } pr && sel.Count > 1 && sel.Contains(pr) ? sel
+                      : _dragPressedRow is { } one ? new List<TrackRow> { one } : new List<TrackRow>();
+            _dragArmed = false;
+            if (_dragRows.Count == 0) return;
+            _dragging = true;
+            DragBadgeText.Text = _dragRows.Count == 1 ? Loc.T("1 song") : Loc.T("{0} songs", _dragRows.Count);
+            DragBadge.IsVisible = true;
+        }
+        DragBadge.RenderTransform = new TranslateTransform(pos.X + 14, pos.Y + 12);
+        SetDropItem(HitPlaylistItem(e));
+    }
+
+    private void OnDragPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _dragArmed = false;
+        if (!_dragging) return;
+        bool leftRelease = e.InitialPressMouseButton == MouseButton.Left;   // a right-click mid-drag must cancel, not commit
+        var target = _dropItem;   // drop on the row the highlight shows — exactly what the user sees
+        var rows = _dragRows;
+        EndDrag();
+        if (leftRelease && rows.Count > 0 && target?.DataContext is SidebarItem { Playlist: { } pl })
+        {
+            _vm.AddToPlaylist(pl, rows);
+            e.Handled = true;   // swallow the release so the sidebar doesn't also treat it as a click
+        }
+    }
+
+    private void OnDragCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        _dragArmed = false;
+        EndDrag();
+    }
+
+    private void EndDrag()
+    {
+        _dragging = false;
+        _dragRows = new List<TrackRow>();       // never let a stale payload survive to a later click
+        _pressSelection = new List<TrackRow>();
+        DragBadge.IsVisible = false;
+        SetDropItem(null);
+    }
+
+    /// <summary>The sidebar playlist row under the pointer (writable target), or null.</summary>
+    private ListBoxItem? HitPlaylistItem(PointerEventArgs e)
+    {
+        var p = e.GetPosition(SidebarList);
+        if (p.X < 0 || p.Y < 0 || p.X > SidebarList.Bounds.Width || p.Y > SidebarList.Bounds.Height) return null;
+        var lbi = (SidebarList.InputHitTest(p) as Visual)?.FindAncestorOfType<ListBoxItem>(includeSelf: true);
+        return lbi?.DataContext is SidebarItem { IsPlaylist: true, Playlist.PersistentId: not 0 } ? lbi : null;
+    }
+
+    private void SetDropItem(ListBoxItem? item)
+    {
+        if (ReferenceEquals(item, _dropItem)) return;
+        _dropItem?.Classes.Set("drophover", false);
+        _dropItem = item;
+        _dropItem?.Classes.Set("drophover", true);
+    }
 
     // ---- custom title bar (we draw our own caption + window buttons) ----
     private void OnTitleBarPressed(object? sender, PointerPressedEventArgs e)

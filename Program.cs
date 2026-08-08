@@ -143,6 +143,14 @@ internal static class Program
         // Verify track metadata/rating editing is lossless + correct on a real DB. → ipod-edittest.txt
         if (args.Length >= 2 && args[0] == "--edittest") { RunEditTest(args[1]); return; }
 
+        // Verify the add-time duplicate guard catches the cases that produced real-world duplicates
+        // (multi-artist tag drift, Unicode NFC/NFD accents, same song twice in one batch). → ipod-duptest.txt
+        if (args.Contains("--duptest")) { RunDupGuardTest(); return; }
+
+        // READ-ONLY diagnostic: report duplicate songs (by tags / by file) + playlist-level duplicates
+        // in an iTunesDB, with enough detail to tell WHY each duplicate exists. → console + ipod-dupescan.txt
+        if (args.Length >= 2 && args[0] == "--dupescan") { RunDupeScan(args[1]); return; }
+
         // Verify playlist track reordering on a real DB. → ipod-reordertest.txt
         if (args.Length >= 2 && args[0] == "--reordertest") { RunReorderTest(args[1]); return; }
 
@@ -230,6 +238,282 @@ internal static class Program
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-reordertest.txt"), log.ToString());
     }
 
+    /// <summary>Regression test for the add-time duplicate guard, built from REAL duplicates found on a
+    /// user's iPod: the same audio file re-added under tags a different program wrote. Exercises the private
+    /// statics in MainForm via reflection so no UI is needed.</summary>
+    private static void RunDupGuardTest()
+    {
+        var log = new StringBuilder();
+        int pass = 0, fail = 0;
+        void Check(string what, object? got, object? want)
+        {
+            bool ok = Equals(got?.ToString(), want?.ToString());
+            log.AppendLine($"{(ok ? "PASS" : "FAIL")}  {what}: got {got}, want {want}");
+            if (ok) pass++; else fail++;
+        }
+        try
+        {
+            const System.Reflection.BindingFlags F = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+            var mf = typeof(MainForm);
+            var normKey = mf.GetMethod("NormKey", F)!;
+            var itemKey = mf.GetMethod("ItemKey", F)!;
+            var buildFp = mf.GetMethod("BuildFingerprints", F)!;
+            var fpKnown = mf.GetMethod("FingerprintKnown", F)!;
+            var fpRemember = mf.GetMethod("RememberFingerprint", F)!;
+
+            string Norm(string s) => (string)normKey.Invoke(null, new object?[] { s })!;
+            string Key(string? t, string? a, string? al) => (string)itemKey.Invoke(null, new object?[] { t, a, al, false })!;
+
+            // (1) Unicode: the same Hungarian title decomposed (u + combining double acute) vs precomposed.
+            string nfc = "Neked könnyű lehet";
+            string nfd = nfc.Normalize(NormalizationForm.FormD);
+            Check("NFD title differs byte-wise", nfc == nfd, false);
+            Check("NormKey folds NFD/NFC to one key", Norm(nfc) == Norm(nfd), true);
+            Check("ItemKey folds NFD/NFC to one key", Key(nfc, "Republic", "Aranyalbum 1990-2000") == Key(nfd, "Republic", "Aranyalbum 1990-2000"), true);
+
+            // (2) Multi-artist tag drift: another manager stores every performer, TagLib reads FirstPerformer.
+            //     The TAG key legitimately can't match — the fingerprint has to carry it.
+            Check("tag key alone misses multi-artist drift",
+                Key("Rampapapam", "DESH; Young Fly; Azahriah; Lord Panamo", "CARPE DIEM") == Key("Rampapapam", "DESH", "CARPE DIEM"), false);
+
+            // (3) Fingerprint over the REAL duplicate pairs seen on the iPod (exact byte size, 1 ms drift).
+            var onIpod = new List<Track>
+            {
+                new() { Title = "Rampapapam", Artist = "DESH; Young Fly; Azahriah; Lord Panamo", MediaType = 1, FileSize = 21989003, LengthMs = 189361 },
+                new() { Title = "You", Artist = "Lane 8; Kasablanca", MediaType = 1, FileSize = 28858432, LengthMs = 254522 },
+                new() { Title = nfd, Artist = "Republic", MediaType = 1, FileSize = 32047327, LengthMs = 247053 },
+            };
+            var prints = buildFp.Invoke(null, new object?[] { onIpod, false })!;
+            bool Known(long size, uint ms) => (bool)fpKnown.Invoke(null, new object?[] { prints, size, ms })!;
+
+            Check("re-add of Rampapapam caught by fingerprint", Known(21989003, 189362), true);
+            Check("re-add of You caught by fingerprint", Known(28858432, 254523), true);
+            Check("re-add of Neked könnyű lehet caught by fingerprint", Known(32047327, 247054), true);
+            Check("a different song is NOT flagged (other size)", Known(21989004, 189361), false);
+            Check("same size but a wholly different duration is NOT flagged", Known(21989003, 300000), false);
+            Check("unknown size is not flagged", Known(1234, 5000), false);
+            Check("size 0 (unreadable) is never flagged", Known(0, 0), false);
+
+            // (4) Intra-batch: the same song appearing twice in ONE add must be caught after the first is accepted.
+            Check("second copy in the same batch is unknown before remember", Known(99887766, 120000), false);
+            fpRemember.Invoke(null, new object?[] { prints, 99887766L, (uint)120000 });
+            Check("…and caught once the first copy is remembered", Known(99887766, 120001), true);
+        }
+        catch (Exception ex) { log.AppendLine("EXCEPTION: " + ex); fail++; }
+
+        log.AppendLine();
+        log.AppendLine($"RESULT: {(fail == 0 ? "OK" : "FAIL")}  ({pass} passed, {fail} failed)");
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-duptest.txt"), log.ToString());
+        Console.WriteLine(log.ToString());
+    }
+
+    /// <summary>Read-only duplicate report over an iTunesDB file (never touches a device). Groups tracks
+    /// by normalized Title|Artist|Album, flags same-file-twice vs copied-twice vs different-file cases,
+    /// and reports playlist-level duplicate members, duplicate playlist names and master-list dupes.</summary>
+    private static void RunDupeScan(string path)
+    {
+        var log = new StringBuilder();
+        try
+        {
+            // Accept either an iTunesDB file or an iPod root (then we can also check for missing files).
+            string? mountRoot = Directory.Exists(path) ? path : null;
+            string? dbPath = mountRoot is not null ? DeviceDetector.Build(mountRoot)?.ITunesDbPath : path;
+            if (dbPath is null || !File.Exists(dbPath))
+            {
+                log.AppendLine($"Not an iPod root or database file: {path}");
+                File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-dupescan.txt"), log.ToString());
+                Console.WriteLine(log.ToString());
+                return;
+            }
+            var view = ITunesDbReader.Read(File.ReadAllBytes(dbPath));
+            var tracks = view.Tracks;
+            log.AppendLine($"Tracks: {tracks.Count}   Playlists: {view.Playlists.Count} (master: {view.Playlists.Count(p => p.IsMaster)})");
+            log.AppendLine();
+
+            // Unicode-normalise before comparing: the same accented title can be stored pre-composed
+            // ("ő" = U+0151) by one tagger and decomposed ("o"+U+030B) by another, and those two byte
+            // sequences look identical on screen — the classic invisible duplicate in accented libraries.
+            static string Norm(string? s)
+            {
+                string v = (s ?? "").Trim().ToLowerInvariant();
+                try { return v.Normalize(System.Text.NormalizationForm.FormC); } catch { return v; }   // lone surrogates → compare as-is
+            }
+            // Paths are compared WITHOUT Unicode folding: two on-iPod files may legitimately differ only
+            // by composition form, and calling those "the same file" would invent a duplicate.
+            static string NormPath(string? s) => (s ?? "").Trim().ToLowerInvariant();
+            string Date(DateTime? d) => d is { } dt && dt.Year > 1970 ? dt.ToString("yyyy-MM-dd HH:mm") : "-";
+
+            // ---- 1) same tags (title+artist+album) on more than one track ----
+            var tagGroups = tracks.GroupBy(t => $"{Norm(t.Title)}|{Norm(t.Artist)}|{Norm(t.Album)}")
+                                  .Where(g => g.Count() > 1 && Norm(g.First().Title).Length > 0)
+                                  .OrderBy(g => g.Key).ToList();
+            log.AppendLine($"== Duplicate songs by tags (title+artist+album): {tagGroups.Count} group(s) ==");
+            foreach (var g in tagGroups)
+            {
+                var list = g.ToList();
+                bool sameFile = list.Select(t => NormPath(t.Location)).Distinct().Count() == 1 && NormPath(list[0].Location).Length > 0;
+                // Same size + duration to the SECOND: a second copy of the same file can carry a slightly
+                // different millisecond length (different tagger/decoder), so exact-ms equality would
+                // mislabel the most common real duplicate as "different files".
+                bool sameBytes = list.Select(t => (t.FileSize, Sec: t.LengthMs / 1000)).Distinct().Count() == 1;
+                string kind = sameFile ? "SAME FILE listed twice (DB-level duplicate)"
+                            : sameBytes ? "same size+length, DIFFERENT files (copied twice)"
+                            : "different files (different size/length — re-encode or different source)";
+                log.AppendLine($"  \"{list[0].Title}\" — {list[0].Artist} [{list[0].Album}]  ×{list.Count}  → {kind}");
+                foreach (var t in list)
+                    log.AppendLine($"      id={t.UniqueId}  dbid={t.Dbid:X16}  added={Date(t.DateAdded)}  plays={t.PlayCount}  size={t.FileSize}  len={t.LengthMs}ms  loc={t.Location}");
+            }
+            log.AppendLine();
+
+            // ---- 1b) LOOSER keys: these catch the copies the app's own dedupe guard MISSES
+            //          (its key is exactly the title+artist+album used above), which is the usual
+            //          reason duplicates got onto the device in the first place. ----
+            void Loose(string label, Func<Track, string> key)
+            {
+                var groups = tracks.GroupBy(key).Where(g => g.Count() > 1 && g.Key.Length > 0)
+                                   .OrderByDescending(g => g.Count()).ToList();
+                log.AppendLine($"== Same {label}: {groups.Count} group(s), {groups.Sum(g => g.Count() - 1)} extra cop(y/ies) ==");
+                foreach (var g in groups.Take(40))
+                {
+                    log.AppendLine($"  \"{g.First().Title}\" ×{g.Count()}");
+                    foreach (var t in g)
+                        log.AppendLine($"      id={t.UniqueId} artist=\"{t.Artist}\" album=\"{t.Album}\" size={t.FileSize} len={t.LengthMs}ms added={Date(t.DateAdded)} plays={t.PlayCount} loc={t.Location}");
+                }
+                if (groups.Count > 40) log.AppendLine($"  … and {groups.Count - 40} more group(s)");
+                log.AppendLine();
+            }
+            Loose("TITLE only (ignores artist/album spelling)", t => Norm(t.Title));
+            Loose("TITLE + ARTIST (ignores album)", t => $"{Norm(t.Title)}|{Norm(t.Artist)}");
+            Loose("byte size + duration (byte-identical copies, tags irrelevant)",
+                  t => t.FileSize > 0 ? $"{t.FileSize}|{t.LengthMs / 1000}" : "");
+
+            // ---- 1c) rows whose audio file is gone (dead rows look like duplicates next to a re-added copy) ----
+            if (mountRoot is not null)
+            {
+                var missing = tracks.Where(t => t.ResolveFilePath(mountRoot) is { } p && !File.Exists(p)).ToList();
+                log.AppendLine($"== Tracks whose FILE IS MISSING (dead rows): {missing.Count} ==");
+                foreach (var t in missing.Take(60))
+                    log.AppendLine($"      id={t.UniqueId} \"{t.Title}\" — {t.Artist}  added={Date(t.DateAdded)}  loc={t.Location}");
+                if (missing.Count > 60) log.AppendLine($"  … and {missing.Count - 60} more");
+                var files = Directory.Exists(Path.Combine(mountRoot, "iPod_Control", "Music"))
+                    ? Directory.EnumerateFiles(Path.Combine(mountRoot, "iPod_Control", "Music"), "*", SearchOption.AllDirectories)
+                        .Where(f => !Path.GetFileName(f).StartsWith("._", StringComparison.Ordinal)).ToList()
+                    : new List<string>();
+                var referenced = new HashSet<string>(tracks.Select(t => t.ResolveFilePath(mountRoot) ?? "").Where(s => s.Length > 0), StringComparer.OrdinalIgnoreCase);
+                var strays = files.Where(f => !referenced.Contains(f)).ToList();
+                log.AppendLine($"== Files on the drive NOT in the database (strays, wasted space): {strays.Count}" +
+                               $" ({strays.Sum(f => new FileInfo(f).Length) / (1024 * 1024)} MB) ==");
+                foreach (var f in strays.Take(40)) log.AppendLine($"      {f}");
+                if (strays.Count > 40) log.AppendLine($"  … and {strays.Count - 40} more");
+                log.AppendLine($"(music files on drive: {files.Count}, database tracks: {tracks.Count})");
+                log.AppendLine();
+            }
+
+            // ---- 2) the same on-disk file referenced by more than one track (regardless of tags) ----
+            var fileGroups = tracks.Where(t => !string.IsNullOrEmpty(t.Location))
+                                   .GroupBy(t => NormPath(t.Location)).Where(g => g.Count() > 1).ToList();
+            log.AppendLine($"== Same file referenced by multiple DB entries: {fileGroups.Count} file(s) ==");
+            foreach (var g in fileGroups)
+            {
+                log.AppendLine($"  {g.First().Location}  ×{g.Count()}");
+                foreach (var t in g) log.AppendLine($"      id={t.UniqueId}  \"{t.Title}\"  added={Date(t.DateAdded)}");
+            }
+            log.AppendLine();
+
+            // The VIEW dedupes the mhsd 2/3 mirror copies, so every playlist-level diagnostic below
+            // reads the RAW datasets — a genuine within-dataset duplicate (the corruption class this
+            // scan exists to catch) would otherwise be collapsed before we ever saw it.
+            var rawDb = RawDb.Parse(File.ReadAllBytes(dbPath));
+            var byId = tracks.Where(t => t.UniqueId != 0).GroupBy(t => t.UniqueId).ToDictionary(g => g.Key, g => g.First());
+            var nameByPid = view.Playlists.Where(p => p.PersistentId != 0)
+                                .GroupBy(p => p.PersistentId).ToDictionary(g => g.Key, g => g.First().DisplayName);
+            // Explicit little-endian reads (the iTunesDB is LE regardless of host), matching Core's own helpers.
+            static ulong RawPid(RawPlaylist pl) => pl.Prefix.Length >= 0x24 ? System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(pl.Prefix.AsSpan(0x1C)) : 0;
+            static List<uint> RawMembers(RawPlaylist pl)
+            {
+                var ids = new List<uint>(pl.Mhips.Count);
+                foreach (var m in pl.Mhips) if (m.Length >= 0x1C) ids.Add(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(m.AsSpan(0x18)));
+                return ids;
+            }
+            var plDatasets = rawDb.Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null).ToList();
+
+            // ---- 3) playlist-level issues per raw dataset: duplicate members, dangling ids, and
+            //         same-pid mhyp rows WITHIN one dataset (true DB-level duplication) ----
+            log.AppendLine("== Playlist-level issues (per raw dataset) ==");
+            bool anyPlDupes = false;
+            foreach (var ds in plDatasets)
+            {
+                var pidSeen = new Dictionary<ulong, int>();
+                foreach (var pl in ds.Playlists!)
+                {
+                    ulong pid = RawPid(pl);
+                    if (pid != 0) { pidSeen.TryGetValue(pid, out int n); pidSeen[pid] = n + 1; }
+                    var ids = RawMembers(pl);
+                    var dupes = ids.GroupBy(i => i).Where(g => g.Count() > 1).ToList();
+                    int dangling = ids.Count(i => !byId.ContainsKey(i));
+                    if (dupes.Count == 0 && dangling == 0) continue;
+                    anyPlDupes = true;
+                    log.AppendLine($"  mhsd{ds.Type} \"{(nameByPid.TryGetValue(pid, out var nm) ? nm : "?")}\" (pid={pid:X})  members={ids.Count}  dupe-ids={dupes.Count}  dangling={dangling}");
+                    foreach (var d in dupes)
+                        log.AppendLine($"      id={d.Key} \"{(byId.TryGetValue(d.Key, out var t) ? t.Title ?? "?" : "?")}\" appears ×{d.Count()}");
+                }
+                foreach (var kv in pidSeen.Where(kv => kv.Value > 1))
+                {
+                    anyPlDupes = true;
+                    log.AppendLine($"  mhsd{ds.Type}: pid={kv.Key:X} has {kv.Value} mhyp rows in the SAME dataset — DB-level duplication!");
+                }
+            }
+            if (!anyPlDupes) log.AppendLine("  (none)");
+            log.AppendLine();
+
+            // ---- 4) duplicate playlist names (distinct pids sharing one name — e.g. the same preset
+            //         clicked twice). The view is already unique per pid. ----
+            var nameGroups = view.Playlists.Where(p => !p.IsMaster)
+                                 .GroupBy(p => Norm(p.Name)).Where(g => g.Count() > 1 && g.Key.Length > 0).ToList();
+            log.AppendLine($"== Playlists sharing the same name: {nameGroups.Count} name(s) ==");
+            foreach (var g in nameGroups)
+                foreach (var p in g) log.AppendLine($"  \"{p.Name}\"  pid={p.PersistentId:X}  members={p.Count}");
+            log.AppendLine();
+
+            // ---- 5) raw dataset breakdown + mhsd 2/3 mirror sync (same pid must carry the same
+            //         members, in the same order, in both copies) ----
+            log.AppendLine("== Raw dataset breakdown ==");
+            foreach (var ds in rawDb.Datasets)
+            {
+                if (ds.Playlists is null) { log.AppendLine($"  mhsd type {ds.Type}: {(ds.Tracks is { } tl ? tl.Count + " tracks" : "verbatim")}"); continue; }
+                log.AppendLine($"  mhsd type {ds.Type}: {ds.Playlists.Count} playlist(s)");
+                foreach (var pl in ds.Playlists)
+                    log.AppendLine($"      pid={RawPid(pl):X}  mhips={pl.Mhips.Count}  prefixLen={pl.Prefix.Length}");
+            }
+            int desync = 0;
+            bool mirrorChecked = plDatasets.Count == 2;   // only an iTunes-style two-dataset DB has mirrors to compare
+            if (mirrorChecked)
+            {
+                var a = plDatasets[0].Playlists!.GroupBy(RawPid).ToDictionary(g => g.Key, g => g.First());
+                var b = plDatasets[1].Playlists!.GroupBy(RawPid).ToDictionary(g => g.Key, g => g.First());
+                foreach (var pid in a.Keys.Union(b.Keys).Where(p => p != 0))
+                {
+                    if (!a.TryGetValue(pid, out var pa)) { log.AppendLine($"  DESYNC: pid={pid:X} only in mhsd{plDatasets[1].Type}"); desync++; continue; }
+                    if (!b.TryGetValue(pid, out var pb)) { log.AppendLine($"  DESYNC: pid={pid:X} only in mhsd{plDatasets[0].Type}"); desync++; continue; }
+                    if (!RawMembers(pa).SequenceEqual(RawMembers(pb)))
+                    { log.AppendLine($"  DESYNC: pid={pid:X} member lists differ between the mirror copies"); desync++; }
+                }
+                if (desync == 0) log.AppendLine("  (mhsd 2/3 mirror copies are in sync)");
+            }
+            else log.AppendLine($"  (mirror check skipped — this DB has {plDatasets.Count} playlist dataset(s), not 2)");
+            log.AppendLine();
+
+            int dupeTracks = tagGroups.Sum(g => g.Count() - 1);
+            log.AppendLine($"SUMMARY: {dupeTracks} extra track cop{(dupeTracks == 1 ? "y" : "ies")} in {tagGroups.Count} tag-group(s); " +
+                           $"{fileGroups.Count} shared-file entr{(fileGroups.Count == 1 ? "y" : "ies")}; " +
+                           $"{nameGroups.Count} duplicated playlist name(s); " +
+                           (mirrorChecked ? $"{desync} mirror desync(s)." : "mirror sync not checked."));
+        }
+        catch (Exception ex) { log.AppendLine("EXCEPTION: " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-dupescan.txt"), log.ToString());
+        Console.WriteLine(log.ToString());
+    }
+
     private static void RunEditTest(string path)
     {
         var log = new StringBuilder();
@@ -271,6 +555,31 @@ internal static class Program
             Check("rating set (5★=100)", t2.Rating, (byte)100);
             Check("a DIFFERENT track is untouched", v2.FindByUniqueId(otherId)!.Title, otherTitleBefore);
 
+            // (2b) The full Get-Info fields: composer/comment string mhods + disc/total numerics patched
+            // in the header. Deliberately run on a track that has NEITHER mhod today, so this exercises
+            // the grow-the-mhit "add a tag that never existed" path (asserted, not assumed).
+            var bare = view.Tracks.FirstOrDefault(t => string.IsNullOrEmpty(t.Composer) && string.IsNullOrEmpty(t.Comment)) ?? view.Tracks[0];
+            uint bareId = bare.UniqueId;
+            Check("fixture has a track with no composer/comment mhod (add-path coverage)",
+                  string.IsNullOrEmpty(bare.Composer) && string.IsNullOrEmpty(bare.Comment), true);
+            var raw2b = RawDb.Parse(orig);
+            raw2b.EditTrack(bareId, new TrackEdit { Composer = "EDITED COMPOSER", Comment = "EDITED COMMENT", TotalTracks = 12, DiscNumber = 2, TotalDiscs = 3 });
+            var v2b = ITunesDbReader.Read(raw2b.Serialize());
+            var t2b = v2b.FindByUniqueId(bareId)!;
+            Check("composer set (mhod 12 added)", t2b.Composer, "EDITED COMPOSER");
+            Check("comment set (mhod 8 added)", t2b.Comment, "EDITED COMMENT");
+            Check("total tracks set (@0x30)", t2b.TotalTracks, (uint)12);
+            Check("disc# set (@0x5C)", t2b.DiscNumber, (uint)2);
+            Check("total discs set (@0x60)", t2b.TotalDiscs, (uint)3);
+            Check("track count unchanged after mhod add", v2b.Tracks.Count, view.Tracks.Count);
+            Check("location preserved through mhod add", t2b.Location, bare.Location);
+            uint witnessId = view.Tracks.First(t => t.UniqueId != bareId).UniqueId;   // any other track
+            string? witnessTitle = view.Tracks.First(t => t.UniqueId == witnessId).Title;
+            Check("other track untouched by mhod add", v2b.FindByUniqueId(witnessId)!.Title, witnessTitle);
+            byte[] once = raw2b.Serialize();
+            raw2b.EditTrack(bareId, new TrackEdit { Composer = "EDITED COMPOSER", Comment = "EDITED COMMENT", TotalTracks = 12, DiscNumber = 2, TotalDiscs = 3 });
+            Check("re-applying the same edit is idempotent", raw2b.Serialize().SequenceEqual(once), true);
+
             // (3) Rating-only edit is in-place: the edited mhit keeps its exact byte length (no resize).
             var rawL = RawDb.Parse(orig);
             var trks = rawL.Datasets.First(d => d.Type == 1).Tracks!;
@@ -284,6 +593,13 @@ internal static class Program
             raw4.EditTrack(id, new TrackEdit { Genre = "" });
             var t4 = ITunesDbReader.Read(raw4.Serialize()).FindByUniqueId(id)!;
             Check("cleared genre is empty", string.IsNullOrEmpty(t4.Genre), true);
+
+            // (4b) An added-then-cleared comment mhod is removed again (round trip back to none).
+            var raw4b = RawDb.Parse(orig);
+            raw4b.EditTrack(id, new TrackEdit { Comment = "TEMP" });
+            raw4b.EditTrack(id, new TrackEdit { Comment = "" });
+            var t4b = ITunesDbReader.Read(raw4b.Serialize()).FindByUniqueId(id)!;
+            Check("added-then-cleared comment is empty", string.IsNullOrEmpty(t4b.Comment), true);
         }
         catch (Exception ex) { log.AppendLine("EXCEPTION: " + ex); fail++; }
 
@@ -795,14 +1111,17 @@ internal static class Program
             return;
         }
 
-        if (view == "trackinfo")
+        if (view is "trackinfo" or "trackinfo1")
         {
             var tracks = new List<Track>
             {
-                new() { Title = "Higher Ground", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, TrackNumber = 1, Rating = 80 },
-                new() { Title = "Across the Room", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, TrackNumber = 5, Rating = 60 },
-                new() { Title = "Line of Sight", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, TrackNumber = 7, Rating = 100 },
+                new() { Title = "Higher Ground", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Composer = "Harrison Mills & Clayton Knight", Year = 2017, TrackNumber = 1, TotalTracks = 16, DiscNumber = 1, TotalDiscs = 1, Rating = 80,
+                       PlayCount = 23, Bitrate = 320, SampleRate = 44100, FileSize = 8_437_291, FileTypeDescription = "MPEG audio file",
+                       DateAdded = DateTime.Today.AddDays(-37), LastPlayed = DateTime.Today.AddDays(-3), Location = ":iPod_Control:Music:F03:ODES0101.mp3" },
+                new() { Title = "Across the Room", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Composer = "Harrison Mills & Clayton Knight", Year = 2017, TrackNumber = 5, TotalTracks = 16, DiscNumber = 1, TotalDiscs = 1, Rating = 60 },
+                new() { Title = "Line of Sight", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Composer = "Harrison Mills & Clayton Knight", Year = 2017, TrackNumber = 7, TotalTracks = 16, DiscNumber = 1, TotalDiscs = 1, Rating = 100 },
             };
+            if (view == "trackinfo1") tracks.RemoveRange(1, 2);   // single-song variant — shows the read-only stats section
             using var dlg = new TrackInfoDialog(tracks) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
             dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
@@ -2152,7 +2471,13 @@ internal static class Program
                 var created = r5.Playlists.FirstOrDefault(p => p.Name == "Mixtape Test");
                 Check(created is not null, "new playlist created");
                 Check(created is not null && members.Take(3).All(id => created.TrackIds.Contains(id)), "added tracks are in the new playlist");
-                Check(r5.Playlists.Count(p => p.Name == "Mixtape Test") == 2, "new playlist mirrored into both playlist datasets");
+                // The reader dedupes the mhsd 2/3 mirror copies, so verify the mirroring invariant at
+                // the RAW level: each playlist dataset must carry the new playlist exactly once.
+                Check(r5.Playlists.Count(p => p.Name == "Mixtape Test") == 1, "deduped view lists the new playlist once");
+                var raw5b = RawDb.Parse(raw5.Serialize());
+                bool mirrored = raw5b.Datasets.Where(ds => ds.Type is 2 or 3 && ds.Playlists is not null).ToList() is { Count: > 0 } pds
+                    && pds.All(ds => ds.Playlists!.Count(p => p.Prefix.Length >= 0x24 && BitConverter.ToUInt64(p.Prefix, 0x1C) == newPid) == 1);
+                Check(mirrored, "new playlist mirrored into both playlist datasets (raw)");
 
                 // 5) no-op round trip still byte-identical
                 Check(RawDb.Parse(orig).Serialize().AsSpan().SequenceEqual(orig), "no-op round trip still byte-identical");
@@ -2214,9 +2539,21 @@ internal static class Program
                 Check(newTrack.Bitrate == 320 && newTrack.SampleRate == 44100, $"new bitrate/rate = {newTrack.Bitrate}/{newTrack.SampleRate}");
                 Check(newTrack.Location == nt.Location, $"new location = '{newTrack.Location}'");
             }
-            int mastersWithNew = after.Playlists.Count(p => p.IsMaster && p.TrackIds.Contains(newId));
-            int masterCount = after.Playlists.Count(p => p.IsMaster);
-            Check(mastersWithNew == masterCount && masterCount > 0, $"new track in all {masterCount} master playlists (got {mastersWithNew})");
+            // Check the master list at RAW level, per playlist dataset: the reader shows the mhsd 2/3
+            // mirror copies as ONE playlist, so a view-level count would only ever prove the FIRST
+            // dataset's master got the track — exactly the half-written case this test guards against.
+            var addedRaw = RawDb.Parse(added);
+            int masterDs = 0, masterDsWithNew = 0;
+            foreach (var ds in addedRaw.Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
+                foreach (var pl in ds.Playlists!.Where(p => p.Prefix.Length > 0x14 && p.Prefix[0x14] != 0))
+                {
+                    masterDs++;
+                    if (pl.Mhips.Any(m => m.Length >= 0x1C && BitConverter.ToUInt32(m, 0x18) == newId)) masterDsWithNew++;
+                }
+            Check(masterDsWithNew == masterDs && masterDs > 0, $"new track in all {masterDs} raw master playlists (got {masterDsWithNew})");
+            // …and the same thing as the APP sees it (deduped view) — the two together prove both that
+            // every mirror copy was written and that the library actually lists the song.
+            Check(after.Master is not null && after.Master!.TrackIds.Contains(newId), "new track visible in the master playlist (view)");
             // every original track must still be present
             var beforeIds = before.Tracks.Select(t => t.UniqueId).ToHashSet();
             var afterIds = after.Tracks.Select(t => t.UniqueId).ToHashSet();

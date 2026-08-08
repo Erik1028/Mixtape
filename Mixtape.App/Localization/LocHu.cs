@@ -42,6 +42,7 @@ internal static partial class LocHu
         ["Manage…"] = "Kezelés…",
         ["Search songs, artists, albums…"] = "Dalok, előadók, albumok keresése…",
         ["{0} songs"] = "{0} dal",
+        ["1 song"] = "1 dal",   // drag-to-playlist badge (single-song grab)
         ["{0} albums"] = "{0} album",
         ["{0} artists"] = "{0} előadó",
         ["{0} photos"] = "{0} fénykép",

@@ -14,7 +14,16 @@ internal sealed class MessageDialog : GlassDialog
     public static DialogResult Show(IWin32Window? owner, string text, string caption,
         MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None)
     {
-        using var dlg = new MessageDialog(text ?? "", caption ?? "", buttons, icon);
+        using var dlg = new MessageDialog(text ?? "", caption ?? "", DefsFor(buttons), icon);
+        return owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
+    }
+
+    /// <summary>Show with fully custom button captions (already Loc.T'd by the caller). Buttons lay out
+    /// left→right in array order — keep the primary/default one last so it sits on the right.</summary>
+    public static DialogResult Show(IWin32Window? owner, string text, string caption,
+        (string label, DialogResult result, bool primary)[] customButtons, MessageBoxIcon icon = MessageBoxIcon.None)
+    {
+        using var dlg = new MessageDialog(text ?? "", caption ?? "", customButtons, icon);
         return owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
     }
 
@@ -26,7 +35,7 @@ internal sealed class MessageDialog : GlassDialog
 
     private const int Pad = 24, IconSize = 38, IconGap = 16, BtnH = 34, BtnGap = 10, TitleGap = 6, MsgBtnGap = 22, MaxW = 480;
 
-    private MessageDialog(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon)
+    private MessageDialog(string text, string caption, (string label, DialogResult result, bool primary)[] buttons, MessageBoxIcon icon)
     {
         _message = text;
         _caption = string.IsNullOrWhiteSpace(caption) ? "Mixtape" : caption;
@@ -83,16 +92,17 @@ internal sealed class MessageDialog : GlassDialog
         Shown += (_, _) => _default?.Focus();
     }
 
-    private List<ThemedButton> BuildButtons(MessageBoxButtons buttons)
+    private static (string, DialogResult, bool)[] DefsFor(MessageBoxButtons buttons) => buttons switch
     {
-        var defs = buttons switch
-        {
-            MessageBoxButtons.OKCancel => new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("OK"), DialogResult.OK, true) },
-            MessageBoxButtons.YesNo => new[] { (Loc.T("No"), DialogResult.No, false), (Loc.T("Yes"), DialogResult.Yes, true) },
-            MessageBoxButtons.YesNoCancel => new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("No"), DialogResult.No, false), (Loc.T("Yes"), DialogResult.Yes, true) },
-            MessageBoxButtons.RetryCancel => new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("Retry"), DialogResult.Retry, true) },
-            _ => new[] { (Loc.T("OK"), DialogResult.OK, true) },
-        };
+        MessageBoxButtons.OKCancel => new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("OK"), DialogResult.OK, true) },
+        MessageBoxButtons.YesNo => new[] { (Loc.T("No"), DialogResult.No, false), (Loc.T("Yes"), DialogResult.Yes, true) },
+        MessageBoxButtons.YesNoCancel => new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("No"), DialogResult.No, false), (Loc.T("Yes"), DialogResult.Yes, true) },
+        MessageBoxButtons.RetryCancel => new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("Retry"), DialogResult.Retry, true) },
+        _ => new[] { (Loc.T("OK"), DialogResult.OK, true) },
+    };
+
+    private List<ThemedButton> BuildButtons((string label, DialogResult result, bool primary)[] defs)
+    {
         var list = new List<ThemedButton>();
         foreach (var (label, result, primary) in defs)
         {

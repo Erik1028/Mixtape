@@ -30,6 +30,14 @@ internal sealed class MainForm : Form, IMessageFilter
     private ITunesDb? _db;
     private Playlist? _current;
     private bool _writeConfirmed;
+    /// <summary>Mount roots written to since their last eject. Keyed per physical iPod, so switching
+    /// devices (or reloading the same one after a save) can't forget that an earlier one still needs
+    /// ejecting — every entry here is an iPod the user should eject before unplugging.</summary>
+    private readonly HashSet<string> _dirtyRoots = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>A hardware write is running on a worker thread with NO modal dialog holding the window
+    /// (artwork rebuild, Library Doctor). Closing then would end the process mid-write — the one case
+    /// where the database swap could be interrupted — so the close is refused while this is set.</summary>
+    private volatile bool _bgWriteRunning;
     private readonly bool _autoDetect;
     private readonly AppSettings _settings = AppSettings.Load();
     private int _artGen;          // bumped each ShowCurrent; cancels stale background art loads
@@ -63,7 +71,9 @@ internal sealed class MainForm : Form, IMessageFilter
     // Auto-detect on plug/unplug: WM_DEVICECHANGE kicks this; it fires once after the burst settles + the
     // volume has finished mounting, then re-scans for iPods.
     private readonly System.Windows.Forms.Timer _deviceChangeTimer = new() { Interval = 900 };
-    private string? _ejectedRoot; // after a manual eject, ignore this drive in auto-detect until a fresh plug-in
+    /// <summary>Roots ejected in this session: auto-detect must not re-adopt them until they are physically
+    /// replugged. A set, not one slot — several iPods can be ejected without closing the app.</summary>
+    private readonly HashSet<string> _ejectedRoots = new(StringComparer.OrdinalIgnoreCase);
     private readonly SearchBox _search = new() { Dock = DockStyle.Fill };
     private string _searchQuery = "";
     private bool _navigating; // suppresses the search box's redundant ShowCurrent while we clear it on navigation
@@ -131,7 +141,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _sidebar.RefreshClicked += RefreshDevices;
         _sidebar.OpenFolderClicked += OpenFolder;
         _sidebar.SettingsClicked += OpenSettings;
-        _sidebar.EjectClicked += _ => EjectDevice();
+        _sidebar.EjectClicked += tag => EjectDevice(tag as IPodDevice);   // each device row ejects ITS OWN iPod
         _sidebar.RowRightClicked += OnSidebarRightClick;
         _sidebar.PlaylistAreaRightClicked += OnPlaylistAreaRightClick;
         _sidebar.SectionAddClicked += (kind, pt) => { if (kind == SidebarRowKind.LocalPlaylist) CreateLocalPlaylist(null); else OnPlaylistAreaRightClick(pt); };   // "+" → local vs iPod new-playlist
@@ -1301,7 +1311,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_scanning) return;
         _scanning = true;
-        _ejectedRoot = null; // an explicit Refresh means the user wants to re-detect everything
+        _ejectedRoots.Clear(); // an explicit Refresh means the user wants to re-detect everything
         if (_device is null) ShowScanning(); // instant feedback on first open — never a blank, frozen window
         try
         {
@@ -1347,18 +1357,30 @@ internal sealed class MainForm : Form, IMessageFilter
         SetStatus("");   // the header already says "No iPod connected" — don't echo it at the bottom too
     }
 
-    /// <summary>Safely eject the connected iPod (flush + dismount), then return to the "no iPod" screen.</summary>
-    private async void EjectDevice()
+    /// <summary>True only for a bare drive root like "G:\" — the only mounts eject may lock/dismount.
+    /// An "Open folder" mount (e.g. "D:\ipod-clone") shares its volume with unrelated data, so ejecting
+    /// by its drive letter would dismount the WHOLE drive.</summary>
+    /// Requires the exact "X:\" form: "X:" alone is DRIVE-RELATIVE in Windows, so Path.Combine would
+    /// then resolve iPod_Control against the current directory on that drive, not its root.
+    private static bool IsDriveRootMount(string root) =>
+        root.Length == 3 && char.IsLetter(root[0]) && root[1] == ':' && root[2] == '\\';
+
+    /// <summary>Safely eject an iPod (flush + dismount). <paramref name="dev"/> is the device whose eject
+    /// control was used — NOT necessarily the one being viewed, since the sidebar lists every connected
+    /// iPod and each row has its own ⏏. Only the active device's session is torn down.</summary>
+    private async void EjectDevice(IPodDevice? dev = null)
     {
-        if (_device is null) return;
-        string root = _device.MountRoot;
-        if (root.Length < 2 || root[1] != ':')
+        dev ??= _device;
+        if (dev is null) return;
+        string root = dev.MountRoot;
+        if (!IsDriveRootMount(root))
         {
             MessageDialog.Show(this, Loc.T("This iPod isn't on a drive letter, so it can't be ejected from here. Use Windows' “Safely Remove Hardware”."), Loc.T("Eject"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         char drive = root[0];
-        _nowPlaying.StopAndHide(); _playingTrack = null; // release any open audio file first
+        bool isActive = ReferenceEquals(dev, _device);
+        if (isActive) { _nowPlaying.StopAndHide(); _playingTrack = null; }   // release any open audio file first
         UseWaitCursor = true;
         (bool ok, string msg) result;
         try { result = await Task.Run(() => { bool s = DeviceEjector.TryEject(drive, out var m); return (s, m); }); }
@@ -1366,9 +1388,15 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (result.ok)
         {
-            _ejectedRoot = root;        // don't let auto-detect re-adopt it until it's physically replugged
-            _deviceChangeTimer.Stop();
-            ShowNoDevice();
+            _ejectedRoots.Add(root);      // don't let auto-detect re-adopt it until it's physically replugged
+            _dirtyRoots.Remove(root);     // ejected cleanly — nothing left to remind about for THIS iPod
+            _devices.RemoveAll(d => string.Equals(d.MountRoot, root, StringComparison.OrdinalIgnoreCase));
+            if (isActive)
+            {
+                _deviceChangeTimer.Stop();
+                ShowNoDevice();           // ShowNoDevice rebuilds the sidebar
+            }
+            else BuildSidebar();          // drop the ejected row so its ⏏ can't be clicked again
             SetStatus(Loc.T("Ejected — safe to unplug your iPod."));
         }
         else
@@ -1390,8 +1418,8 @@ internal sealed class MainForm : Form, IMessageFilter
         if (IsDisposed) return;
 
         // Don't re-adopt an iPod the user just ejected (a drive scan can re-mount it); wait for a real replug.
-        if (_ejectedRoot is not null)
-            found = found.Where(d => !string.Equals(d.MountRoot, _ejectedRoot, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (_ejectedRoots.Count > 0)
+            found = found.Where(d => !_ejectedRoots.Contains(d.MountRoot)).ToList();
 
         bool currentPresent = _device is not null
             && found.Any(d => string.Equals(d.MountRoot, _device!.MountRoot, StringComparison.OrdinalIgnoreCase));
@@ -1414,9 +1442,23 @@ internal sealed class MainForm : Form, IMessageFilter
         }
 
         // The active iPod was unplugged, or one appeared while none was loaded → adopt the new set.
+        // "Unplugged" is PROVEN from the filesystem, never inferred from absence in the scan: a device
+        // opened via "Open folder" (the documented fallback when auto-detect misses an iPod) is absent
+        // from DetectAll on every pass while still plugged in, so inferring a yank there would drop its
+        // pending-eject state on any unrelated USB event — silently killing the very reminder this feeds.
+        string? yankedRoot = _device is { } cur && IsDriveRootMount(cur.MountRoot)
+            && !Directory.Exists(Path.Combine(cur.MountRoot, "iPod_Control"))   // the drive really is gone
+            && !_ejectedRoots.Contains(cur.MountRoot) && _dirtyRoots.Contains(cur.MountRoot)
+            ? cur.MountRoot : null;   // snapshot before the view reset drops _device
         _devices.Clear(); _devices.AddRange(found);
         if (found.Count > 0) LoadDevice(found[0]);
         else ShowNoDevice();
+        if (yankedRoot is not null)
+        {
+            // Too late to eject — the cable is out. A non-blocking nudge for next time.
+            _dirtyRoots.Remove(yankedRoot);
+            SetStatus(Loc.T("⚠ The iPod was unplugged without ejecting — use Eject after copying so every write is finished."));
+        }
     }
 
     private void OpenFolder()
@@ -2013,6 +2055,61 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_mini is { Visible: true })
             _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted, _nowPlaying.Shuffle, _nowPlaying.Repeat);
+    }
+
+    /// <summary>Eject reminder: the user wrote to the iPod and is closing without ejecting. Gated to
+    /// user-initiated closes only — the language-change relaunch (ApplicationExitCall waits on the
+    /// single-instance mutex) and Windows shutdown must never be blocked by a modal prompt.</summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (e.CloseReason != CloseReason.UserClosing || e.Cancel) { base.OnFormClosing(e); return; }
+
+        if (_bgWriteRunning)
+        {
+            MessageDialog.Show(this,
+                Loc.T("Mixtape is still writing to the iPod. Please wait for it to finish before closing."),
+                Loc.T("Writing to the iPod"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            e.Cancel = true; base.OnFormClosing(e); return;
+        }
+
+        // Every iPod we wrote to that is still plugged in on its own drive letter. Folder mounts are
+        // excluded on purpose: they share a volume with unrelated data, so ejecting by drive letter
+        // would dismount the whole drive.
+        var pending = _dirtyRoots
+            .Where(root => IsDriveRootMount(root)
+                        && !_ejectedRoots.Contains(root)
+                        && Directory.Exists(Path.Combine(root, "iPod_Control")))
+            .ToList();
+
+        if (pending.Count > 0)
+        {
+            var r = MessageDialog.Show(this,
+                pending.Count == 1
+                    ? Loc.T("Mixtape wrote to this iPod and it hasn't been ejected yet.\n\nEjecting before you unplug makes sure Windows finishes writing everything to it.")
+                    : Loc.T("Mixtape wrote to {0} connected iPods that haven't been ejected yet.\n\nEjecting before you unplug makes sure Windows finishes writing everything to them.", pending.Count),
+                Loc.T("Eject"),
+                new[] { (Loc.T("Cancel"), DialogResult.Cancel, false), (Loc.T("Close anyway"), DialogResult.No, false), (Loc.T("Eject & close"), DialogResult.Yes, true) },
+                MessageBoxIcon.Warning);
+            if (r == DialogResult.Cancel) { e.Cancel = true; base.OnFormClosing(e); return; }
+            if (r == DialogResult.Yes)
+            {
+                _nowPlaying.StopAndHide(); _playingTrack = null;   // release open audio files or the volume lock fails
+                var failed = new List<string>();
+                foreach (string root in pending)
+                {
+                    // Synchronous on purpose — an async continuation would touch a disposed form.
+                    if (DeviceEjector.TryEject(root[0], out var msg)) _dirtyRoots.Remove(root);
+                    else failed.Add($"{root.TrimEnd('\\')} — {msg}");
+                }
+                if (failed.Count > 0)
+                {
+                    MessageDialog.Show(this, Loc.T("Couldn't eject the iPod:\n\n{0}", string.Join("\n", failed)), Loc.T("Eject"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    e.Cancel = true; base.OnFormClosing(e); return;   // stay open so the user can retry or close anyway
+                }
+            }
+            _dirtyRoots.Clear();   // handled (ejected or knowingly skipped) — don't re-prompt this close
+        }
+        base.OnFormClosing(e);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -2770,7 +2867,7 @@ internal sealed class MainForm : Form, IMessageFilter
         SectionLabel(Loc.T("OPTIONS"));
         var options = new CardPanel(cardW);
         var ejectBtn = new ThemedButton { Text = Loc.T("⏏  Eject"), Pill = true, Primary = true, Width = 120, Height = 30 };
-        ejectBtn.Click += (_, _) => EjectDevice();
+        ejectBtn.Click += (_, _) => EjectDevice(dev);   // this page's iPod, not whichever is active
         options.AddRow(Loc.T("Safely remove"), Loc.T("Flush changes and eject so you can unplug the iPod safely."), ejectBtn, 56);
         var settingsBtn = new ThemedButton { Text = Loc.T("Open Settings"), Pill = true, Width = 130, Height = 30 };
         settingsBtn.Click += (_, _) => OpenSettings();
@@ -2860,8 +2957,10 @@ internal sealed class MainForm : Form, IMessageFilter
             Loc.T("This writes album art onto every song already on the iPod, reading the cover embedded in each music file.\n\nSongs whose files have no embedded cover are left without art. Mixtape backs up the database first. Continue?"),
             Loc.T("Rebuild artwork"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
 
+        MarkIpodWrite(dev);   // this flow bypasses ConfirmWriteOnce (saves via its own IpodLibrary on a worker)
         SetStatus(Loc.T("Rebuilding artwork…"));
         UseWaitCursor = true;
+        _bgWriteRunning = true;   // no modal dialog guards this one — closing mid-write must be blocked
         (int added, int noFile, int noArt, string? error) result;
         try
         {
@@ -2891,7 +2990,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 catch (Exception ex) { return (0, 0, 0, (string?)ex.Message); }
             });
         }
-        finally { UseWaitCursor = false; }
+        finally { UseWaitCursor = false; _bgWriteRunning = false; }
 
         if (result.error is { } err)
         {
@@ -2935,6 +3034,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         if (plan is not { HasActions: true }) return;
         if (!ConfirmWriteOnce()) return;
+        MarkIpodWrite(dev);   // the scan + dialog above are awaited, so _device may have moved on — mark the device we actually write
 
         // Resolve the files we're allowed to physically delete: a duplicate's file may, in odd libraries,
         // be shared by a track we're KEEPING — never delete a file a survivor still references.
@@ -2949,6 +3049,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         SetStatus(Loc.T("Fixing library…"));
         UseWaitCursor = true;
+        _bgWriteRunning = true;   // no modal dialog guards this one — closing mid-write must be blocked
         int rows = 0, dupes = 0, files = 0, photoDupes = 0; string? error = null;
         try
         {
@@ -2982,7 +3083,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 catch (Exception ex) { error = ex.Message; }
             });
         }
-        finally { UseWaitCursor = false; }
+        finally { UseWaitCursor = false; _bgWriteRunning = false; }
 
         if (error is not null)
         {
@@ -3185,6 +3286,7 @@ internal sealed class MainForm : Form, IMessageFilter
             string devDir = Path.Combine(root, "iPod_Control", "Device");
             Directory.CreateDirectory(devDir);
             File.WriteAllBytes(Path.Combine(devDir, "SysInfoExtended"), doc!);
+            _dirtyRoots.Add(root);   // a real volume write — eject is what flushes FAT metadata
         }
         catch (Exception ex)
         {
@@ -3217,6 +3319,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (MessageDialog.Show(this, Loc.T("Restore {0}?\n\nThe current database will be replaced.", which), Loc.T("Restore database"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         try { File.Copy(source, db, overwrite: true); }
         catch (Exception ex) { MessageDialog.Show(this, Loc.T("Restore failed:\n\n{0}", ex.Message), Loc.T("Restore"), MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+        MarkIpodWrite();   // raw File.Copy over iTunesDB — bypasses ConfirmWriteOnce
         ReloadCurrentDevice();
         SetStatus(Loc.T("Database restored."));
     }
@@ -3536,7 +3639,12 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private static string NormKey(string? s)
     {
-        s = (s ?? "").Trim().ToLowerInvariant();
+        // Normalize to NFC first: the same accented title can be stored decomposed ("u" + combining double
+        // acute) by one program and precomposed ("ű") by another — byte-different, visually identical, and
+        // without this the duplicate guard silently misses every such song.
+        s = (s ?? "").Trim();
+        try { s = s.Normalize(System.Text.NormalizationForm.FormC); } catch { }   // invalid surrogates → keep as-is
+        s = s.ToLowerInvariant();
         return string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)); // collapse whitespace
     }
 
@@ -3551,6 +3659,37 @@ internal sealed class MainForm : Form, IMessageFilter
         return ItemKey(nt.Title, nt.Artist, nt.Album, isVideo: false);
     }
 
+    /// <summary>
+    /// Tag-independent fingerprint index (exact byte size → the durations seen at that size) over what is
+    /// already on the iPod. The tag key alone misses a re-added file whenever two programs disagree about
+    /// the tags — e.g. another manager stores every performer ("DESH; Young Fly; …") while Mixtape reads
+    /// TagLib's FirstPerformer ("DESH") — even though the audio is byte-for-byte the same file.
+    /// </summary>
+    private static Dictionary<long, List<uint>> BuildFingerprints(IEnumerable<Track> tracks, bool isVideo)
+    {
+        var map = new Dictionary<long, List<uint>>();
+        foreach (var t in tracks)
+        {
+            if (MediaType.IsVideo(t.MediaType) != isVideo || t.FileSize == 0) continue;
+            if (!map.TryGetValue(t.FileSize, out var lens)) map[t.FileSize] = lens = new List<uint>();
+            lens.Add(t.LengthMs);
+        }
+        return map;
+    }
+
+    /// <summary>True when a file of this exact byte size (and a duration within 2 s — two writers can round
+    /// the last millisecond differently) is already known.</summary>
+    private static bool FingerprintKnown(Dictionary<long, List<uint>> map, long size, uint lengthMs)
+        => size > 0 && map.TryGetValue(size, out var lens)
+           && lens.Any(l => l == 0 || lengthMs == 0 || Math.Abs((long)l - lengthMs) <= 2000);
+
+    private static void RememberFingerprint(Dictionary<long, List<uint>> map, long size, uint lengthMs)
+    {
+        if (size <= 0) return;
+        if (!map.TryGetValue(size, out var lens)) map[size] = lens = new List<uint>();
+        lens.Add(lengthMs);
+    }
+
     /// <summary>If some incoming files are already on the iPod, ask whether to skip them or add anyway.
     /// Returns the files to actually add (possibly fewer); an empty array means "add nothing".</summary>
     private string[] FilterAlreadyOnIpod(string[] files, string mediaWord, bool isVideo)
@@ -3561,7 +3700,8 @@ internal sealed class MainForm : Form, IMessageFilter
         foreach (var t in _lib.View.Tracks)
             if (MediaType.IsVideo(t.MediaType) == isVideo)
                 existing.Add(ItemKey(t.Title, t.Artist, t.Album, isVideo));
-        if (existing.Count == 0) return files; // nothing of this kind on the iPod yet → no dupes possible
+        var prints = BuildFingerprints(_lib.View.Tracks, isVideo);
+        if (existing.Count == 0 && prints.Count == 0) return files; // nothing of this kind on the iPod yet → no dupes possible
 
         var fresh = new List<string>();
         var dups = new List<string>();
@@ -3570,10 +3710,32 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             foreach (var f in files)
             {
-                string key;
-                try { key = isVideo ? ItemKey(Path.GetFileNameWithoutExtension(f), null, null, true) : ItemKeyFromAudioFile(f); }
+                string key = "";
+                long size = 0; uint lengthMs = 0;
+                try
+                {
+                    if (isVideo) { key = ItemKey(Path.GetFileNameWithoutExtension(f), null, null, true); }
+                    else
+                    {
+                        var nt = MetadataExtractor.Read(f);
+                        key = ItemKey(nt.Title, nt.Artist, nt.Album, isVideo: false);
+                        lengthMs = nt.LengthMs;
+                    }
+                    size = new FileInfo(f).Length;
+                }
                 catch { key = ""; } // unreadable tags → treat as new rather than wrongly skipping
-                if (key.Length > 0 && existing.Contains(key)) dups.Add(f); else fresh.Add(f);
+
+                // Either identity is enough: matching tags, OR the very same audio file under other tags.
+                bool dup = (key.Length > 0 && existing.Contains(key)) || FingerprintKnown(prints, size, lengthMs);
+                if (dup) dups.Add(f);
+                else
+                {
+                    fresh.Add(f);
+                    // Remember it, so the SAME song twice inside ONE batch (a folder tree holding both the
+                    // album copy and the "Best of" copy) is caught too — previously only on-iPod tracks counted.
+                    if (key.Length > 0) existing.Add(key);
+                    RememberFingerprint(prints, size, lengthMs);
+                }
             }
         }
         finally { UseWaitCursor = prevCursor; }
@@ -4034,6 +4196,12 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void OnDragOverAny(object? sender, DragEventArgs e)
     {
+        // Songs dragged from the grid are handled by the sidebar's OWN DragOver (playlist drop targets).
+        // This file-drop handler is attached to the sidebar as well and — being wired second — used to run
+        // after it and overwrite the Copy effect with None, so every playlist showed the "no drop" cursor
+        // and the drop was never delivered. Leave a song drag's effect exactly as the sidebar set it.
+        if (e.Data?.GetDataPresent(SongDragFormat) == true) { SetDropActive(false); return; }
+
         bool ok = e.Data?.GetDataPresent(DataFormats.FileDrop) == true && CanAcceptDrop();
         e.Effect = ok ? DragDropEffects.Copy : DragDropEffects.None;
         if (ok) SetDropActive(true, _viewKind == SidebarRowKind.LocalMusic ? Loc.T("Drop to add to Local Music") : Loc.T("Drop to add to your iPod"));
@@ -4060,6 +4228,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
         SetDropActive(false);
+        if (e.Data?.GetDataPresent(SongDragFormat) == true) return;   // song→playlist drop: OnSidebarDragDrop owns it
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0) return;
 
         // On the Local Music view, a drop adds PC folders to the library (no iPod needed).
@@ -4562,9 +4731,11 @@ internal sealed class MainForm : Form, IMessageFilter
         m.Items.Add(edit);
         m.Items.Add(new ToolStripSeparator());
 
-        // Add to playlist ▸ (existing playlists + New playlist…)
+        // Add to playlist ▸ (existing playlists + New playlist…). Smart playlists are excluded on
+        // purpose: their members come from rules, and a manual add would silently vanish on the next
+        // refresh — the drag-to-sidebar path already refuses them for the same reason.
         var addTo = new ToolStripMenuItem(Loc.T("Add to playlist"));
-        foreach (var pl in _shownPlaylists.Where(p => _db is not null && !ReferenceEquals(p, _db.Master) && !p.IsPodcast))
+        foreach (var pl in _shownPlaylists.Where(p => _db is not null && !ReferenceEquals(p, _db.Master) && !p.IsPodcast && !IsSmart(p.PersistentId)))
         {
             var plRef = pl;
             var it = new ToolStripMenuItem(pl.Name.Length == 0 ? Loc.T("Untitled") : pl.Name);
@@ -5003,13 +5174,22 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private bool ConfirmWriteOnce()
     {
-        if (!_settings.ConfirmWrites || _writeConfirmed) return true;
+        // Every guarded UI write flow passes through here right before writing, so this doubles as the
+        // eject-reminder's dirty marker (set conservatively pre-write — a failed write still touched the volume).
+        if (!_settings.ConfirmWrites || _writeConfirmed) { MarkIpodWrite(); return true; }
         string drive = _device?.MountRoot.TrimEnd('\\') ?? Loc.T("the iPod");
         var r = MessageDialog.Show(this,
             Loc.T("Mixtape backs up the database (iTunesDB.bak) before every write and verifies the result afterwards.\n\nTip: if Windows has flagged this iPod's drive for repair, run  chkdsk {0} /f  first.\n\nContinue?", drive),
             Loc.T("Writing to the iPod"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
-        if (r == DialogResult.OK) { _writeConfirmed = true; return true; }
+        if (r == DialogResult.OK) { _writeConfirmed = true; MarkIpodWrite(); return true; }
         return false;
+    }
+
+    /// <summary>Record that we're about to write to an iPod's volume, so the eject reminder can fire for
+    /// it later. Called pre-write on purpose — a failed write still touched the drive.</summary>
+    private void MarkIpodWrite(IPodDevice? dev = null)
+    {
+        if ((dev ?? _device)?.MountRoot is { Length: > 0 } root) _dirtyRoots.Add(root);
     }
 
     // The status line now lives in the header (under the action buttons). Transient messages aren't
@@ -5071,7 +5251,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (m.Msg == WM_DEVICECHANGE)
         {
             int ev = (int)m.WParam;
-            if (ev == DBT_DEVICEARRIVAL) _ejectedRoot = null; // a fresh plug-in → resume detecting that drive
+            if (ev == DBT_DEVICEARRIVAL) _ejectedRoots.Clear(); // a fresh plug-in → resume detecting those drives
             if (ev == DBT_DEVICEARRIVAL || ev == DBT_DEVICEREMOVECOMPLETE || ev == DBT_DEVNODES_CHANGED)
             {
                 _deviceChangeTimer.Stop();  // debounce the burst of messages a single plug/unplug fires

@@ -139,7 +139,7 @@ internal sealed class IpodLibrary
         try
         {
             ChecksumWriter.Apply(bytes, Device.Profile.Scheme, Device.Profile.FirewireGuid); // sign for hash58 devices; no-op for NONE
-            SafeDbWriter.Write(Device, bytes, Raw.TrackCount, View.Warnings.Count, View.Playlists.Count(p => p.IsMaster));   // verify against the pre-write baselines
+            SafeDbWriter.Write(Device, bytes, Raw.TrackCount, View.Warnings.Count, Raw.MasterPlaylistCount());   // verify against the pre-write baselines (master counted raw — see SafeDbWriter)
         }
         catch
         {

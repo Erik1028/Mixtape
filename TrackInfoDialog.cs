@@ -14,7 +14,7 @@ internal sealed class TrackInfoDialog : Form
     private readonly bool _multi;
     private readonly HashSet<Control> _touched = new();   // fields the user actually edited (multi mode applies only these)
     private bool _ratingTouched;
-    private readonly TextBox _title, _artist, _album, _albumArtist, _genre, _year, _track;
+    private readonly TextBox _title, _artist, _album, _albumArtist, _genre, _composer, _comment, _year, _track, _trackTotal, _disc, _discTotal;
     private readonly StarRating _rating;
 
     /// <summary>The edit to apply (only changed/edited fields), valid after the dialog returns OK.</summary>
@@ -33,7 +33,7 @@ internal sealed class TrackInfoDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-        ClientSize = new Size(440, _multi ? 408 : 372);
+        ClientSize = new Size(440, _multi ? 524 : 624);
         BackColor = Theme.Bg;
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
@@ -68,16 +68,34 @@ internal sealed class TrackInfoDialog : Form
         _album = Row(Loc.T("Album"), Common(x => x.Album ?? ""));
         _albumArtist = Row(Loc.T("Album artist"), Common(x => x.AlbumArtist ?? ""));
         _genre = Row(Loc.T("Genre"), Common(x => x.Genre ?? ""));
+        _composer = Row(Loc.T("Composer"), Common(x => x.Composer ?? ""));
+        _comment = Row(Loc.T("Comment"), Common(x => x.Comment ?? ""));
 
-        // Year + Track # share a row. Track # is per-song, so it's disabled when editing several.
+        // A small numeric box + an optional "/ total" companion, both styled like the main rows.
+        TextBox Num(int x, int width, string value, bool editable)
+        {
+            var tb = new TextBox { Text = value, Location = new Point(x, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
+            if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
+            Controls.Add(tb);
+            return tb;
+        }
+        void Slash(int x) => Controls.Add(new Label { Text = "/", ForeColor = Theme.Faint, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Location = new Point(x, y), Size = new Size(14, 26) });
+
+        // Year + "Track # / total" share a row. Track # is per-song, so it's disabled when editing
+        // several; the album total is shared, so it stays editable either way.
         Controls.Add(new Label { Text = Loc.T("Year"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
-        _year = new TextBox { Text = Common(x => x.Year > 0 ? x.Year.ToString() : ""), Location = new Point(122, y), Width = 70, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
-        _year.TextChanged += (_, _) => _touched.Add(_year);
-        Controls.Add(_year);
+        _year = Num(122, 70, Common(x => x.Year > 0 ? x.Year.ToString() : ""), true);
         Controls.Add(new Label { Text = Loc.T("Track #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(206, y), Size = new Size(66, 26) });
-        _track = new TextBox { Text = _multi ? "" : (_t.TrackNumber > 0 ? _t.TrackNumber.ToString() : ""), Location = new Point(282, y), Width = 70, BackColor = _multi ? Theme.PanelBg : Theme.RowBg, ForeColor = _multi ? Theme.Faint : Theme.TextCol, BorderStyle = BorderStyle.FixedSingle, ReadOnly = _multi, TabStop = !_multi };
-        if (!_multi) _track.TextChanged += (_, _) => _touched.Add(_track);
-        Controls.Add(_track);
+        _track = Num(282, 70, _multi ? "" : (_t.TrackNumber > 0 ? _t.TrackNumber.ToString() : ""), !_multi);
+        Slash(352);
+        _trackTotal = Num(368, 56, Common(x => x.TotalTracks > 0 ? x.TotalTracks.ToString() : ""), true);
+        y += 38;
+
+        // "Disc # / total" — disc # is per-song (disabled in multi), the disc count is album-shared.
+        Controls.Add(new Label { Text = Loc.T("Disc #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        _disc = Num(122, 70, _multi ? "" : (_t.DiscNumber > 0 ? _t.DiscNumber.ToString() : ""), !_multi);
+        Slash(194);
+        _discTotal = Num(210, 56, Common(x => x.TotalDiscs > 0 ? x.TotalDiscs.ToString() : ""), true);
         y += 38;
 
         // Rating stars.
@@ -88,6 +106,25 @@ internal sealed class TrackInfoDialog : Form
         Controls.Add(_rating);
         y += 44;
 
+        // Read-only stats (single song only) — the info the grid can't show all at once.
+        if (!_multi)
+        {
+            Controls.Add(new Panel { BackColor = Theme.PanelBg, Location = new Point(16, y), Size = new Size(408, 1) });
+            y += 10;
+            void Stat(string label, string value)
+            {
+                Controls.Add(new Label { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 22) });
+                Controls.Add(new Label { Text = value, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(122, y), Size = new Size(302, 22) });
+                y += 26;
+            }
+            Stat(Loc.T("Plays"), _t.PlayCount.ToString());
+            Stat(Loc.T("Last played"), DateStr(_t.LastPlayed));
+            Stat(Loc.T("Added"), DateStr(_t.DateAdded));
+            Stat(Loc.T("Format"), FormatStr(_t));
+            Stat(Loc.T("Path"), _t.LocalPath ?? (_t.Location is { Length: > 0 } loc ? loc.TrimStart(':').Replace(':', '\\') : "—"));
+            y += 8;
+        }
+
         var save = new ThemedButton { Text = Loc.T("Save"), Primary = true, Pill = true, Width = 100, Height = 32, Location = new Point(ClientSize.Width - 116, y), DialogResult = DialogResult.OK };
         var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(ClientSize.Width - 116 - 106, y), DialogResult = DialogResult.Cancel };
         save.Click += (_, _) => BuildEdit();
@@ -96,6 +133,30 @@ internal sealed class TrackInfoDialog : Form
         AcceptButton = save;
         CancelButton = cancel;
         if (_multi) ActiveControl = _artist;   // start on the first editable field, not the disabled Title
+    }
+
+    /// <summary>Conversational date (mirrors the grid's Added column); "—" when unset.</summary>
+    private static string DateStr(DateTime? d)
+    {
+        if (d is not { } dt || dt.Year <= 1970) return "—";
+        var today = DateTime.Today;
+        if (dt.Date == today) return Loc.T("Today");
+        if (dt.Date == today.AddDays(-1)) return Loc.T("Yesterday");
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        return dt.Year == today.Year ? dt.ToString("MMM d", ci) : dt.ToString("MMM d, yyyy", ci);
+    }
+
+    /// <summary>"MPEG audio file · 320 kbps · 44.1 kHz · 8.4 MB" — whichever parts the track has.
+    /// InvariantCulture decimals, matching the app's English-invariant number style.</summary>
+    private static string FormatStr(Track t)
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(t.FileTypeDescription)) parts.Add(t.FileTypeDescription!);
+        if (t.Bitrate > 0) parts.Add($"{t.Bitrate} kbps");
+        if (t.SampleRate > 0) parts.Add((t.SampleRate / 1000.0).ToString("0.#", ci) + " kHz");
+        if (t.FileSize > 0) parts.Add(t.FileSize >= 1024 * 1024 ? (t.FileSize / (1024.0 * 1024.0)).ToString("0.#", ci) + " MB" : (t.FileSize / 1024.0).ToString("0.#", ci) + " KB");
+        return parts.Count > 0 ? string.Join(" · ", parts) : "—";
     }
 
     private void BuildEdit()
@@ -109,7 +170,11 @@ internal sealed class TrackInfoDialog : Form
             if (_touched.Contains(_album)) e.Album = _album.Text;
             if (_touched.Contains(_albumArtist)) e.AlbumArtist = _albumArtist.Text;
             if (_touched.Contains(_genre)) e.Genre = _genre.Text;
+            if (_touched.Contains(_composer)) e.Composer = _composer.Text;
+            if (_touched.Contains(_comment)) e.Comment = _comment.Text;
             if (_touched.Contains(_year)) e.Year = uint.TryParse(_year.Text.Trim(), out var yv) ? yv : 0;
+            if (_touched.Contains(_trackTotal)) e.TotalTracks = uint.TryParse(_trackTotal.Text.Trim(), out var ttv) ? ttv : 0;
+            if (_touched.Contains(_discTotal)) e.TotalDiscs = uint.TryParse(_discTotal.Text.Trim(), out var tdv) ? tdv : 0;
             if (_ratingTouched) e.Rating = (byte)(Math.Clamp(_rating.Value, 0, 5) * 20);
             Edit = e;
             return;
@@ -121,11 +186,19 @@ internal sealed class TrackInfoDialog : Form
         if (_album.Text != (_t.Album ?? "")) e.Album = _album.Text;
         if (_albumArtist.Text != (_t.AlbumArtist ?? "")) e.AlbumArtist = _albumArtist.Text;
         if (_genre.Text != (_t.Genre ?? "")) e.Genre = _genre.Text;
+        if (_composer.Text != (_t.Composer ?? "")) e.Composer = _composer.Text;
+        if (_comment.Text != (_t.Comment ?? "")) e.Comment = _comment.Text;
 
         uint newY = uint.TryParse(_year.Text.Trim(), out var y2) ? y2 : 0;
         if (newY != _t.Year) e.Year = newY;
         uint newTrack = uint.TryParse(_track.Text.Trim(), out var tv) ? tv : 0;
         if (newTrack != _t.TrackNumber) e.TrackNumber = newTrack;
+        uint newTT = uint.TryParse(_trackTotal.Text.Trim(), out var tt2) ? tt2 : 0;
+        if (newTT != _t.TotalTracks) e.TotalTracks = newTT;
+        uint newDisc = uint.TryParse(_disc.Text.Trim(), out var dv) ? dv : 0;
+        if (newDisc != _t.DiscNumber) e.DiscNumber = newDisc;
+        uint newTD = uint.TryParse(_discTotal.Text.Trim(), out var td2) ? td2 : 0;
+        if (newTD != _t.TotalDiscs) e.TotalDiscs = newTD;
 
         // Only write the rating if the user actually changed the displayed star count. (The control shows
         // whole stars; a half-star song reads as N stars but its byte is N*20+10 — comparing the byte would
@@ -139,8 +212,10 @@ internal sealed class TrackInfoDialog : Form
     /// <summary>True when at least one field differs from the track's current values.</summary>
     public bool HasChanges =>
         Edit.Title is not null || Edit.Artist is not null || Edit.Album is not null ||
-        Edit.AlbumArtist is not null || Edit.Genre is not null || Edit.Year is not null ||
-        Edit.TrackNumber is not null || Edit.Rating is not null;
+        Edit.AlbumArtist is not null || Edit.Genre is not null || Edit.Composer is not null ||
+        Edit.Comment is not null || Edit.Year is not null || Edit.TrackNumber is not null ||
+        Edit.TotalTracks is not null || Edit.DiscNumber is not null || Edit.TotalDiscs is not null ||
+        Edit.Rating is not null;
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
