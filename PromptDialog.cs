@@ -34,7 +34,7 @@ internal static class PromptDialog
         var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(156, 94), DialogResult = DialogResult.Cancel };
 
         f.Controls.Add(lbl);
-        f.Controls.Add(tb);
+        f.Controls.Add(ThemedField.Wrap(tb));
         f.Controls.Add(ok);
         f.Controls.Add(cancel);
         f.AcceptButton = ok;
