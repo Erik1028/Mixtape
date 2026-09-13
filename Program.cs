@@ -1847,6 +1847,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_THEME_SWITCH") is { Length: > 0 } tv) { Application.DoEvents(); form.PreviewThemeSwitch(tv); }   // a runtime palette change (baked-colour check)
         if (Environment.GetEnvironmentVariable("MIX_ACCENT") is { Length: > 0 } acc) { Application.DoEvents(); form.PreviewAccent(acc); }   // a runtime accent change (preset name or #hex)
         if (Environment.GetEnvironmentVariable("MIX_REMAINING") == "1") form.PreviewRemaining(true);   // the card's total slot counts down
+        if (Environment.GetEnvironmentVariable("MIX_RATE") is { Length: > 0 } rt && int.TryParse(rt, out int rtv)) { Application.DoEvents(); form.PreviewRating(rtv); }   // the deck's rating stars
         if (Environment.GetEnvironmentVariable("MIX_SELECT") is { Length: > 0 } selSpec && selSpec.Split('-') is { Length: 2 } sp2
             && int.TryParse(sp2[0], out int selA) && int.TryParse(sp2[1], out int selB)) { Application.DoEvents(); form.PreviewSelectRows(selA, selB); }   // rows selected -> the action bar
         if (Environment.GetEnvironmentVariable("MIX_DECK_HOVER") is { Length: > 0 } dhv) { Application.DoEvents(); form.PreviewDeckHover(dhv); }   // a hovered deck control (prev|play|next|...)

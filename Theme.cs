@@ -807,7 +807,7 @@ internal sealed class ThemedButton : Button
     }
 
     /// <summary>Crisp, perfectly-centred vector icon (symbol-font glyphs sit off-centre at this size).</summary>
-    private static void DrawIcon(Graphics g, RectangleF r, Ico icon, Color c)
+    internal static void DrawIcon(Graphics g, RectangleF r, Ico icon, Color c)
     {
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
         using var b = new SolidBrush(c);

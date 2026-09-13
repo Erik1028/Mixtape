@@ -27,6 +27,17 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>The card's total-time slot shows "-remaining" instead of the length (a click toggles; the host persists it).</summary>
     public bool ShowRemaining { get => _showRemaining; set { if (_showRemaining == value) return; _showRemaining = value; Invalidate(); } }
     private double _hoverFrac = -1;      // where the pointer sits along the seek line (0..1), -1 when it is elsewhere
+
+    public event Action? CoverFlowRequested;            // corner group: open Cover Flow
+    public event Action<Point>? AddToPlaylistRequested; // corner group: add the playing song to a playlist (screen anchor)
+    public event Action<int>? RateRequested;            // corner group: rate the playing song 0..5
+    /// <summary>The host can write ratings back (an iPod track on a writable device); without it the stars stay hidden.</summary>
+    public bool CanRate { get; set; }
+    private void ResetStars() { _ratingTw?.Cancel(); _ratingTw = null; _ratingShown = -1; _ratingT = 1f; _starHover = -1; }
+    private int _starHover = -1;      // 1..5 while the pointer previews a rating, -1 otherwise
+    private float _ratingT = 1f;      // fades a changed rating in
+    private int _ratingShown = -1;
+    private Tween? _ratingTw;
     /// <summary>The y the host centres the gear and the window buttons on. The deck normally carries everything on
     /// one axis; when it stacks its utilities in two rows the buttons join the TOP one, so the strip reads as a
     /// line of controls instead of a third row floating between the other two.</summary>
@@ -162,7 +173,7 @@ internal sealed class NowPlayingBar : Panel
         MouseDown += OnDown;
         MouseMove += OnMove;
         MouseUp += OnUp;
-        MouseLeave += (_, _) => { _hover = Hit.None; _hoverFrac = -1; Tip.Disarm(); RetargetKnobs(); Invalidate(); };
+        MouseLeave += (_, _) => { _hover = Hit.None; _hoverFrac = -1; _starHover = -1; Tip.Disarm(); RetargetKnobs(); Invalidate(); };
     }
 
     public bool IsActive => _track is not null;
@@ -344,6 +355,7 @@ internal sealed class NowPlayingBar : Panel
         CancelSleepFade();   // a (re)start during the final fade means the user is still listening — don't fade/pause it
         _track = track;
         _path = filePath;
+        ResetStars();        // the new song's rating shows outright, it does not fade in from the old one
         SwapCover(ResolveCover(track, filePath, cover));   // prefer the file's own embedded art; cross-dissolve in
         ClearPending();
         _engine.Volume = _muted ? 0 : _volume;
@@ -643,6 +655,7 @@ internal sealed class NowPlayingBar : Panel
         public Rectangle Logo, Wordmark; public bool ShowWordmark;
         public Rectangle ArtistR, AlbumR, TotalR;     // the card's two subtitle links and the total-time toggle
         public bool TwoRow;                           // the utilities are stacked in two rows (narrow window)
+        public Rectangle Flow, AddTo, StarsR; public bool ShowExtras;   // the corner group under the window buttons
     }
 
     private Lo Layout()
@@ -771,6 +784,23 @@ internal sealed class NowPlayingBar : Panel
         l.Next = new Rectangle(tx, cy - 15, 30, 30); tx = l.Next.Right;
         if (l.ShowModes) { l.Repeat = new Rectangle(tx + 8, cy - 13, 26, 26); tx = l.Repeat.Right; }
 
+        // On one axis the window buttons already own the corner, so the group joins the cluster instead —
+        // but only while the card can still keep its minimum, since the card comes first at every width.
+        if (_track is not null)
+        {
+            int starW = CanRate ? 15 + 5 * 17 : 0;
+            int extrasW = 24 + 8 + 24 + starW;
+            if (clusterLeft - extrasW - 8 - 22 - (tx + 22) >= CardMin)
+            {
+                int ex = clusterLeft - extrasW;
+                l.Flow = new Rectangle(ex, cy - 12, 24, 24);
+                l.AddTo = new Rectangle(ex + 32, cy - 12, 24, 24);
+                if (CanRate) l.StarsR = new Rectangle(ex + 32 + 24 + 15, cy - 10, 5 * 17, 20);
+                l.ShowExtras = true;
+                clusterLeft = ex - 14;   // a little more air than the 8 px between icons: the group is its own unit
+            }
+        }
+
         // The card: centred in the free span, capped so it stays a card and not a banner.
         int spanL = tx + 22, spanR = clusterLeft - 22;
         int cardW = Math.Clamp(spanR - spanL, 0, 520);
@@ -792,6 +822,19 @@ internal sealed class NowPlayingBar : Panel
     /// the volume ride the upper row with lyrics, queue, pro and eq on the lower one - every control stays in
     /// reach down to the window's minimum width, and the card takes whatever the middle leaves. The wordmark is
     /// the one extra that still needs spare room.</summary>
+    /// <summary>The corner group (Cover Flow · add to playlist │ rating), right-aligned to the window buttons' own
+    /// edge on the row below them. It appears only where it does not reach into the utilities beside it.</summary>
+    private void PlaceExtras(ref Lo l, int w, int row, int rightEdge)
+    {
+        const int StarCell = 17, Stars = 5;
+        int gRight = w - 10;
+        l.StarsR = new Rectangle(gRight - Stars * StarCell, row - 10, Stars * StarCell, 20);
+        int gx = (CanRate && _track is not null ? l.StarsR.Left - 15 : gRight) - 24;   // 15 = 7 + the rule + 7
+        l.AddTo = new Rectangle(gx, row - 12, 24, 24);
+        l.Flow = new Rectangle(gx - 8 - 24, row - 12, 24, 24);
+        l.ShowExtras = l.Flow.Left > rightEdge + 4;
+    }
+
     private Lo LayoutTopCompact(int w, int cy)
     {
         var l = new Lo();
@@ -818,6 +861,8 @@ internal sealed class NowPlayingBar : Panel
         l.Queue = new Rectangle(bx - 24, rowB - 12, 24, 24); bx = l.Queue.Left - 8;
         l.Lyrics = new Rectangle(bx - 24, rowB - 12, 24, 24);
         int clusterLeft = Math.Min(l.Lyrics.Left, l.Speaker.Left) - 8;
+
+        PlaceExtras(ref l, w, rowB, rightEdge);   // the corner group, in the space the window buttons left free
 
         // Transport, then shuffle over repeat in one column.
         int tx = leftEdge;
@@ -1009,6 +1054,7 @@ internal sealed class NowPlayingBar : Panel
         if (l.Play.Contains(p) || l.Prev.Contains(p) || l.Next.Contains(p)) return true;
         if (l.ShowModes && (l.Shuffle.Contains(p) || l.Repeat.Contains(p))) return true;
         if (l.ShowEq && l.Eq.Contains(p) || l.ShowPro && l.Pro.Contains(p) || l.ShowQueue && l.Queue.Contains(p) || l.ShowLyrics && l.Lyrics.Contains(p)) return true;
+        if (l.ShowExtras && _track is not null && (l.Flow.Contains(p) || l.AddTo.Contains(p) || (CanRate && l.StarsR.Contains(p)))) return true;
         if (l.ShowSpeaker && l.Speaker.Contains(p)) return true;
         if (l.ShowVol && Inflate(l.Vol, 4, 10).Contains(p)) return true;
         if (l.ShowOverflow && l.Overflow.Contains(p)) return true;
@@ -1023,7 +1069,7 @@ internal sealed class NowPlayingBar : Panel
     }
 
     // ---- interaction ----
-    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Lyrics, Shuffle, Repeat, Seek, Vol, Cover, Overflow, Artist, Album, Times }
+    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Lyrics, Shuffle, Repeat, Seek, Vol, Cover, Overflow, Artist, Album, Times, Flow, AddTo, Stars }
     /// <summary>Harness (MIX_DECK_HOVER=prev|play|next|speaker|eq|pro|queue|lyrics|shuffle|repeat|seek|vol|cover): paint that hover state.</summary>
     internal void PreviewHover(string name) { if (Enum.TryParse<Hit>(name, true, out var h)) { _hover = h; if (h == Hit.Seek) _hoverFrac = 0.62; Invalidate(); } }
     private Hit _hover = Hit.None;
@@ -1059,6 +1105,18 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; RetargetKnobs(); SetVolumeFromX(l.Vol, e.X); return; }
 
         if (_track is null) return; // transport needs a loaded track
+        if (l.ShowExtras)          // the corner group: Cover Flow, add to playlist, the rating
+        {
+            if (l.Flow.Contains(e.Location)) { CoverFlowRequested?.Invoke(); return; }
+            if (l.AddTo.Contains(e.Location)) { AddToPlaylistRequested?.Invoke(PointToScreen(new Point(l.AddTo.Left, l.AddTo.Bottom))); return; }
+            if (CanRate && l.StarsR.Contains(e.Location))
+            {
+                int star = Math.Clamp((e.X - l.StarsR.X) * 5 / l.StarsR.Width + 1, 1, 5);
+                int now = Math.Clamp(_track.Rating / 20, 0, 5);
+                RateRequested?.Invoke(star == now ? 0 : star);   // clicking the lit star clears it, as in the list
+                return;
+            }
+        }
         if (OnTop && l.ShowCard)   // the card's text is live too: the artist, the album, and the total time
         {
             if (l.ArtistR.Contains(e.Location)) { ArtistClicked?.Invoke(); return; }
@@ -1085,6 +1143,9 @@ internal sealed class NowPlayingBar : Panel
             : l.ShowOverflow && l.Overflow.Contains(e.Location) ? Hit.Overflow
             : l.ShowModes && l.Shuffle.Contains(e.Location) ? Hit.Shuffle
             : l.ShowModes && l.Repeat.Contains(e.Location) ? Hit.Repeat
+            : l.ShowExtras && _track is not null && l.Flow.Contains(e.Location) ? Hit.Flow
+            : l.ShowExtras && _track is not null && l.AddTo.Contains(e.Location) ? Hit.AddTo
+            : l.ShowExtras && _track is not null && CanRate && l.StarsR.Contains(e.Location) ? Hit.Stars
             : OnTop && _track is not null && l.ArtistR.Contains(e.Location) ? Hit.Artist
             : OnTop && _track is not null && l.AlbumR.Contains(e.Location) ? Hit.Album
             : OnTop && _track is not null && l.TotalR.Contains(e.Location) ? Hit.Times
@@ -1096,7 +1157,9 @@ internal sealed class NowPlayingBar : Panel
             : l.Prev.Contains(e.Location) ? Hit.Prev
             : l.Next.Contains(e.Location) ? Hit.Next
             : Hit.None;
-        if (h != _hover) { _hover = h; RetargetKnobs(); Cursor = h is Hit.Cover or Hit.Artist or Hit.Album or Hit.Times ? Cursors.Hand : Cursors.Default; UpdateTip(h, l); Invalidate(); }
+        if (h != _hover) { _hover = h; RetargetKnobs(); Cursor = h is Hit.Cover or Hit.Artist or Hit.Album or Hit.Times or Hit.Stars ? Cursors.Hand : Cursors.Default; UpdateTip(h, l); Invalidate(); }
+        int sh = h == Hit.Stars && l.StarsR.Width > 0 ? Math.Clamp((e.X - l.StarsR.X) * 5 / l.StarsR.Width + 1, 1, 5) : -1;
+        if (sh != _starHover) { _starHover = sh; Invalidate(l.StarsR); }
         // The time under the pointer while it rides the seek line (the card's elapsed slot reads it in the accent).
         double hf = h == Hit.Seek && _drag == Drag.None && _track is not null && l.Seek.Width > 0 ? Math.Clamp((e.X - l.Seek.X) / (double)l.Seek.Width, 0, 1) : -1;
         if (Math.Abs(hf - _hoverFrac) > 0.0015) { _hoverFrac = hf; if (OnTop && l.ShowCard) Invalidate(l.Card); else Invalidate(); }
@@ -1120,6 +1183,9 @@ internal sealed class NowPlayingBar : Panel
             case Hit.Speaker: t = _muted ? Loc.T("Unmute") : Loc.T("Mute"); r = l.Speaker; break;
             case Hit.Cover: t = Loc.T("Show in list"); r = l.Cover; break;
             case Hit.Overflow: t = Loc.T("More"); r = l.Overflow; break;
+            case Hit.Flow: t = Loc.T("Cover Flow"); r = l.Flow; break;
+            case Hit.AddTo: t = Loc.T("Add to playlist"); r = l.AddTo; break;
+            case Hit.Stars: t = Loc.T("Rating"); r = l.StarsR; break;
             default: Tip.Disarm(); return;
         }
         Tip.Arm(RectangleToScreen(r), t);
@@ -1392,6 +1458,87 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true, Theme.Accent, _volKnobR, _hover == Hit.Vol || _drag == Drag.Volume);   // knob, matching the seek bar (consistency + a grab target)
     }
 
+    /// <summary>The corner group under the window buttons: Cover Flow, add the playing song to a playlist, and
+    /// its rating. Everything here needs a song, so the whole group fades out when nothing is loaded.</summary>
+    private void DrawExtras(Graphics g, in Lo l)
+    {
+        if (_track is null) return;
+        DrawFlowGlyph(g, l.Flow, _hover == Hit.Flow);
+        DrawAddGlyph(g, l.AddTo, _hover == Hit.AddTo);
+        if (!CanRate) return;
+        using (var rule = new Pen(Color.FromArgb(32, 255, 255, 255)))   // the two actions and the rating are two things
+        {
+            var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.None;
+            int rx = (l.AddTo.Right + l.StarsR.Left) / 2;
+            g.DrawLine(rule, rx, l.AddTo.Y + 5, rx, l.AddTo.Bottom - 5);
+            g.SmoothingMode = sm0;
+        }
+        DrawStars(g, l.StarsR);
+    }
+
+    private void DrawFlowGlyph(Graphics g, Rectangle r, bool hover)
+    {
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        // The app's own Cover Flow mark, drawn from a box a little larger than the cell: at 24 px it comes out
+        // smaller than the line glyphs beside it, and a weaker icon in a row of equals reads as a mistake.
+        ThemedButton.DrawIcon(g, new RectangleF(r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6), ThemedButton.Ico.CoverFlow, hover ? Theme.TextCol : Theme.Subtle);
+    }
+
+    /// <summary>Add to playlist: the queue glyph's three lines with a plus where the last one ends.</summary>
+    private void DrawAddGlyph(Graphics g, Rectangle r, bool hover)
+    {
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        Color c = hover ? Theme.TextCol : Theme.Subtle;
+        using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        float x = r.X + 5, x2 = r.Right - 5;
+        g.DrawLine(pen, x, r.Y + 8, x2 - 8, r.Y + 8);
+        g.DrawLine(pen, x, r.Y + 12, x2 - 8, r.Y + 12);
+        g.DrawLine(pen, x, r.Y + 16, x2 - 8, r.Y + 16);
+        g.DrawLine(pen, x2 - 3, r.Y + 12, x2 - 3, r.Y + 20);     // a plus beside the list, not inside it
+        g.DrawLine(pen, x2 - 7, r.Y + 16, x2 + 1, r.Y + 16);
+    }
+
+    /// <summary>The playing song's rating. Filled stars read in the accent; hovering previews the rating under
+    /// the pointer, and clicking the star that is already lit clears it (the same gesture the list uses).</summary>
+    private void DrawStars(Graphics g, Rectangle r)
+    {
+        int rated = Math.Clamp((_track?.Rating ?? 0) / 20, 0, 5);
+        if (_ratingShown != rated)   // a CHANGED rating fades in; the first paint of a song shows it outright
+        {
+            bool first = _ratingShown < 0;
+            _ratingShown = rated; _ratingTw?.Cancel();
+            if (first || !Anim.MotionEnabled) _ratingT = 1f;
+            else { _ratingT = 0f; _ratingTw = Anim.Run(160, v => { _ratingT = (float)v; if (!IsDisposed) Invalidate(r); }, () => _ratingTw = null, Easings.OutCubic); }
+        }
+        bool hover = _hover == Hit.Stars;
+        int shown = hover && _starHover > 0 ? _starHover : rated;
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+        float cell = r.Width / 5f, cy = r.Y + r.Height / 2f;
+        Color on = hover ? Theme.AccentBright : Theme.Accent;
+        if (!hover && _ratingT < 1f) on = Theme.Blend(Theme.Faint, on, _ratingT);
+        using var fill = new SolidBrush(on);
+        using var edge = new Pen(Color.FromArgb(hover ? 150 : 110, Theme.Faint), 1.3f);
+        for (int i = 0; i < 5; i++)
+        {
+            var pts = Star(r.X + cell * (i + 0.5f), cy, 6.6f);
+            if (i < shown) g.FillPolygon(fill, pts); else g.DrawPolygon(edge, pts);
+        }
+        g.SmoothingMode = sm;
+    }
+
+    private static PointF[] Star(float cx, float cy, float o)
+    {
+        var p = new PointF[10];
+        for (int i = 0; i < 10; i++)
+        {
+            double a = -Math.PI / 2 + i * Math.PI / 5;
+            float rr = i % 2 == 0 ? o : o * 0.42f;
+            p[i] = new PointF(cx + rr * (float)Math.Cos(a), cy + rr * (float)Math.Sin(a));
+        }
+        return p;
+    }
+
     /// <summary>"Artist  •  Album" when it fits the card's text column, else just the artist (a name cut to
     /// "mem…" says less than no album at all); the ellipsis is the last resort for a lone long artist.</summary>
     /// <summary>Where the artist and the album sit inside the card's subtitle (bar coordinates) - the deck turns
@@ -1467,6 +1614,7 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowEq) DrawEqGlyph(g, l.Eq, _hover == Hit.Eq);
         if (l.ShowSpeaker) DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
         if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true, Theme.Accent, _volKnobR, _hover == Hit.Vol || _drag == Drag.Volume, Color.FromArgb(38, 255, 255, 255), lift: false);
+        if (l.ShowExtras) DrawExtras(g, in l);   // the corner group under the window buttons
     }
 
     internal static string Fmt(double sec)

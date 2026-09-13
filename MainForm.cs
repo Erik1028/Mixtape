@@ -458,6 +458,9 @@ internal sealed class MainForm : Form, IMessageFilter
             _nowPlaying.AlbumClicked += () => { if (_playingTrack is { } t && MediaType.IsAudio(t.MediaType)) { NavigateToAlbum(AlbumKey(t), t.LocalPath is not null); BuildSidebar(); } };
             _nowPlaying.RemainingToggled += on => { _settings.ShowRemaining = on; _settings.Save(); if (_mini is not null) _mini.ShowRemaining = on; };
             _nowPlaying.ShowRemaining = _settings.ShowRemaining;
+            _nowPlaying.CoverFlowRequested += OpenCoverFlow;
+            _nowPlaying.AddToPlaylistRequested += ShowPlayingAddMenu;
+            _nowPlaying.RateRequested += RatePlayingTrack;
             root.Controls.Add(_nowPlaying);   // on the wallpaper
             _nowPlaying.SendToBack();         // …and BEHIND the gear + window buttons, whatever the add order says
         }
@@ -865,6 +868,13 @@ internal sealed class MainForm : Form, IMessageFilter
     public void PreviewThemeSwitch(string variant) { _settings.ThemeVariant = variant; ApplyAllSettings(); }
     public void PreviewAccent(string accent) { _settings.Accent = accent; ApplyAllSettings(); }   // MIX_ACCENT=<preset name | #hex>: a runtime accent change
     public void PreviewRemaining(bool on) => _nowPlaying.ShowRemaining = on;       // MIX_REMAINING=1: the card's total slot counts down
+    /// <summary>Harness (MIX_RATE=0..5): show the deck's rating stars at that value.</summary>
+    public void PreviewRating(int stars)
+    {
+        if (_playingTrack is { } t) t.Rating = (byte)(Math.Clamp(stars, 0, 5) * 20);
+        _nowPlaying.CanRate = true;
+        _nowPlaying.Invalidate();
+    }
     /// <summary>Harness (MIX_SELECT=from-to): select a run of song rows, so the multi-select bar shows.</summary>
     public void PreviewSelectRows(int from, int to)
     {
@@ -1455,6 +1465,7 @@ internal sealed class MainForm : Form, IMessageFilter
         NotePlayed(t);
         _tracks.Invalidate();          // move the "playing" mark to the new row
         SetNowPlayingVisible(true); // expand the row first so the hosted media engine is realized before playing
+        _nowPlaying.CanRate = CanEditRatings && t.LocalPath is null && MediaType.IsAudio(t.MediaType);   // the deck's stars write to the iPod DB
         _nowPlaying.Play(t, path, cover);
         cover?.Dispose(); // the bar took its own copy
         if (_coverFlow is not null && MediaType.IsAudio(t.MediaType)) _coverFlow.PlayingTag = CoverTag(t, _cfMode); // mark it in Cover Flow (per current mode)
@@ -1923,6 +1934,51 @@ internal sealed class MainForm : Form, IMessageFilter
             var info = new ToolStripMenuItem(Loc.T("Edit info…")) { Enabled = inList };
             info.Click += (_, _) => { RevealPlayingRow(); OnEditTrackInfo(); };
             m.Items.Add(info);
+        }
+        m.Show(screen);
+    }
+
+    /// <summary>The deck's corner stars: rate the playing song (0 clears), writing back to the iPod like the list.</summary>
+    private void RatePlayingTrack(int stars)
+    {
+        if (_playingTrack is not Track t || t.LocalPath is not null) return;
+        SetRatingInline(t, RowIndexOf(t), (byte)(Math.Clamp(stars, 0, 5) * 20));
+        _nowPlaying.Invalidate();
+        _mini?.Invalidate();
+    }
+
+    /// <summary>The deck's corner "add to playlist": the same targets the card's menu offers, as a flat menu.</summary>
+    private void ShowPlayingAddMenu(Point screen)
+    {
+        if (_playingTrack is not Track t || !MediaType.IsAudio(t.MediaType)) return;
+        var m = ThemedMenu.New();
+        if (t.LocalPath is { } path)
+        {
+            var paths = new List<string> { path };
+            foreach (var lp in _settings.LocalPlaylists)
+            {
+                var r = lp; var it = new ToolStripMenuItem(lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name);
+                it.Click += (_, _) => AddPathsToLocalPlaylist(r, paths);
+                m.Items.Add(it);
+            }
+            if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+            var nu = new ToolStripMenuItem(Loc.T("New playlist…")); nu.Click += (_, _) => CreateLocalPlaylist(paths);
+            m.Items.Add(nu);
+        }
+        else
+        {
+            if (_db is null || _device is not { Profile.CanWrite: true }) return;
+            var ids = new List<uint> { t.UniqueId };
+            foreach (var pl in _shownPlaylists.Where(p => !ReferenceEquals(p, _db.Master) && !p.IsPodcast && !IsSmart(p.PersistentId)))
+            {
+                var plRef = pl; var it = new ToolStripMenuItem(pl.Name.Length == 0 ? Loc.T("Untitled") : pl.Name);
+                it.Click += (_, _) => AddSelectedToPlaylist(plRef, ids);
+                m.Items.Add(it);
+            }
+            if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+            var newWith = new ToolStripMenuItem(Loc.T("New playlist…"));
+            newWith.Click += (_, _) => CreatePlaylistWithTracks(ids);
+            m.Items.Add(newWith);
         }
         m.Show(screen);
     }
