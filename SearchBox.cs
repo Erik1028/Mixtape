@@ -22,7 +22,7 @@ internal sealed class SearchBox : Panel
             BackColor = Theme.Blend(Theme.Bg, Color.Black, 0.30),
             ForeColor = Theme.TextCol,
             Font = Theme.UiFont(10f),
-            PlaceholderText = Loc.T("Search songs, artists, albums…"),
+            PlaceholderText = Loc.T("Search…"),   // short on purpose: the rail is ~200 px, the long hint got cut to "albu…" in every language
         };
         _tb.TextChanged += (_, _) => { Changed?.Invoke(_tb.Text); Invalidate(); };
         Controls.Add(_tb);
@@ -39,7 +39,7 @@ internal sealed class SearchBox : Panel
     /// <summary>Re-read theme colours into the inner TextBox (its BackColor is baked at construction).</summary>
     public void Restyle()
     {
-        BackColor = Theme.Bg;
+        BackColor = Parent?.BackColor ?? Theme.Bg;   // whatever surface hosts the pill (the rail today)
         _tb.BackColor = Theme.Blend(Theme.Bg, Color.Black, 0.30);
         _tb.ForeColor = Theme.TextCol;
         Invalidate();
@@ -60,7 +60,7 @@ internal sealed class SearchBox : Panel
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.Bg);
-        using (var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), (Height - 1) / 2f))
+        using (var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Theme.RadControl))   // the common control radius, not the last pill
         {
             using (var b = new SolidBrush(Theme.Blend(Theme.Bg, Color.Black, 0.30))) g.FillPath(b, p); // recessed input surface
             using (var pen = new Pen(Theme.Border)) g.DrawPath(pen, p);

@@ -9,7 +9,7 @@ namespace iPodCommander;
 /// on "Apply" and returns DialogResult.OK; the host applies it through the normal write+save path.
 /// Tag/album-completeness problems are shown read-only (they're for the future tag editor).
 /// </summary>
-internal sealed class LibraryDoctorDialog : Form
+internal sealed class LibraryDoctorDialog : CardDialog
 {
     private readonly DoctorReport _r;
     public DoctorPlan? Plan { get; private set; }
@@ -24,7 +24,6 @@ internal sealed class LibraryDoctorDialog : Form
     {
         _r = report;
         Text = Loc.T("Library Doctor");
-        FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         BackColor = Theme.Bg;
@@ -32,19 +31,13 @@ internal sealed class LibraryDoctorDialog : Form
         Font = Theme.UiFont(9.5f);
         ClientSize = new Size(W, 240);
         Build();
+        AdoptCard();
         if (Anim.MotionEnabled) Opacity = 0;   // fade up in OnShown (matches Settings)
     }
 
     private void Build()
     {
         int y = 18;
-
-        Controls.Add(new Label
-        {
-            Text = Loc.T("Library Doctor"), Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol,
-            AutoSize = false, Left = Pad + 2, Top = y, Width = CardW, Height = 30, TextAlign = ContentAlignment.MiddleLeft,
-        });
-        y += 34;
 
         string scanned = _r.TotalPhotos > 0 ? Loc.T("{0} songs and {1} photos", _r.TotalTracks, _r.TotalPhotos) : Loc.T("{0} songs", _r.TotalTracks);
         string summary = _r.Clean
@@ -100,9 +93,13 @@ internal sealed class LibraryDoctorDialog : Form
             if (any) { fixes.Finish(); Controls.Add(fixes); y += fixes.Height + 12; }
 
             // ---- report-only problems (need the tag editor; shown for awareness) ----
-            if (_r.IncompleteTags > 0 || _r.AlbumGaps > 0)
+            if (_r.DamagedFiles.Count > 0 || _r.IncompleteTags > 0 || _r.AlbumGaps > 0)
             {
                 var info = new CardPanel(CardW) { Left = Pad, Top = y };
+                // Damaged = the file on the iPod is SHORTER than the database says (an interrupted copy).
+                // Report-only on purpose: re-copying the song from the PC is the fix, not deleting it here.
+                if (_r.DamagedFiles.Count > 0)
+                    info.AddInfoRow(Loc.T("Damaged files"), Loc.T("{0} song(s) are smaller on the iPod than the database says — copy them over again.", _r.DamagedFiles.Count));
                 if (_r.IncompleteTags > 0) info.AddInfoRow(Loc.T("Incomplete tags"), Loc.T("{0} song(s) missing title/artist/album", _r.IncompleteTags));
                 if (_r.AlbumGaps > 0) info.AddInfoRow(Loc.T("Possibly incomplete albums"), Loc.T("{0} album(s) with a track-number gap", _r.AlbumGaps));
                 info.Finish(); Controls.Add(info); y += info.Height + 6;
@@ -210,6 +207,6 @@ internal sealed class LibraryDoctorDialog : Form
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int caption = 0x001A1716; DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
+        try { var bg = Theme.Bg; int caption = (bg.B << 16) | (bg.G << 8) | bg.R;   /* the caption in the theme's own surface colour (was a baked Graphite grey) */ DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
     }
 }

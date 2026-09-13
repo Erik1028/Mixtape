@@ -736,6 +736,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private AudioService? _audio;
     private DispatcherTimer? _tick;
+    private DiscordPresence? _discord;   // optional "now playing" card on the user's Discord profile
     private bool _updatingFromTimer;
     private readonly float[] _eqGains = { 5, 4, 2, 0, -1, -1, 0, 2, 4, 5 }; // gentle "smile" preset
     private static readonly Random _rng = new();
@@ -883,6 +884,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _tick!.Start();
             Status = "Playing: " + t.DisplayTitle;
             RebuildUpNext();
+            PushDiscord(true);
         }
         catch (Exception ex) { Status = "Playback error: " + ex.Message; }
     }
@@ -893,6 +895,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _audio.TogglePause();
         IsPlaying = _audio.IsPlaying;
         if (IsPlaying) _tick?.Start(); else _tick?.Stop();   // don't poll libvlc while paused (battery)
+        PushDiscord(IsPlaying);   // the tick is stopped while paused, so this is the only pause signal
     }
 
     private void OnNowRowChanged(object? sender, PropertyChangedEventArgs e)
@@ -964,16 +967,42 @@ public sealed class MainViewModel : INotifyPropertyChanged
             for (int i = start; i >= 0 && i < _ctx.Count; i += dir)
                 if (Playable(_ctx[i])) { if (dir > 0) Depart(); _ctxIndex = i; PlayInternal(_ctx[i]); RebuildUpNext(); return; }
         }
-        if (auto) { IsPlaying = false; _tick?.Stop(); }   // reached the end with Repeat Off → stop + quit polling
+        if (auto) { IsPlaying = false; _tick?.Stop(); PushDiscord(false); }   // reached the end with Repeat Off → stop + quit polling
     }
 
     private void Depart() { if (_nowRow is not null) { _history.Add(_nowRow); if (_history.Count > 200) _history.RemoveAt(0); } }
     private void SyncCtxIndex(TrackRow row) { int i = _ctx.IndexOf(row); if (i >= 0) _ctxIndex = i; }
 
+    /// <summary>(Re)build the Discord connection from the saved settings. Dropping the old one is what
+    /// removes the card, so this both disables and enables the feature without restarting the app. Safe to
+    /// call before playback exists — it never touches the audio engine.</summary>
+    public void ApplyDiscord()
+    {
+        var (on, id, covers) = AppConfig.LoadDiscord();
+        try { _discord?.Dispose(); } catch { }
+        _discord = null;
+        if (!on || id.Length == 0) return;
+        _discord = new DiscordPresence(id, covers);
+        if (_nowRow is not null) PushDiscord(IsPlaying);   // re-publish whatever is already playing
+    }
+
+    /// <summary>Publish the current song to Discord, if the user switched it on. Non-blocking: the
+    /// controller de-duplicates on what the card shows and does its socket I/O on its own thread.</summary>
+    private void PushDiscord(bool playing)
+    {
+        if (_discord is null) return;
+        if (_nowRow?.Source is not { } t) { _discord.Clear(); return; }
+        long durMs = _audio?.DurationMs ?? 0;
+        if (durMs <= 0) durMs = t.LengthMs;                      // libvlc hasn't parsed a length yet
+        _discord.SetTrack(t.DisplayTitle, t.Artist, t.Album,
+                          TimeSpan.FromMilliseconds(_audio?.PositionMs ?? 0), TimeSpan.FromMilliseconds(durMs), playing);
+    }
+
     private void EnsureAudio()
     {
         if (_audio is not null) return;
         _audio = new AudioService();
+        ApplyDiscord();   // one construction path, so the Settings dialog can re-apply it live
         // Capture the row that ended AT fire time; marshal to the UI thread (no sync player calls on the VLC thread).
         _audio.Ended += () => { var ended = _nowRow; Dispatcher.UIThread.Post(() => OnTrackEnded(ended)); };
         _tick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
@@ -984,6 +1013,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void Shutdown()
     {
         _tick?.Stop();
+        try { _discord?.Dispose(); } catch { }   // closing the socket is what removes the Discord card
+        _discord = null;
         try { _audio?.Dispose(); } catch { }
         _audio = null;
     }

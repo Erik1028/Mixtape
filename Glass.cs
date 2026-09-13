@@ -29,7 +29,7 @@ internal static class Glass
 {
     /// <summary>Master switch for the FLYOUT glass (Equalizer / Pro / Up Next): when false those popups stay plain opaque.
     /// Set from <c>AppSettings.GlassPopups</c> right before a flyout is created; the flyout reads it into its GlassEnabled.</summary>
-    public static bool PopupsEnabled = true;
+    public static bool PopupsEnabled = false;   // the glass backdrops are retired; nothing turns this on any more
 
     private static SolidBrush? _tintBrush; private static Color _tintColor;   // reused tint brush for PaintBackground (rebuilt only when the tint colour changes — e.g. theme switch)
 

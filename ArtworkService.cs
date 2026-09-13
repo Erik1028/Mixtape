@@ -19,6 +19,12 @@ internal static class ArtworkService
     // Insert under the Gate lock and FIFO-trim to CacheCap. We deliberately do NOT Dispose evicted bitmaps: a caller
     // (or the cover-flow baker thread) may still hold/draw a reference we returned earlier, so eviction only drops OUR
     // reference and lets the GC reclaim it once unreferenced — that bounds growth with zero use-after-dispose risk.
+    /// <summary>Diagnostics: how many bitmaps the cache holds and their pixel bytes (32 bpp).</summary>
+    public static (int Count, long Bytes) CacheStats()
+    {
+        lock (Gate) { long b = 0; int n = 0; foreach (var v in Cache.Values) if (v is not null) { n++; b += (long)v.Width * v.Height * 4; } return (n, b); }
+    }
+
     private static void RememberLocked(string key, Bitmap? value)
     {
         Cache[key] = value;
@@ -49,7 +55,7 @@ internal static class ArtworkService
         lock (Gate)
         {
             if (Cache.TryGetValue(ck, out var hit) && hit is not null) return hit;   // album cover already loaded
-            if (Cache.ContainsKey(nk)) return null;                                  // this exact file already known artless
+            if (Cache.ContainsKey(nk) && CoverDownloads.PathFor(key) is null) return null;   // this exact file already known artless (and nothing downloaded since)
         }
 
         // Serialize the actual decode: concurrent System.Drawing decodes (e.g. a batch import loading many covers
@@ -59,13 +65,14 @@ internal static class ArtworkService
             lock (Gate)
             {
                 if (Cache.TryGetValue(ck, out var hit2) && hit2 is not null) return hit2;   // filled while we waited
-                if (Cache.ContainsKey(nk)) return null;
+                if (Cache.ContainsKey(nk) && CoverDownloads.PathFor(key) is null) return null;
             }
             try
             {
                 Bitmap? result = null;
-                // One extractor for both display + iPod sync: embedded front cover, else an external cover image.
-                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath) && MetadataExtractor.ReadArt(filePath) is { Length: > 0 } bytes)
+                // One extractor for both display + iPod sync: embedded front cover, else an external cover image —
+                // and failing both, a cover downloaded for the album (CoverDownloads), served the same way.
+                if (ArtBytes(key, filePath) is { Length: > 0 } bytes)
                 {
                     using var ms = new MemoryStream(bytes);
                     using var src = Image.FromStream(ms);
@@ -99,12 +106,12 @@ internal static class ArtworkService
             lock (Gate)
             {
                 if (Cache.TryGetValue(ck, out var hit2) && hit2 is not null) return hit2;
-                if (Cache.ContainsKey(nk)) return null;
+                if (Cache.ContainsKey(nk) && CoverDownloads.PathFor(key) is null) return null;
             }
             try
             {
                 Bitmap? result = null;
-                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath) && MetadataExtractor.ReadArt(filePath) is { Length: > 0 } bytes)
+                if (ArtBytes(key, filePath) is { Length: > 0 } bytes)
                 {
                     using var ms = new MemoryStream(bytes);
                     using var src = Image.FromStream(ms);
@@ -124,6 +131,14 @@ internal static class ArtworkService
             }
             catch { return null; }   // transient decode failure → don't cache
         }
+    }
+
+    /// <summary>The cover bytes for a track: its file's embedded / folder art, else the album's downloaded cover.</summary>
+    private static byte[]? ArtBytes(string key, string? filePath)
+    {
+        byte[]? bytes = null;
+        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath)) bytes = MetadataExtractor.ReadArt(filePath);
+        return bytes is { Length: > 0 } ? bytes : CoverDownloads.ReadBytes(key);
     }
 
     private static Bitmap RoundScaled(Image src, int size)

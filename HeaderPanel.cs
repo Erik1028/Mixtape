@@ -24,8 +24,8 @@ internal sealed class HeaderPanel : Panel
     // The window control buttons (mini-player · minimize · maximize · close) now live in the header's top-right
     // (there's no separate title strip). The header lays them out + drives window drag from its empty area.
     private Control[] _winButtons = Array.Empty<Control>();
-    private const int WinBh = 28, WinBw = 38, WinTop = 12;   // window-button cell size + top inset
-    private int WinZoneH => _winButtons.Length > 0 ? WinTop + WinBh : 0;
+    private const int WinBh = 28, WinBw = 38, WinTop = 12;   // (legacy) window-button cell size + top inset
+    private int WinZoneH => 0;   // the window buttons moved to the caption strip; the bar keeps its full height
 
     public void SetWindowButtons(params Control[] buttons)
     {
@@ -83,12 +83,12 @@ internal sealed class HeaderPanel : Panel
 
     // Cached fonts (Theme.UiFont/DisplayFont allocate a fresh GDI Font per call; the header repaints on hover).
     private readonly Font _fKicker = Theme.UiFont(8.5f, FontStyle.Bold);   // kicker · warning badge · "Change cover"
-    private readonly Font _fTitleFont = Theme.DisplayFont(21f, FontStyle.Bold);
-    private readonly Font _fSub = Theme.UiFont(9.5f);
-    private readonly Font _fSubBold = Theme.UiFont(9.5f, FontStyle.Bold);
-    private readonly Font _fStatus = Theme.UiFont(8.75f);
+    private readonly Font _fTitleFont = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
+    private readonly Font _fSub = Theme.UiFont(Theme.SzBody);
+    private readonly Font _fSubBold = Theme.UiFont(Theme.SzBody, FontStyle.Bold);
+    private readonly Font _fStatus = Theme.UiFont(Theme.SzCaption);
 
-    private const int Pad = 18;
+    private const int Pad = 22;
 
     public HeaderPanel()
     {
@@ -188,7 +188,7 @@ internal sealed class HeaderPanel : Panel
         return bmp;
     }
 
-    private void InvalidateArt() => Invalidate(new Rectangle(Pad - 2, Pad - 2, ArtSize + 8, ArtSize + 12));
+    private void InvalidateArt() { var r = ArtRect; Invalidate(new Rectangle(r.X - 4, r.Y - 4, ArtSize + 12, ArtSize + 14)); }   // the tile + its shadow (was the old top-aligned rect: the cross-fade left the tile's top 12 px stale)
 
     protected override void Dispose(bool disposing)
     {
@@ -196,8 +196,10 @@ internal sealed class HeaderPanel : Panel
         base.Dispose(disposing);
     }
 
-    private int ArtSize => Math.Clamp(Height - Pad * 2, 64, 96);
-    private int TextX => Pad + ArtSize + 18;
+    // The working bar IS a row at the app's 40 px scale — the same object as a list row, the sidebar's
+    // device row and the player bar's cover. That is what makes the pages feel like one program.
+    private int ArtSize => 40;
+    private int TextX => Pad + ArtSize + 14;
 
     protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutButtons(); }
 
@@ -217,7 +219,11 @@ internal sealed class HeaderPanel : Panel
             foreach (var b in _winButtons) { b.SetBounds(wx, WinTop, WinBw, WinBh); wx += WinBw; }
         }
 
+        // The widths below are ENGLISH sizes; a ThemedButton grows itself to fit a longer translation, so the
+        // cluster asks each button how wide it really needs to be. Packing by the table alone made
+        // "Zene hozzáadása" run straight into "Törlés".
         var items = new (ThemedButton b, int w)[] { (CoverButton, 124), (AddButton, 132), (DeleteButton, 104) };
+        for (int i = 0; i < items.Length; i++) items[i].w = Math.Max(items[i].w, items[i].b.NeededWidth);
         int right = Width - Pad;
         int minClusterLeft = TextX + TitleMinW + 16;   // the right cluster (search + buttons) must not reach left of this
 
@@ -235,7 +241,7 @@ internal sealed class HeaderPanel : Panel
         int clusterH = (topRow ? searchH : 0) + (topRow && hasBtns ? gapV : 0) + (hasBtns ? bh : 0);
         // Sit the search/action cluster BELOW the window-button row (with a gap), instead of vertically centred —
         // so the search bar + buttons are lower and clear of the window controls, with breathing room up top.
-        int top = WinZoneH > 0 ? WinZoneH + 10 : Math.Max(12, (Height - clusterH) / 2);
+        int top = Math.Max(6, (Height - clusterH) / 2);
         int btnTop = top + (topRow ? searchH + gapV : 0);
 
         int rowLeft = right - btnRowW, x = rowLeft;
@@ -295,54 +301,38 @@ internal sealed class HeaderPanel : Panel
         int tx = TextX;
         // Leave room for the search box + action-button stack on the right so the title never runs under them.
         int rightLimit = (Search is { Visible: true } ? _searchLeft : _buttonsLeft) - 16;
-        // …and for a top-right status line (the Device page has no search/buttons there, so a long stats string —
-        // "166 songs · 4 videos · 1510 photos · 18,6 GB free" — sits on the title's line and must not be run under).
-        if (!string.IsNullOrEmpty(_status))
-        {
-            var stSz = TextRenderer.MeasureText(g, _status, _fStatus);
-            int rightEdge = Width - Pad;
-            int stAvail = _searchLeft < rightEdge ? (rightEdge - _searchLeft) : (rightEdge - TextX);
-            int statusW = Math.Min(stSz.Width + 6, Math.Max(60, stAvail));
-            rightLimit = Math.Min(rightLimit, rightEdge - statusW - 16);
-        }
         int rightW = Math.Max(80, rightLimit - tx);
         var kickerFont = _fKicker;
         var titleFont = _fTitleFont;
         var subFont = _fSub;
         var badgeFont = _fKicker;
 
-        // Vertically centre the kicker → title → subtitle (→ warning badge) block (compact header).
-        bool hasKicker = !string.IsNullOrEmpty(_kicker);
+        // TWO LINES, at fixed y — the working bar is a row at the app's 40 px scale, so its text sits where a
+        // list row's text sits. The old block centred a kicker + title + subtitle stack and the KICKER is gone
+        // for good: it restated, in decorative type, the sidebar section highlighted 250 px to its left.
         bool hasBadge = !string.IsNullOrEmpty(_badge);
-        int kh = hasKicker ? TextRenderer.MeasureText(g, _kicker, kickerFont).Height : 0;
         int th = TextRenderer.MeasureText(g, string.IsNullOrEmpty(_title) ? "Ag" : _title, titleFont).Height;
         int subH = TextRenderer.MeasureText(g, "Ag", subFont).Height;
         Size badgeText = hasBadge ? TextRenderer.MeasureText(g, _badge, badgeFont) : Size.Empty;
-        const int chipPadX = 9, chipPadY = 3;
+        const int chipPadX = 9, chipPadY = 2;
         int badgeH = hasBadge ? badgeText.Height + chipPadY * 2 : 0;
-        int gap1 = hasKicker ? 2 : 0;
-        int total = kh + gap1 + th + 2 + subH + (hasBadge ? 6 + badgeH : 0);
-        int ty = Math.Max(Pad, (Height - total) / 2);
-
-        if (hasKicker)
-        {
-            // Calmer accent for the static eyebrow (bright accent is reserved for selection); tucked to the title.
-            TextRenderer.DrawText(g, _kicker, kickerFont,
-                new Rectangle(tx, ty, rightW, kh), Theme.Blend(Theme.Bg, Theme.Accent, 0.85), TextFormatFlags.Left | TextFormatFlags.Top);
-            ty += kh + gap1;
-        }
+        int ty = 7;
 
         TextRenderer.DrawText(g, _title, titleFont,
             new Rectangle(tx, ty, rightW, th), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        ty += th + 2;
+        ty = 31;   // line 2, the meta line
 
-        // "185 songs · 11 hr" → the leading count owns a bold/bright run; the "· 11 hr" tail stays quiet.
-        int dot = _subtitle.IndexOf('·');
+        // "185 songs · 11 hr" → the leading count owns a bold/bright run; the "· 11 hr" tail stays quiet. The status
+        // line (folder count, a drop hint, transient feedback) is a further quiet run on the same line: the bar has
+        // two lines and the status is meta, not a third row.
+        string subAll = string.IsNullOrEmpty(_status) ? _subtitle
+            : string.IsNullOrEmpty(_subtitle) ? _status : _subtitle + "  ·  " + _status;
+        int dot = subAll.IndexOf('·');
         if (dot > 0)
         {
-            string head = _subtitle.Substring(0, dot).TrimEnd();
-            string tail = _subtitle.Substring(dot);
+            string head = subAll.Substring(0, dot).TrimEnd();
+            string tail = subAll.Substring(dot);
             var subBold = _fSubBold;
             const TextFormatFlags np = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding;
             TextRenderer.DrawText(g, head, subBold, new Rectangle(tx, ty, rightW, subH), Theme.TextCol, np);
@@ -351,7 +341,7 @@ internal sealed class HeaderPanel : Panel
         }
         else
         {
-            TextRenderer.DrawText(g, _subtitle, subFont,
+            TextRenderer.DrawText(g, subAll, subFont,
                 new Rectangle(tx, ty, rightW, subH), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         }
@@ -360,8 +350,9 @@ internal sealed class HeaderPanel : Panel
         // list). Living here (left column) instead of crammed under the buttons reads as an intentional status.
         if (hasBadge)
         {
-            ty += subH + 6;
-            var chip = new Rectangle(tx, ty, badgeText.Width + chipPadX * 2, badgeH);
+            // Inline, at the right end of line 2 — the bar has two lines and the badge is meta, not a new row.
+            int chipW = badgeText.Width + chipPadX * 2;
+            var chip = new Rectangle(Math.Max(tx, tx + rightW - chipW), ty + (subH - badgeH) / 2, chipW, badgeH);
             Color amber = Color.FromArgb(255, 226, 162, 70);
             Color fill = _badgeClickable ? Color.FromArgb(_badgeHover ? 56 : 40, amber) : Color.FromArgb(26, 255, 255, 255);
             using (var bb = new SolidBrush(fill))
@@ -380,22 +371,7 @@ internal sealed class HeaderPanel : Panel
         }
         else _badgeRect = Rectangle.Empty;
 
-        // Read-only note / transient feedback under the action buttons (right-aligned, quiet). The DB warning
-        // is no longer shown here — it has its own amber badge under the subtitle (above).
-        if (!string.IsNullOrEmpty(_status))
-        {
-            var statusFont = _fStatus;
-            var sz = TextRenderer.MeasureText(g, _status, statusFont);
-            int right = Width - Pad;
-            // With a right cluster (search/buttons) keep within that width; with none (Device page) _searchLeft
-            // sits at the right edge so fall back to the full text-area width.
-            int avail = _searchLeft < right ? (right - _searchLeft) : (right - TextX);
-            int sw = Math.Min(sz.Width + 6, Math.Max(60, avail));
-            int sx = right - sw;
-            int sy = Math.Min(Height - 6 - sz.Height, _buttonsBottom + 4);
-            TextRenderer.DrawText(g, _status, statusFont, new Rectangle(sx, sy, sw, sz.Height), Theme.Subtle,
-                TextFormatFlags.Right | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        }
+        // (The status line is drawn inline on the meta line above; nothing sits under the buttons any more.)
         _statusRect = Rectangle.Empty;
 
         using var pen = new Pen(Theme.Border);

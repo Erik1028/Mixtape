@@ -3,14 +3,14 @@ namespace iPodCommander;
 /// <summary>A small dark themed text-input dialog (used for renaming playlists). Returns null on cancel.</summary>
 internal static class PromptDialog
 {
-    public static string? Show(IWin32Window owner, string title, string prompt, string initial)
+    /// <summary>The window itself, built but not shown — the render harness needs it without a modal loop.</summary>
+    internal static CardDialog Build(string title, string prompt, string initial, out TextBox box)
     {
-        using var f = new GlassDialog
+        var f = new CardDialog
         {
             Text = title,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition = FormStartPosition.CenterParent,
-            ClientSize = new Size(380, 138),
+            ClientSize = new Size(380, 142),
             BackColor = Theme.Bg,
             ForeColor = Theme.TextCol,
             Font = Theme.UiFont(9.5f),
@@ -19,18 +19,19 @@ internal static class PromptDialog
             ShowInTaskbar = false,
         };
 
-        var lbl = new GlassLabel { Text = prompt, AutoSize = true, ForeColor = Theme.Subtle, Location = new Point(16, 16) };
+        var lbl = new GlassLabel { Text = prompt, AutoSize = true, ForeColor = Theme.Subtle, Location = new Point(22, 18) };
         var tb = new TextBox
         {
             Text = initial,
-            Location = new Point(16, 42),
-            Width = 348,
+            Location = new Point(22, 44),
+            Width = 336,
+            Font = Theme.UiFont(10.5f),
             BackColor = Theme.RowBg,
             ForeColor = Theme.TextCol,
             BorderStyle = BorderStyle.FixedSingle,
         };
-        var ok = new ThemedButton { Text = "OK", Primary = true, Pill = true, Width = 96, Height = 32, Location = new Point(268, 88), DialogResult = DialogResult.OK };
-        var cancel = new ThemedButton { Text = "Cancel", Pill = true, Width = 96, Height = 32, Location = new Point(162, 88), DialogResult = DialogResult.Cancel };
+        var ok = new ThemedButton { Text = Loc.T("OK"), Primary = true, Pill = true, Width = 96, Height = 32, Location = new Point(262, 94), DialogResult = DialogResult.OK };
+        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(156, 94), DialogResult = DialogResult.Cancel };
 
         f.Controls.Add(lbl);
         f.Controls.Add(tb);
@@ -39,7 +40,14 @@ internal static class PromptDialog
         f.AcceptButton = ok;
         f.CancelButton = cancel;
         f.Shown += (_, _) => { tb.Focus(); tb.SelectAll(); };
+        f.AdoptCard();   // the app's own title strip in place of the Windows caption
+        box = tb;
+        return f;
+    }
 
+    public static string? Show(IWin32Window owner, string title, string prompt, string initial)
+    {
+        using var f = Build(title, prompt, initial, out var tb);
         return f.ShowDialog(owner) == DialogResult.OK ? tb.Text : null;
     }
 }

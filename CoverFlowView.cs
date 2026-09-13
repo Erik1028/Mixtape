@@ -1,81 +1,80 @@
+using System.Collections.Concurrent;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Runtime.CompilerServices;
 
 namespace iPodCommander;
 
 /// <summary>
-/// A Cover-Flow album browser: the centre cover faces the viewer flat; covers to each side recede in
-/// true perspective (a foreshortened trapezoid, not just a shear) with a glossy mirrored reflection,
-/// and the deck coasts smoothly between covers. Navigate with the mouse wheel, arrow keys, or by
-/// clicking a side cover; click the centre cover (or Enter) to activate it; Esc closes.
+/// A Cover-Flow album browser: the centre cover faces the viewer flat (and sits a touch closer); covers to each
+/// side recede in true perspective (a foreshortened trapezoid) with a glossy mirrored reflection, and the deck
+/// glides between covers. Navigate with the mouse wheel, arrow keys, a drag (with a flick), or by clicking a side
+/// cover; click the centre cover (or Enter) to activate it; Esc closes.
 ///
-/// True perspective isn't expressible with GDI+'s 3-point (affine) DrawImage, so each side cover is
-/// rendered by a per-column projective warp: for each output column we compute its perspective-correct
-/// source x and its foreshortened height. Fully-rotated side covers all share one shape, so their warp
-/// is cached per cover; only the 1–2 covers crossing the centre are warped live each frame.
+/// Rendering: every cover is a per-column projective warp of its source pixels, done here in software because
+/// GDI+ has no perspective transform. The one or two covers crossing the centre are warped LIVE every frame at
+/// their exact angle and sub-pixel position (the columns run in parallel; a millisecond or two), so the rotation
+/// is continuous - no angle steps, no stand-in cards. Resting covers (the flat centre, the full-angle sides) are
+/// warped once, cached as sprites and blitted 1:1. Edges and the rounded corners are anti-aliased analytically
+/// (exact pixel coverage), and the texture is filtered through a horizontal mip chain plus a vertical box, so
+/// nothing shimmers or steps however far a side cover is foreshortened.
 /// </summary>
 internal sealed class CoverFlowView : Control
 {
     public sealed record Item(Bitmap Cover, string Title, string Subtitle, object? Tag);
 
+    /// <summary>The square, full-bleed source size the host should feed (ArtworkService.LoadSquare): the largest
+    /// bake base is 420 px, so a 420 px source is never upscaled by more than the centre cover's pop.</summary>
+    internal const int SourcePx = 420;
+
     private readonly List<Item> _items = new();
     private float _pos;        // current fractional centre index (animates toward _target)
-    private int _target;       // index we're coasting to
+    private int _target;       // index we're gliding to
     private Tween? _tw;
-    private readonly Dictionary<long, Bitmap> _sprites = new();    // baked cover+reflection per (index, side, angle-bucket)
-    private readonly object _spritesLock = new();                  // _sprites is read on the UI thread, written on the bake worker
 
-    // ---- background baking ----
-    // BakeSprite (per-column projective warp + downscale + reflection fade) costs ~10ms at full-screen; running it
-    // on the paint/anim thread stalled the UI whenever a fresh angle was needed (the scroll "lag"). Instead a single
-    // worker thread does every bake: the paint thread draws the nearest ALREADY-baked angle and queues the exact one,
-    // which the worker fills in a few ms later. A generation counter discards bakes whose size/items changed mid-flight.
-    // The worker bakes from an immutable pixel ARRAY, never the live Bitmap — GDI+ Bitmaps aren't thread-safe, and
-    // the paint thread still reads the raw covers (the flat-card fallback), so they must stay UI-thread-only.
-    private readonly struct BakeReq { public readonly long Key; public readonly int[] SrcPx; public readonly int SrcW, SrcH, BaseH, Side, Bucket, Gen;
-        public BakeReq(long k, int[] px, int sw, int sh, int bh, int side, int bucket, int gen) { Key = k; SrcPx = px; SrcW = sw; SrcH = sh; BaseH = bh; Side = side; Bucket = bucket; Gen = gen; } }
-    private readonly Dictionary<long, (int[] px, int w, int h)> _srcPx = new();  // per (index,ver) cover pixels, extracted once on the UI thread
-    private readonly List<long> _evictKeys = new();              // REUSED scratch for the per-frame cache eviction (no LINQ → no per-frame GC)
-    private readonly object _qLock = new();
-    private readonly Stack<BakeReq> _queue = new();               // LIFO → the most recently needed angle bakes first
-    private readonly HashSet<long> _pending = new();             // keys already queued or in flight (dedup)
-    private readonly AutoResetEvent _bakeSignal = new(false);
-    private Thread? _baker;
-    private volatile bool _bakerStop;
-    private volatile int _gen;                                   // bumped on ClearCaches; a bake from an older gen is dropped
-    private readonly Dictionary<int, int> _coverVer = new();     // per-index cover version (bumped when a real cover streams in) → baked into the key so a stale placeholder bake can't shadow it
-    private byte[]? _hiBuf;                                      // worker-only reusable supersample buffer (avoids ~3MB LOH churn → GC pauses per bake)
-    private System.Runtime.InteropServices.GCHandle _hiPin;     // pins _hiBuf so a Bitmap can wrap it for the GDI+ downscale
+    // ---- caches ----
+    private readonly Dictionary<long, Bitmap> _sprites = new();    // resting sprites: key = (index, cover version, side)
+    private readonly Dictionary<long, int> _spriteUse = new();      // key -> the frame it was last drawn in (LRU for the byte budget)
+    private readonly List<long> _scratchKeys = new();               // reused so the eviction passes allocate nothing
+    private long _spriteBytes;
+    private int _frameNo;
+    private const long SpriteBudget = 96L * 1024 * 1024;
+    private const int KeepReach = 4;                                // covers past the visible edge whose sprites/pixels are kept
+    private readonly Dictionary<long, SrcMips> _src = new();        // (index, version) -> the cover pixels + their x-mip chain
+    private readonly Dictionary<int, int> _coverVer = new();        // per-index cover version (bumped when a real cover streams in)
     private int _bakedCoverH = -1;                                  // base size the current sprites were baked at (rebake on resize)
-    private const int Buckets = 20;                                 // angle steps for the cross-centre rotation (more = smoother)
-    private Bitmap? _bg;                                            // cached backdrop, re-rendered on resize only
-    private Bitmap? _vignette;                                      // cached edge-darkening overlay (re-rendered on resize only)
-    // Chrome fonts + the close-button pen draw on EVERY OnPaint (~66fps during a coast/flick). Theme.UiFont/DisplayFont
-    // allocate a fresh GDI Font per call, so building them per-frame churned handles + GC → a real Cover-Flow stutter source.
-    // Hoisted here (font families are static-readonly, fixed at startup → identical render). Disposed in Dispose().
+    private int _centreH;                                           // the popped centre cover's size (= base * Pop)
+    private float _maxAngle, _flatPhase;                            // per-paint geometry the bakes need
+    private int _themeRev = -1;                                     // Theme.Revision the backdrop + reflections were built for
+    private Bitmap? _live;                                          // the per-frame warp target for the covers crossing the centre
+    private Bitmap? _bg;                                            // cached backdrop, re-rendered on resize / theme change only
+    private Bitmap? _vignette;                                      // cached edge-darkening overlay
+    // Chrome fonts + the close-button pen draw on EVERY paint; Theme.UiFont/DisplayFont allocate a fresh GDI Font
+    // per call, so they are hoisted here (font families are static-readonly). Disposed in Dispose().
     private readonly Font _fCentreTitle = Theme.DisplayFont(13f, FontStyle.Bold);
     private readonly Font _fCentreSub = Theme.UiFont(10f);
     private readonly Font _fMode = Theme.UiFont(9f, FontStyle.Bold);
     private readonly Font _fNpChip = Theme.UiFont(8.75f, FontStyle.Bold);
     private readonly Pen _closePen = new(Color.White, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round };  // colour reassigned per frame
-    private float _lastPaintPos;                                    // _pos at the previous paint → per-frame scroll speed
-    private bool _fast;                                             // moving fast this frame → coarsen the warp buckets
-    private volatile bool _coasting;                               // a MoveTo tween is in flight → the whole coast paints on the fast path (read on the baker thread too)
-    private int _visRange = 6;                                      // visible covers each side of centre (from the last paint) → pre-buffer window
+    private float _lastPaintPos;                                    // _pos at the previous paint (bench: per-frame speed)
+    private int _visRange = 6;                                      // visible covers each side of centre (from the last paint)
     private float _intro = 1f;                                      // open/close zoom+fade (1 = fully shown)
     private Tween? _introTween;
     private readonly List<(int index, RectangleF rect)> _hit = new();
     private Rectangle _closeRect;
     private bool _closeHover;
-    // drag-to-scrub
+    // drag-to-scrub + flick
     private bool _mouseDown, _dragging;
     private int _downX;
     private float _downPos, _stepPx = 60f;     // _stepPx = horizontal px between covers (cached from paint)
-    // currently-playing album (set by the host) → marker on its cover + a "Now Playing" chip
+    private readonly long[] _trailT = new long[6];   // the last drag samples (time, position) -> release velocity
+    private readonly float[] _trailP = new float[6];
+    private int _trailN;
+    // currently-playing album (set by the host) -> marker on its cover + a "Now Playing" chip
     private object? _playingTag;
     private Rectangle _npChip;
     private bool _npChipHover;
-    // Songs / Albums / Artists segmented toggle (top-centre) — the host rebuilds the deck on change.
+    // Songs / Albums / Artists segmented toggle (top-centre) - the host rebuilds the deck on change.
     public enum BrowseMode { Songs, Albums, Artists }
     private BrowseMode _mode = BrowseMode.Albums;
     private static readonly string[] ModeLabels = { "Songs", "Albums", "Artists" };
@@ -92,7 +91,16 @@ internal sealed class CoverFlowView : Control
     /// <summary>The Tag of the album currently playing (set by the host); marks its cover + enables the chip.</summary>
     public object? PlayingTag { get => _playingTag; set { if (Equals(_playingTag, value)) return; _playingTag = value; Invalidate(); } }
 
-    private const float MaxAngleDeg = 70f;   // steeper side-cover angle (classic Cover Flow look)
+    private const float MaxAngleDeg = 70f;   // steep side-cover angle (classic Cover Flow look)
+    private const float Pop = 1.06f;         // the centre cover sits a touch closer: 6% bigger than the sides, eased in as it arrives
+    private const float ViewerDist = 1.85f;  // perspective strength: viewer distance as a multiple of the cover size
+    private const float FrameAlpha = 0.13f;  // the faint 1 px inner frame every cover tile in the app wears
+
+    // ---- bench hooks (harness only; nothing runs when Trace is null) ----
+    internal static Action<string>? Trace;   // one CSV line per paint: tick,pos,fast,paintMs,live,0,0,sprites
+    private int _statLive;
+    internal int BakeCount; internal double BakeMs;   // bench: resting-sprite bake totals
+    internal int QueueDepth => 0;                     // (there is no background baker any more)
 
     public CoverFlowView()
     {
@@ -105,8 +113,26 @@ internal sealed class CoverFlowView : Control
     public int CurrentIndex => Math.Clamp((int)Math.Round(_pos), 0, Math.Max(0, _items.Count - 1));
     public bool Settled => Math.Abs(_pos - _target) < 0.01f;
 
+    /// <summary>Diagnostics: cached resting sprites + the cover pixel data (with mips) held right now.</summary>
+    internal (int Sprites, long SpriteBytes, int Pixels, long PixelBytes) CacheStats()
+    {
+        long pb = 0;
+        foreach (var m in _src.Values) pb += (long)m.Data.Length * 4;
+        return (_sprites.Count, _spriteBytes, _src.Count, pb);
+    }
+
+    /// <summary>Harness only: park the deck at a fractional position (a frame mid-crossing) for a render.</summary>
+    internal void PreviewPos(float pos)
+    {
+        _tw?.Cancel();
+        _pos = Math.Clamp(pos, 0, Math.Max(0, _items.Count - 1));
+        _target = (int)Math.Round(_pos);
+        Invalidate();
+    }
+
     public void SetItems(IEnumerable<Item> items, int start = 0)
     {
+        _tw?.Cancel();
         ClearCaches();
         _items.Clear();
         _items.AddRange(items);
@@ -116,37 +142,45 @@ internal sealed class CoverFlowView : Control
     }
 
     /// <summary>Swap in a real cover for an item (covers stream in after the view is shown). The bitmap is
-    /// owned by the caller (e.g. ArtworkService's cache) — never disposed here; only our warp caches are.</summary>
+    /// owned by the caller (e.g. ArtworkService's cache) - never disposed here; only our warp caches are.</summary>
     public void SetCover(int index, Bitmap cover)
     {
         if (index < 0 || index >= _items.Count || cover is null) return;
         _items[index] = _items[index] with { Cover = cover };
-        EvictIndex(index);   // drop baked sprites for this item so they re-bake with the real art
+        EvictIndex(index);   // drop this item's pixels + sprites so they re-warp with the real art
         Invalidate();
     }
 
     // ---- navigation ----
 
-    public void MoveTo(int index)
+    public void MoveTo(int index) => Glide(index, force: false);
+    public new void Move(int delta) => MoveTo(_target + delta);   // (hides Control.Move, the event)
+
+    private void Glide(int index, bool force)
     {
         index = Math.Clamp(index, 0, Math.Max(0, _items.Count - 1));
-        if (index == _target) return;
-        int fromIdx = (int)Math.Round(_pos);
+        if (!force && index == _target) return;
         _target = index;
         _tw?.Cancel();
-        PrebufferMove(fromIdx, _target);   // bake the arrival + the centre covers' paths NOW, during the coast → no pop-in
-        if (!Anim.MotionEnabled) { _coasting = false; _pos = _target; Invalidate(); return; }
-        float from = _pos, to = _target;
-        // Coast time scales gently with distance (snappy single steps, a longer glide for big jumps) and
-        // settles with a smooth deceleration. Continuing from the current position keeps rapid flicks fluid.
-        // The WHOLE coast paints on the fast path (_coasting → coarse buckets); the done callback drops back to
-        // precise buckets and repaints once — so the landing frame is exact while the flight stays cheap.
-        double dur = Math.Clamp(260 + 95 * Math.Sqrt(Math.Abs(to - from)), 260, 620);
-        _coasting = true;
-        _tw = Anim.Run(dur, v => { _pos = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); },
-            () => { _coasting = false; if (!IsDisposed) Invalidate(); }, Easings.OutQuint);
+        if (!Anim.MotionEnabled) { _pos = _target; Invalidate(); return; }
+        float from = _pos, to = _target, dist = Math.Abs(to - from);
+        if (dist < 0.0005f) { _pos = to; Invalidate(); return; }
+        // Glide time scales gently with distance (snappy single steps, a longer glide for big jumps). A single
+        // step lands with a soft spring (3% overshoot, then settles); a longer glide just decelerates smoothly.
+        // Continuing from the current position keeps rapid flicks fluid.
+        double dur = Math.Clamp(230 + 90 * Math.Sqrt(dist), 230, 560);
+        Func<double, double> ease = dist <= 1.25f ? Spring : Easings.OutQuint;
+        _tw = Anim.Run(dur, v => { _pos = from + (float)((to - from) * v); if (!IsDisposed) InvalidateDeck(); },
+            () => { if (!IsDisposed) InvalidateDeck(); }, ease);
     }
-    public void Move(int delta) => MoveTo(_target + delta);
+
+    /// <summary>OutBack with a gentle constant: overshoots the landing by about 3% and eases back.</summary>
+    private static double Spring(double t) { const double c1 = 0.9, c3 = c1 + 1; double s = t - 1; return 1 + c3 * s * s * s + c1 * s * s; }
+
+    private Rectangle _band;   // the covers + reflections + centre text, from the last paint
+    /// <summary>A glide changes only the deck band: repainting just that skips the top chrome and the floor below
+    /// the text - a third of the pixels on a big window, every frame of every flick.</summary>
+    private void InvalidateDeck() { if (_band.Height > 0 && _intro >= 0.999f) Invalidate(_band); else Invalidate(); }
 
     /// <summary>Play the open animation: the deck zooms up and fades in.</summary>
     public void AnimateIn()
@@ -208,7 +242,7 @@ internal sealed class CoverFlowView : Control
         for (int i = 0; i < 3; i++)
             if (_modeRects[i].Contains(e.Location)) { if ((int)_mode != i) { _mode = (BrowseMode)i; Invalidate(); ModeChanged?.Invoke(_mode); } return; }
         if (_playingTag is not null && _npChip.Contains(e.Location)) { JumpToPlaying(); return; }
-        _mouseDown = true; _dragging = false; _downX = e.X; _downPos = _pos;
+        _mouseDown = true; _dragging = false; _downX = e.X; _downPos = _pos; _trailN = 0;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -219,8 +253,9 @@ internal sealed class CoverFlowView : Control
             if (!_dragging && Math.Abs(e.X - _downX) > 4) _dragging = true;
             if (_dragging)
             {
-                _tw?.Cancel(); _coasting = false;   // a grab mid-coast takes over — speed decides the fast path again
+                _tw?.Cancel();   // a grab mid-glide takes over
                 _pos = Math.Clamp(_downPos - (e.X - _downX) / Math.Max(1f, _stepPx), 0, Math.Max(0, _items.Count - 1));
+                TrailPush(_pos);
                 Invalidate();
             }
             return;
@@ -239,10 +274,44 @@ internal sealed class CoverFlowView : Control
         base.OnMouseUp(e);
         if (!_mouseDown) return;
         _mouseDown = false;
-        if (_dragging) { _dragging = false; MoveTo((int)Math.Round(_pos)); return; } // snap to nearest cover
+        if (_dragging)
+        {
+            _dragging = false;
+            // A flick carries on: the release velocity throws the deck a few covers further (clamped), then it
+            // settles on a cover; a slow drag just snaps to the nearest one.
+            float fling = Math.Clamp(TrailVelocity() * 0.20f, -6f, 6f);
+            Glide((int)Math.Round(_pos + fling), force: true);
+            return;
+        }
         int hit = HitTest(e.Location);                                               // a click (no drag)
         if (hit < 0) return;
         if (hit == CurrentIndex && Settled) ActivateCentre(); else MoveTo(hit);
+    }
+
+    private void TrailPush(float pos)
+    {
+        long now = Environment.TickCount64;
+        if (_trailN == _trailT.Length)
+        {
+            Array.Copy(_trailT, 1, _trailT, 0, _trailN - 1);
+            Array.Copy(_trailP, 1, _trailP, 0, _trailN - 1);
+            _trailN--;
+        }
+        _trailT[_trailN] = now; _trailP[_trailN] = pos; _trailN++;
+    }
+
+    /// <summary>The drag's release velocity in covers per second, from the samples of its last ~130 ms; zero when
+    /// the pointer paused before letting go.</summary>
+    private float TrailVelocity()
+    {
+        if (_trailN < 2) return 0f;
+        long now = Environment.TickCount64;
+        if (now - _trailT[_trailN - 1] > 90) return 0f;
+        int k = _trailN - 1;
+        while (k > 0 && now - _trailT[k - 1] <= 130) k--;
+        long dt = _trailT[_trailN - 1] - _trailT[k];
+        if (dt < 8) return 0f;
+        return (_trailP[_trailN - 1] - _trailP[k]) * 1000f / dt;
     }
 
     private void JumpToPlaying()
@@ -258,18 +327,25 @@ internal sealed class CoverFlowView : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        _frameNo++;   // LRU stamp for the sprite budget: anything drawn this frame is the last to be evicted
+        var swPaint = Trace is null ? null : System.Diagnostics.Stopwatch.StartNew();
+        _statLive = 0;
         var g = e.Graphics;
         _hit.Clear();
-        // Coarsen the rotation buckets while MOVING, so far fewer distinct perspective sprites are baked (they blur
-        // past anyway) → the background worker keeps up and covers don't pop in; precise rotation returns at rest.
-        // Two triggers: per-frame speed (drag), OR a wheel/keyboard coast in flight — the OutQuint tail spends ~85%
-        // of its time under any speed threshold, so exact buckets were requested per frame, missing the cache and
-        // flooding the baker + its repaint storms. That was the "wheel lags, drag doesn't" asymmetry.
-        _fast = _coasting || Math.Abs(_pos - _lastPaintPos) > 0.25f;
+        bool fast = Math.Abs(_pos - _lastPaintPos) > 0.25f;   // (bench only)
         _lastPaintPos = _pos;
 
+        // A palette switch invalidates everything baked in theme colours: the backdrop, the vignette and the
+        // sprites (their reflections fade toward the floor colour).
+        if (_themeRev != Theme.Revision)
+        {
+            _themeRev = Theme.Revision;
+            _bg?.Dispose(); _bg = null; _vignette?.Dispose(); _vignette = null;
+            ClearSprites();
+        }
+
         // Backdrop: a dark vertical gradient, cached as a bitmap (re-rendered only when the size changes)
-        // and blitted 1:1 each frame — far cheaper than gradient-filling the whole control every paint.
+        // and blitted 1:1 each frame - far cheaper than gradient-filling the whole control every paint.
         if (_bg is null || _bg.Width != Width || _bg.Height != Height)
         {
             _bg?.Dispose();
@@ -280,7 +356,7 @@ internal sealed class CoverFlowView : Control
             using (var br = new LinearGradientBrush(new Rectangle(0, 0, _bg.Width, _bg.Height), Theme.Blend(Theme.Bg, Color.White, 0.04), Theme.Blend(Theme.Bg, Color.Black, 0.22), 90f))
                 bgg.FillRectangle(br, 0, 0, _bg.Width, _bg.Height);
             // Soft center spotlight behind the covers for depth/focus.
-            using (var gp = new System.Drawing.Drawing2D.GraphicsPath())
+            using (var gp = new GraphicsPath())
             {
                 var er = new RectangleF(_bg.Width * 0.06f, -_bg.Height * 0.25f, _bg.Width * 0.88f, _bg.Height * 1.05f);
                 gp.AddEllipse(er);
@@ -290,58 +366,68 @@ internal sealed class CoverFlowView : Control
             }
         }
         var prevCM = g.CompositingMode;
-        g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;   // _bg is opaque → skip the per-pixel alpha blend on the big full-screen blit
+        g.CompositingMode = CompositingMode.SourceCopy;   // _bg is opaque -> skip the per-pixel alpha blend on the big full-screen blit
         g.DrawImageUnscaled(_bg, 0, 0);
-        g.CompositingMode = prevCM;                                                // covers + vignette need SourceOver
+        g.CompositingMode = prevCM;                        // covers + vignette need SourceOver
 
         if (_items.Count == 0) { DrawCloseButton(g); return; }
 
-        // Fast per-frame compositing: sprites are pre-rendered at final size, so blit 1:1 (no resampling).
+        // Fast per-frame compositing: sprites are rendered at final size, so blit 1:1 (no resampling).
         g.InterpolationMode = InterpolationMode.NearestNeighbor;
         g.PixelOffsetMode = PixelOffsetMode.Half;
         g.CompositingQuality = CompositingQuality.HighSpeed;
         g.SmoothingMode = SmoothingMode.None;
 
         int H = Height;
-        // Sprites bake at this BASE size. It tracks the window HEIGHT (covers fill ~46% of it) but is also held
-        // under a fraction of the WIDTH so a wide / full-screen window grows the covers (bigger deck) instead of
-        // pinning them at a small cap — they used to stay 300px on any large window, leaving a narrow band with
-        // big black side margins. The open/close zoom is a runtime scaled blit (not a smaller bake), so covers
-        // actually zoom in; a base-size change (resize / maximize) rebakes the cache so covers re-fit.
+        // Covers bake at this BASE size. It tracks the window HEIGHT (covers fill ~46% of it) but is also held
+        // under a fraction of the WIDTH so a wide / full-screen window grows the covers (bigger deck). The
+        // open/close zoom is a runtime scaled blit (not a smaller bake); a base-size change (resize / maximize)
+        // rebakes the cache so covers re-fit.
         int baseH = Math.Clamp((int)Math.Min(H * 0.46f, Width * 0.34f), 130, 420);
-        if (baseH != _bakedCoverH) { ClearCaches(); _bakedCoverH = baseH; }
+        if (baseH != _bakedCoverH)
+        {
+            ClearSprites();
+            _bakedCoverH = baseH;
+            _centreH = (int)Math.Round(baseH * Pop);
+            _live?.Dispose();
+            _live = new Bitmap(_centreH + 2, _centreH + _centreH / 2 + 2, PixelFormat.Format32bppPArgb);
+        }
+        int centreH = _centreH;
         float introScale = 0.84f + 0.16f * Math.Clamp(_intro, 0f, 1f); // open/close zoom (applied as a scaled blit below)
-        int coverH = (int)(baseH * introScale);
-        int coverW = coverH;
         float cx = Width / 2f, centreY = H * 0.42f;
-        float maxAngle = (float)(MaxAngleDeg * Math.PI / 180);      // baker derives viewer distance Dv = baseH*1.85 itself
-        // The centre cover is flat and "popped" forward; the side covers recede as an overlapping fan. side1 =
+        _maxAngle = (float)(MaxAngleDeg * Math.PI / 180);
+        // The settled centre cover is blitted from its cached flat sprite, which is baked at the sub-pixel phase
+        // of its resting place so the last live frame and the cached one line up exactly (no half-pixel snap).
+        float flatLeft = cx - centreH / 2f, ph = flatLeft - MathF.Floor(flatLeft);
+        if (Math.Abs(ph - _flatPhase) > 0.001f) { _flatPhase = ph; DropSprites(k => (int)(k & 3) == 1); }
+        // The centre cover is flat and popped forward; the side covers recede as an overlapping fan. side1 =
         // first side cover's centre; sideStep = spacing between side covers. Both are tuned so the first side
         // cover slips slightly UNDER the centre cover (no backdrop gap line), and side covers overlap enough
         // that their foreshortened (sloped) tops don't leave a dark backdrop wedge between neighbours.
-        float projFull = coverW * (float)Math.Cos(maxAngle);
-        float side1 = coverW * 0.5f + projFull / 2f - coverW * 0.04f;   // overlap the centre cover by ~4% (was a +5% GAP → a black seam line)
+        float projFull = baseH * (float)Math.Cos(_maxAngle);
+        float side1 = centreH * 0.5f + projFull / 2f - baseH * 0.04f;
         float sideStep = projFull * 0.52f;
         _stepPx = sideStep;                                         // for drag-to-scrub
         // Fan out enough covers to reach the screen edges (capped for perf), so a wide / full-screen window
         // shows a full-width deck rather than a short fan stranded in the middle.
         int range = Math.Clamp((int)Math.Ceiling((Width / 2f - side1) / sideStep) + 2, 5, 8);
-        _visRange = range;   // remembered so the pre-buffer knows how wide the deck is
+        _visRange = range;
 
         int lo = Math.Max(0, (int)Math.Floor(_pos) - range);
         int hi = Math.Min(_items.Count - 1, (int)Math.Ceiling(_pos) + range);
+        _band = new Rectangle(0, (int)(centreY - centreH / 2f) - 12, Width, (int)(centreH * 1.5f + centreH * 0.42f + 70) + 12);   // covers + reflections + centre text: what a glide repaints
         // Draw farthest-from-centre first (back) and the centre last (front): each cover overlaps the one
         // further out, the centre on top. Two cursors walking inward from both ends reproduce that exact
-        // farthest-first order with zero per-frame allocation (this runs ~66fps during a coast/drag).
+        // farthest-first order with zero per-frame allocation.
         int dlo = lo, dhi = hi;
         while (dlo <= dhi)
         {
             int i = Math.Abs(dlo - _pos) >= Math.Abs(dhi - _pos) ? dlo++ : dhi--;
-            DrawCover(g, i, cx, centreY, coverW, coverH, baseH, maxAngle, side1, sideStep, introScale);
+            DrawCover(g, i, cx, centreY, baseH, centreH, side1, sideStep, introScale);
         }
 
         // Edge vignette: darken the far side covers toward the screen edges for depth (drawn over them).
-        // Cached as a transparent overlay — and blitted as only its two non-empty EDGE STRIPS (the wide middle is
+        // Cached as a transparent overlay - and blitted as only its two non-empty EDGE STRIPS (the wide middle is
         // fully transparent, so a full-width alpha blit just churned ~half the pixels for nothing).
         int vw = (int)(Width * 0.24f);
         if (_vignette is null || _vignette.Width != Width || _vignette.Height != H)
@@ -350,8 +436,8 @@ internal sealed class CoverFlowView : Control
             _vignette = new Bitmap(Math.Max(1, Width), Math.Max(1, H), PixelFormat.Format32bppPArgb);
             using var vg = Graphics.FromImage(_vignette);
             Color edge = Theme.Blend(Theme.Bg, Color.Black, 0.6);
-            // ⚠️ The gradient-brush rect is 1px WIDER than the fill on each end: a LinearGradientBrush renders its
-            // very first column at the WRAPPED (end) colour — here that put a hard dark line where the right
+            // NOTE: the gradient-brush rect is 1px WIDER than the fill on each end: a LinearGradientBrush renders
+            // its very first column at the WRAPPED (end) colour - here that put a hard dark line where the right
             // vignette starts. Pushing the brush edges outside the fill region hides that buggy column.
             using (var lv = new LinearGradientBrush(new Rectangle(-1, 0, vw + 2, H), Color.FromArgb(165, edge), Color.FromArgb(0, edge), 0f))
                 vg.FillRectangle(lv, 0, 0, vw, H);
@@ -361,80 +447,50 @@ internal sealed class CoverFlowView : Control
         g.DrawImage(_vignette, new Rectangle(0, 0, vw, H), 0, 0, vw, H, GraphicsUnit.Pixel);                       // left strip
         g.DrawImage(_vignette, new Rectangle(Width - vw, 0, vw, H), Width - vw, 0, vw, H, GraphicsUnit.Pixel);     // right strip
 
-        // Evict baked sprites + cover-pixel arrays for covers that have scrolled well out of view (bounds memory).
-        // ⚠️ This runs EVERY paint (~66fps) during a coast/drag, so it must NOT allocate — the old `.Where(..).ToList()`
-        // built a List + a capturing closure each frame once a cache passed its threshold (easily, with 20 buckets × 2
-        // sides), churning Gen2 GC = the intermittent scroll stutter. Reuse one scratch list + a plain loop (struct
-        // Dictionary enumerator → zero heap alloc); collect-then-remove so we don't mutate mid-enumeration.
-        if (_sprites.Count > 100)
-            lock (_spritesLock)
-            {
-                _evictKeys.Clear();
-                foreach (var k in _sprites.Keys) { int idx = (int)(k >> 12); if (idx < lo - 2 || idx > hi + 2) _evictKeys.Add(k); }
-                foreach (var k in _evictKeys) { _sprites[k].Dispose(); _sprites.Remove(k); }
-            }
-        if (_srcPx.Count > 40)
+        // Bound the caches: drop the sprites + pixels of covers that scrolled well out of view, then hold the
+        // sprite bytes under the budget by evicting the least recently drawn (never one drawn this frame).
+        // Runs every paint, so it allocates nothing (scratch list + plain loops).
+        if (_sprites.Count > 60) DropSprites(k => { int idx = (int)(k >> 4); return idx < lo - KeepReach || idx > hi + KeepReach; });
+        while (_spriteBytes > SpriteBudget && _sprites.Count > 0)
         {
-            _evictKeys.Clear();
-            foreach (var k in _srcPx.Keys) { int idx = (int)(k >> 2); if (idx < lo - 2 || idx > hi + 2) _evictKeys.Add(k); }
-            foreach (var k in _evictKeys) _srcPx.Remove(k);
+            int oldest = int.MaxValue;
+            foreach (var kv in _spriteUse) if (kv.Value < oldest) oldest = kv.Value;
+            if (oldest == int.MaxValue || oldest == _frameNo) break;
+            DropSprites(k => _spriteUse.TryGetValue(k, out int u) && u == oldest);
+        }
+        if (_src.Count > 28)
+        {
+            _scratchKeys.Clear();
+            foreach (var k in _src.Keys) { int idx = (int)(k >> 2); if (idx < lo - 2 || idx > hi + 2) _scratchKeys.Add(k); }
+            foreach (var k in _scratchKeys) _src.Remove(k);
         }
 
-        DrawCentreText(g, centreY, coverH);
+        DrawCentreText(g, centreY, centreH);
         DrawNowPlayingChip(g);
         DrawModeSwitch(g);
         DrawCloseButton(g);
 
-        // When idle, proactively bake the RESTING sprites for the deck (a touch beyond what's visible) so the next
-        // wheel-step / arrival shows already-baked covers — no pop-in flicker as the on-demand bakes catch up.
-        if (Settled) PrebufferSettle(_target);
-    }
-
-    /// <summary>Pre-bake the crisp SETTLE sprites for the covers around <paramref name="center"/> (centre flat at
-    /// 2×, each side at its full-angle anchor), a little beyond the visible deck. Idempotent + cheap (skips anything
-    /// already baked/queued). The requests go to the BOTTOM of the LIFO queue, so live on-demand bakes still run first.</summary>
-    private void PrebufferSettle(int center)
-    {
-        int baseH = _bakedCoverH;
-        if (baseH <= 0 || _items.Count == 0) return;
-        int r = _visRange + 1;
-        for (int i = center - r; i <= center + r; i++)
+        // At rest, warp the resting sprites a little beyond the visible deck now, so the newcomers of the next
+        // flick are ready before they slide in.
+        if (Settled) Prebake(lo, hi);
+        if (swPaint is not null)
         {
-            if (i < 0 || i >= _items.Count) continue;
-            if (i == center) QueueBakeIfMissing(i, 0, 0, baseH);                 // centred cover: flat, 2× supersample
-            else QueueBakeIfMissing(i, i < center ? -1 : 1, Buckets, baseH);     // side covers: full-angle anchor
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+            Trace!($"{Environment.TickCount64},{_pos.ToString("F3", ic)},{(fast ? 1 : 0)},{swPaint.Elapsed.TotalMilliseconds.ToString("F2", ic)},{_statLive},0,0,{_sprites.Count}");
         }
     }
 
-    /// <summary>Pre-bake the path of a coast: the arrival state, plus the incoming + outgoing centre covers' angle
-    /// buckets (every 4th), so the two covers the eye tracks across the deck don't STEP/flicker as they slide.</summary>
-    private void PrebufferMove(int from, int target)
+    private void Prebake(int lo, int hi)
     {
-        int baseH = _bakedCoverH;
-        if (baseH <= 0) return;
-        PrebufferSettle(target);                       // arrival + just-beyond
-        if (target == from) return;
-        QueueBakeIfMissing(target, 0, 0, baseH);       // …and lands flat at centre (2×)
-        // The incoming/outgoing centre covers sweep through the MID angle buckets — but only on a SHORT step is that
-        // sweep actually seen. On a big (fast-wheel, accumulated) jump the intermediate covers blur past on the fast
-        // path, so baking their per-4°-bucket sweep is wasted work that floods GetSrcPx (LockBits on the UI thread)
-        // exactly between the coast's timer ticks → the WM_TIMER judder that made the wheel lag while a drag stayed
-        // smooth (a drag never runs this path). The idle prebuffer bakes the landing anyway once the coast slows.
-        if (Math.Abs(target - from) > 2) return;
-        int inSide = target > from ? 1 : -1;           // the incoming centre cover approaches from this side
-        for (int b = Buckets; b >= 4; b -= 4) QueueBakeIfMissing(target, inSide, b, baseH);
-        for (int b = 4; b <= Buckets; b += 4) QueueBakeIfMissing(from, -inSide, b, baseH);   // outgoing centre sweeps the other way
+        int centre = (int)Math.Round(_pos), r = _visRange + 3;
+        for (int i = centre - r; i <= centre + r; i++)
+        {
+            if (i < 0 || i >= _items.Count || (i >= lo && i <= hi)) continue;   // the visible ones were baked by the paint
+            GetSprite(i, i < centre ? -1 : 1);
+        }
     }
 
-    private void QueueBakeIfMissing(int i, int side, int bucket, int baseH)
-    {
-        if (i < 0 || i >= _items.Count) return;
-        long key = SpriteKey(i, Ver(i), side, bucket);
-        lock (_spritesLock) if (_sprites.ContainsKey(key)) return;
-        Enqueue(i, side, bucket, baseH, key);
-    }
-
-    /// <summary>A Songs / Albums / Artists segmented toggle centred at the top — clicking a segment raises
+    /// <summary>A Songs / Albums / Artists segmented toggle centred at the top - clicking a segment raises
     /// <see cref="ModeChanged"/> so the host rebuilds the deck.</summary>
     private void DrawModeSwitch(Graphics g)
     {
@@ -496,318 +552,386 @@ internal sealed class CoverFlowView : Control
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
-    private void DrawCover(Graphics g, int i, float cx, float centreY, int coverW, int coverH, int baseH, float maxAngle, float side1, float sideStep, float scale)
+    private void DrawCover(Graphics g, int i, float cx, float centreY, int baseH, int centreH, float side1, float sideStep, float scale)
     {
         float d = i - _pos;
         float a = Math.Abs(d);
-        int s = d < 0 ? -1 : (d > 0 ? 1 : 0);
-        int bucket = (int)Math.Round(Math.Clamp(a, 0, 1) * Buckets);  // 0 = flat centre, Buckets = full side angle
-        if (_fast && bucket > 0 && bucket < Buckets)                  // moving → snap to every-4th bucket so only a handful of
-            bucket = Math.Clamp((int)Math.Round(bucket / 4.0) * 4, 0, Buckets); // sprites bake + get reused. MUST stay on PrebufferMove's
-                                                                                // 4-grid — the old every-5th snap never matched the
-                                                                                // every-4th prebake, so coasts always missed the cache.
-        if (bucket == 0) s = 0;
+        int s = d < 0 ? -1 : 1;
         // |d|<=1: interpolate the centre cover out to the first side slot; beyond: recede by sideStep.
         float o = a <= 1f ? d * side1 : s * (side1 + (a - 1f) * sideStep);
         float Xc = cx + o;
 
-        // Sprite is baked once at the full BASE size; the open/close zoom is a uniform scaled blit so the cache
-        // never holds a per-zoom-frame size (which made covers pop in small and never grow / mis-size on resize).
-        Bitmap? sprite = GetSprite(i, s, bucket, baseH);
-        float top = centreY - coverH / 2f;
-        if (sprite is null)
+        if (a >= 0.002f && a < 0.999f)
         {
-            // No baked angle for this cover yet (it just entered during a fast flick and the worker hasn't reached
-            // it). Rather than leave a gap (pop-in), draw the raw cover as a quick width-squashed flat card so a
-            // cover is ALWAYS present; the proper perspective sprite replaces it within a frame or two. Only ever
-            // seen mid-flick on the leading edge, where motion + the edge vignette hide the missing slant.
-            float projW = coverW * (float)Math.Cos(maxAngle * Math.Min(bucket, Buckets) / (float)Buckets) * scale;
-            float ch = coverH * scale;
-            // CHEAP interpolation ONLY during a FAST flick: HighQualityBilinear re-prefilters the WHOLE source cover every
-            // frame, and a fast flick hits this branch for MANY covers at once (the baker is behind) → that was the tween lag
-            // (a slow drag stays smooth because the baker keeps up → no flat cards). Plain Bilinear is ~3-5× cheaper and the
-            // drop is invisible mid-motion. When NOT fast (slow/settle, where a flat card is rare + the eye can rest on it),
-            // keep HighQualityBilinear so quality is unchanged.
-            var im0 = g.InterpolationMode; g.InterpolationMode = _fast ? InterpolationMode.Bilinear : InterpolationMode.HighQualityBilinear;
-            g.DrawImage(_items[i].Cover, Xc - projW / 2f, top, projW, ch);
-            g.InterpolationMode = im0;
-            _hit.Add((i, new RectangleF(Xc - projW / 2f, top, projW, ch)));
+            // Crossing the centre: warped live at its exact angle, size and sub-pixel position, every frame.
+            float theta = _maxAngle * a;
+            int ch = (int)Math.Round(baseH * (1f + (Pop - 1f) * (1f - a)));   // eases up to the popped centre size
+            float pw = ch * (float)Math.Cos(theta);
+            float left = Xc - pw / 2f;
+            int leftI = (int)MathF.Floor(left);
+            float phase = left - leftI;
+            int bufW = Math.Clamp((int)MathF.Ceiling(phase + pw), 1, _live!.Width), reflH = ch / 2;
+            WarpInto(_live, bufW, ch, reflH, GetSrc(i), theta, nearRight: d > 0, phase);
+            _statLive++;
+            float top = centreY - ch * scale / 2f;
+            var srcRect = new Rectangle(0, 0, bufW, ch + reflH);
+            if (scale >= 0.999f)
+                g.DrawImage(_live, new Rectangle(leftI, (int)Math.Round(top), bufW, ch + reflH), srcRect, GraphicsUnit.Pixel);
+            else
+            {
+                var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.Bilinear;   // open/close zoom frames: smooth scale
+                g.DrawImage(_live, new RectangleF(Xc - bufW * scale / 2f, top, bufW * scale, (ch + reflH) * scale), srcRect, GraphicsUnit.Pixel);
+                g.InterpolationMode = im;
+            }
+            _hit.Add((i, new RectangleF(leftI, top, pw * scale, ch * scale)));
             return;
         }
+
+        // Resting: the flat centre or a full-angle side cover, from the sprite cache (warped once, blitted 1:1).
+        bool flat = a < 0.002f;
+        var sprite = GetSprite(i, flat ? 0 : s);
+        int coverH = flat ? centreH : baseH;
         float dw = sprite.Width * scale, dh = sprite.Height * scale;
-        float left = Xc - dw / 2f;
-        _hit.Add((i, new RectangleF(left, top, dw, coverH)));
+        float top2 = centreY - coverH * scale / 2f;
+        float left2 = flat ? MathF.Floor(cx - centreH / 2f) : Xc - dw / 2f;   // the flat sprite carries its own sub-pixel phase
+        _hit.Add((i, new RectangleF(left2, top2, dw, coverH * scale)));
         if (scale >= 0.999f)
-            g.DrawImageUnscaled(sprite, (int)Math.Round(left), (int)Math.Round(top)); // resting: 1:1, no resample
+        {
+            // A pure side cover shows only its OUTER strip (one sideStep wide): the neighbour nearer the centre is
+            // drawn over its inner half. Blitting just that strip halves the per-frame cost of the whole fan.
+            int strip = (int)Math.Ceiling(sideStep) + 2;
+            if (a > 1.5f && strip < sprite.Width)
+            {
+                int sx = s < 0 ? 0 : sprite.Width - strip;
+                g.DrawImage(sprite, new Rectangle((int)Math.Round(left2) + sx, (int)Math.Round(top2), strip, sprite.Height), new Rectangle(sx, 0, strip, sprite.Height), GraphicsUnit.Pixel);
+            }
+            else g.DrawImageUnscaled(sprite, (int)Math.Round(left2), (int)Math.Round(top2)); // resting: 1:1, no resample
+        }
         else
         {
-            var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-            g.DrawImage(sprite, left, top, dw, dh);                                    // open/close zoom frames: smooth scale
+            var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.Bilinear;
+            g.DrawImage(sprite, flat ? cx - dw / 2f : left2, top2, dw, dh);                                    // open/close zoom frames: smooth scale
             g.InterpolationMode = im;
         }
     }
 
-    // Sprite cache key: index | cover-version | side | angle-bucket (all non-overlapping bit fields).
-    private static long SpriteKey(int index, int ver, int side, int bucket) =>
-        ((long)index << 12) | ((long)(ver & 3) << 10) | ((long)(side + 1) << 8) | (uint)bucket;
-    private int Ver(int index) => _coverVer.TryGetValue(index, out var v) ? v : 0;   // UI thread only
+    // ---- the resting-sprite cache ----
 
-    /// <summary>Return the baked sprite for (index, side, bucket) if it's ready; otherwise queue it for the
-    /// background baker and return the NEAREST already-baked angle for this cover (or null if none yet). The
-    /// paint thread never bakes — so a fresh angle can never stall the animation; the worker fills it in within
-    /// a few ms and a repaint is requested. Sprites are baked once per (index, version, side, bucket) and reused.</summary>
-    private Bitmap? GetSprite(int index, int side, int bucket, int baseH)
+    // Sprite cache key: index | cover-version | side (all non-overlapping bit fields). side field: 0 = left, 1 = flat centre, 2 = right.
+    private static long SpriteKey(int index, int ver, int side) => ((long)index << 4) | ((long)(ver & 3) << 2) | (uint)(side + 1);
+    private int Ver(int index) => _coverVer.TryGetValue(index, out var v) ? v : 0;
+
+    /// <summary>The resting sprite of a cover (side 0 = flat at the popped centre size, +/-1 = the full side angle),
+    /// warped on first use and cached.</summary>
+    private Bitmap GetSprite(int index, int side)
     {
-        int ver = Ver(index);
-        long key = SpriteKey(index, ver, side, bucket);
-        lock (_spritesLock) if (_sprites.TryGetValue(key, out var sp)) return sp;
-        Enqueue(index, side, bucket, baseH, key);
-        // Guarantee a fallback angle for this cover: also queue its full-side anchor (baked once, then reused) so
-        // NearestCached always has something close to draw while the exact in-between angle is still baking.
-        if (bucket != 0 && bucket != Buckets)
-            Enqueue(index, side, Buckets, baseH, SpriteKey(index, ver, side, Buckets));
-        return NearestCached(index, ver, side, bucket);
+        long key = SpriteKey(index, Ver(index), side);
+        if (_sprites.TryGetValue(key, out var hit)) { _spriteUse[key] = _frameNo; return hit; }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int ch = side == 0 ? _centreH : _bakedCoverH;
+        float theta = side == 0 ? 0f : _maxAngle, phase = side == 0 ? _flatPhase : 0f;
+        float pw = ch * (float)Math.Cos(theta);
+        int w = Math.Max(1, (int)MathF.Ceiling(pw + phase)), reflH = ch / 2;
+        var bmp = new Bitmap(w, ch + reflH, PixelFormat.Format32bppPArgb);
+        WarpInto(bmp, w, ch, reflH, GetSrc(index), theta, nearRight: side > 0, phase);
+        _sprites[key] = bmp;
+        _spriteBytes += (long)bmp.Width * bmp.Height * 4;
+        _spriteUse[key] = _frameNo;
+        BakeCount++; BakeMs += sw.Elapsed.TotalMilliseconds;
+        return bmp;
     }
 
-    private void Enqueue(int index, int side, int bucket, int baseH, long key)
+    private void DropSprites(Func<long, bool> which)
     {
-        EnsureBaker();
-        var (px, w, h) = GetSrcPx(index);                   // extract on the UI thread → worker reads the array, never the Bitmap
-        lock (_qLock)
+        _scratchKeys.Clear();
+        foreach (var k in _sprites.Keys) if (which(k)) _scratchKeys.Add(k);
+        foreach (var k in _scratchKeys)
         {
-            if (!_pending.Add(key)) return;                 // already queued or in flight
-            _queue.Push(new BakeReq(key, px, w, h, baseH, side, bucket, _gen));
+            var b = _sprites[k];
+            _spriteBytes -= (long)b.Width * b.Height * 4;
+            b.Dispose();
+            _sprites.Remove(k);
+            _spriteUse.Remove(k);
         }
-        _bakeSignal.Set();
     }
 
-    /// <summary>Extract a cover's pixels into an immutable ARGB array (once per index+version), cached. Called on
-    /// the UI thread so the live Bitmap is never locked while the paint thread (flat-card fallback) reads it; the
-    /// worker then bakes from the array with no GDI+ involvement at all.</summary>
-    private (int[] px, int w, int h) GetSrcPx(int index)
+    /// <summary>A cover's pixels with their horizontal mip chain (built once per index + version), for the warp.</summary>
+    private SrcMips GetSrc(int index)
     {
         long k = ((long)index << 2) | (uint)(Ver(index) & 3);
-        if (_srcPx.TryGetValue(k, out var e)) return e;
-        var bmp = _items[index].Cover;
-        int w = bmp.Width, h = bmp.Height;
-        var arr = new int[w * h];
-        var d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        System.Runtime.InteropServices.Marshal.Copy(d.Scan0, arr, 0, w * h);   // 32bpp → stride == w*4, no row padding
-        bmp.UnlockBits(d);
-        e = (arr, w, h); _srcPx[k] = e; return e;
+        if (_src.TryGetValue(k, out var m)) return m;
+        int w, h; int[] arr;
+        try
+        {
+            var bmp = _items[index].Cover;
+            w = bmp.Width; h = bmp.Height;
+            arr = new int[w * h];
+            var d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            System.Runtime.InteropServices.Marshal.Copy(d.Scan0, arr, 0, w * h);   // 32bpp -> stride == w*4, no row padding
+            bmp.UnlockBits(d);
+        }
+        catch
+        {
+            // A cover bitmap gone bad under us (disposed by its owner's cache): a plain dark tile rather than a crash
+            // mid-paint; the real art is re-requested through SetCover whenever it streams in again.
+            w = h = 2; arr = new int[4];
+            var t = Theme.Blend(Theme.PanelBg, Color.White, 0.06);
+            Array.Fill(arr, (255 << 24) | (t.R << 16) | (t.G << 8) | t.B);
+        }
+        m = new SrcMips(arr, w, h);
+        _src[k] = m;
+        return m;
     }
 
-    /// <summary>The cached sprite for this cover whose angle bucket is closest to the one requested (search
-    /// outward from the target), or null if no angle for this cover is baked yet.</summary>
-    private Bitmap? NearestCached(int index, int ver, int side, int bucket)
+    private void EvictIndex(int index)
     {
-        lock (_spritesLock)
+        _scratchKeys.Clear();
+        foreach (var k in _src.Keys) if ((int)(k >> 2) == index) _scratchKeys.Add(k);
+        foreach (var k in _scratchKeys) _src.Remove(k);
+        DropSprites(k => (int)(k >> 4) == index);
+        _coverVer[index] = Ver(index) + 1;
+    }
+
+    private void ClearSprites() => DropSprites(_ => true);
+
+    private void ClearCaches()
+    {
+        ClearSprites();
+        _src.Clear();
+    }
+
+    // ---- the warp ----
+
+    /// <summary>A cover's ARGB pixels plus a chain of HORIZONTALLY halved copies (widths w, w/2, w/4 ... at the full
+    /// height), all in one array. A foreshortened cover compresses the source far more across than down, so the
+    /// warp picks the level whose columns match its horizontal step (blending two levels) and box-filters the
+    /// remaining vertical minification directly - anisotropic filtering without a full ripmap's memory.</summary>
+    private sealed class SrcMips
+    {
+        public readonly int[] Data;
+        public readonly int[] Off, W;
+        public readonly int H, W0, Levels;
+
+        public SrcMips(int[] px, int w, int h)
         {
-            for (int r = 0; r <= Buckets; r++)
+            H = h; W0 = w;
+            int levels = 1, ww = w;
+            while (ww > 8 && levels < 8) { ww = (ww + 1) / 2; levels++; }
+            Levels = levels; W = new int[levels]; Off = new int[levels];
+            int total = 0; ww = w;
+            for (int k = 0; k < levels; k++) { W[k] = ww; Off[k] = total; total += ww * h; ww = (ww + 1) / 2; }
+            Data = new int[total];
+            Array.Copy(px, 0, Data, 0, w * h);
+            for (int k = 1; k < levels; k++)
             {
-                int b1 = bucket - r, b2 = bucket + r;
-                if (b1 >= 0 && _sprites.TryGetValue(SpriteKey(index, ver, side, b1), out var s1)) return s1;
-                if (r > 0 && b2 <= Buckets && _sprites.TryGetValue(SpriteKey(index, ver, side, b2), out var s2)) return s2;
+                int sw = W[k - 1], dw = W[k], so = Off[k - 1], dof = Off[k];
+                for (int y = 0; y < h; y++)
+                {
+                    int srow = so + y * sw, drow = dof + y * dw;
+                    for (int x = 0; x < dw; x++)
+                    {
+                        int x0 = Math.Min(2 * x, sw - 1), x1 = Math.Min(2 * x + 1, sw - 1);
+                        int p = Data[srow + x0], q = Data[srow + x1];
+                        Data[drow + x] = ((((p >> 24) & 0xFF) + ((q >> 24) & 0xFF) + 1) >> 1) << 24
+                                       | ((((p >> 16) & 0xFF) + ((q >> 16) & 0xFF) + 1) >> 1) << 16
+                                       | ((((p >> 8) & 0xFF) + ((q >> 8) & 0xFF) + 1) >> 1) << 8
+                                       | (((p & 0xFF) + (q & 0xFF) + 1) >> 1);
+                    }
+                }
             }
         }
-        return null;
     }
 
-    private void EnsureBaker()
+    private struct WarpJob
     {
-        if (_baker is not null) return;                     // only ever called from the UI thread → no double-start
-        _baker = new Thread(BakerLoop) { IsBackground = true, Name = "CoverFlowBaker", Priority = ThreadPriority.BelowNormal };
-        _baker.Start();
+        public IntPtr Dst; public int Stride, BufW, CoverH, ReflH;
+        public SrcMips Src;
+        public float PwF, Phase, Q;
+        public bool NearRight;
+        public float CornerR, FloorR, FloorG, FloorB;
     }
 
-    /// <summary>The single background bake worker. Pops the most-recently-requested angle, warps+downscales+
-    /// reflects it (the ~10ms cost that used to hitch the paint thread), stores it, and asks for a repaint.
-    /// A generation mismatch (size/items changed since the request) discards the result so nothing stale lands.</summary>
-    private void BakerLoop()
+    /// <summary>Render one cover - a perspective-warped, rounded-cornered, framed tile at <paramref name="theta"/>
+    /// (0 = flat) with its faded mirror reflection beneath - into the top-left <paramref name="bufW"/> x
+    /// (<paramref name="coverH"/> + <paramref name="reflH"/>) pixels of <paramref name="dst"/> (premultiplied
+    /// ARGB, every pixel of that rectangle written). The tile spans [phase, phase + coverH*cos(theta)) across the
+    /// buffer, so <paramref name="phase"/> places it at a sub-pixel x. Columns run in parallel.</summary>
+    private static void WarpInto(Bitmap dst, int bufW, int coverH, int reflH, SrcMips src, float theta, bool nearRight, float phase)
     {
-        while (!_bakerStop)
+        float sinT = (float)Math.Sin(theta), dv = coverH * ViewerDist;
+        Color floor = Theme.Blend(Theme.Bg, Color.Black, 0.22);   // the backdrop's bottom colour (see OnPaint's gradient)
+        var job = new WarpJob
         {
-            BakeReq req; bool has;
-            lock (_qLock) { has = _queue.Count > 0; if (has) req = _queue.Pop(); else req = default; }
-            if (!has) { _bakeSignal.WaitOne(250); continue; }
-            if (req.Gen != _gen) { lock (_qLock) _pending.Remove(req.Key); continue; }   // stale before we even start
-            Bitmap? sprite = null;
-            try
-            {
-                float theta = (float)(MaxAngleDeg * Math.PI / 180) * req.Bucket / Buckets;
-                // Only the flat focused CENTRE cover (bucket 0) bakes at 2× supersample (it's big and crisp on screen);
-                // every angled side cover bakes at 1× — they're foreshortened, minified and edge-vignetted, so 2× was
-                // imperceptible there but ~4× the cost, which starved the worker (covers popped in) during fast scroll.
-                int ss = (req.Bucket == 0) ? 2 : 1;
-                // Side covers face outward: the OUTER edge is the near (tall) edge; it recedes toward the centre.
-                sprite = BakeSprite(req.SrcPx!, req.SrcW, req.SrcH, req.BaseH, req.BaseH, theta, req.BaseH * 1.85f, nearRight: req.Side > 0, ss);  // always set for a real (popped) req
-            }
-            catch { sprite = null; }                        // cover bitmap evicted/disposed mid-bake → skip; it'll be re-requested
-            bool kept = false;
-            if (sprite is not null)
-                lock (_spritesLock)
-                    if (req.Gen == _gen && !_sprites.ContainsKey(req.Key)) { _sprites[req.Key] = sprite; kept = true; }
-            if (sprite is not null && !kept) sprite.Dispose();
-            lock (_qLock) _pending.Remove(req.Key);
-            if (kept) RequestRepaint();
+            BufW = bufW, CoverH = coverH, ReflH = reflH, Src = src,
+            PwF = Math.Max(1f, coverH * (float)Math.Cos(theta)), Phase = phase,
+            Q = (dv - coverH / 2f * sinT) / (dv + coverH / 2f * sinT),   // far-edge height fraction
+            NearRight = nearRight, CornerR = Theme.TileFrac,
+            FloorR = floor.R, FloorG = floor.G, FloorB = floor.B,
+        };
+        var data = dst.LockBits(new Rectangle(0, 0, bufW, coverH + reflH), ImageLockMode.ReadWrite, PixelFormat.Format32bppPArgb);
+        job.Dst = data.Scan0; job.Stride = data.Stride;
+        try
+        {
+            if (bufW >= 64)
+                Parallel.ForEach(Partitioner.Create(0, bufW, Math.Max(8, bufW / 24)), r => WarpColumns(job, r.Item1, r.Item2));
+            else WarpColumns(job, 0, bufW);
         }
+        finally { dst.UnlockBits(data); }
     }
 
-    private int _repaintQueued;   // 0/1 — COALESCE the baker's repaint requests: a fast flick bakes a burst of sprites, each of
-    private Action? _repaintAction;   // which posted a fresh BeginInvoke closure → message-pump flood + GC churn on the UI thread.
-    private void RequestRepaint()
+    private static unsafe void WarpColumns(WarpJob j, int x0, int x1)
     {
-        if (!IsHandleCreated || IsDisposed) return;
-        // During a coast the tween already repaints at ~66fps, and the landing frame (the tween's done callback)
-        // shows every sprite baked so far — so the baker's per-sprite BeginInvoke here would only pile extra
-        // messages onto the UI queue, delaying the low-priority WM_TIMER that drives the coast → judder.
-        if (_coasting) return;
-        if (System.Threading.Interlocked.Exchange(ref _repaintQueued, 1) == 1) return;   // already one pending — Invalidate is whole-control, so it covers this bake too
-        try { BeginInvoke(_repaintAction ??= () => { _repaintQueued = 0; if (!IsDisposed) Invalidate(); }); }
-        catch { _repaintQueued = 0; }
-    }
-
-    /// <summary>Render a perspective-warped cover (true foreshortened trapezoid) plus a baked, fade-to-
-    /// transparent mirrored reflection beneath it, into one ARGB sprite. Worker-thread only — it reuses a
-    /// single pinned supersample buffer (<see cref="_hiBuf"/>) instead of allocating one per bake, so the
-    /// scroll no longer triggers Gen2 GC pauses from ~3MB-per-bake Large-Object-Heap churn.</summary>
-    private Bitmap BakeSprite(int[] srcPx, int iw, int ih, int coverW, int coverH, float theta, float Dv, bool nearRight, int sup)
-    {
-        int pw = Math.Max(1, (int)Math.Round(coverW * Math.Cos(theta)));
-        int reflH = (int)(coverH * 0.5f);
-        float sinT = (float)Math.Sin(theta);
-        float q = (Dv - coverW / 2f * sinT) / (Dv + coverW / 2f * sinT); // far-edge height fraction
-
-        // 1) Warp at ss× into a PREMULTIPLIED hi-res buffer (manual bilinear, per-column foreshortening +
-        //    coverage-AA on the slanted edges), then high-quality-downscale → area-averages the minified art
-        //    AND every edge, killing aliasing. Premultiplied so the downscale can't bleed a dark edge halo.
-        int pwS = Math.Max(1, pw * sup), chS = coverH * sup;
-        int hStride = pwS * 4, hNeed = hStride * chS;
-        if (_hiBuf is null || _hiBuf.Length < hNeed)            // (re)allocate + pin only when a bigger buffer is needed
+        byte* dst = (byte*)j.Dst;
+        int stride = j.Stride, coverH = j.CoverH, reflH = j.ReflH, h = j.Src.H, maxL = j.Src.Levels - 1;
+        float pwF = j.PwF, q = j.Q, rr = j.CornerR;
+        fixed (int* basePtr = j.Src.Data)
         {
-            if (_hiPin.IsAllocated) _hiPin.Free();
-            _hiBuf = new byte[hNeed];
-            _hiPin = System.Runtime.InteropServices.GCHandle.Alloc(_hiBuf, System.Runtime.InteropServices.GCHandleType.Pinned);
-        }
-        Array.Clear(_hiBuf, 0, hNeed);                          // transparent ground (warp only writes inside the trapezoid)
-        IntPtr hiPtr = _hiPin.AddrOfPinnedObject();
-        unsafe
-        {
-        fixed (int* sp = srcPx)                                  // read the cover pixels straight from the shared array (no GDI+ lock)
-        {
-            byte* hb = (byte*)hiPtr; int hs = hStride;
-            for (int ox = 0; ox < pwS; ox++)
+            for (int ox = x0; ox < x1; ox++)
             {
-                float sFrac = nearRight ? 1f - (ox + 0.5f) / pwS : (ox + 0.5f) / pwS; // 0 near edge → 1 far edge
-                float hgt = chS * ((1 - sFrac) + sFrac * q);
-                float yTopF = (chS - hgt) / 2f, yBotF = (chS + hgt) / 2f;
-                float spanF = Math.Max(1f, yBotF - yTopF);
-                float u = sFrac * q / ((1 - sFrac) + sFrac * q);     // perspective-correct source x (0 near → 1 far)
-                float fx = (nearRight ? iw * (1 - u) : iw * u) - 0.5f;
-                int x0 = (int)Math.Floor(fx); float xf = fx - x0;
-                int xa = Math.Clamp(x0, 0, iw - 1), xb = Math.Clamp(x0 + 1, 0, iw - 1);
-                int y0 = Math.Max(0, (int)Math.Floor(yTopF)), y1 = Math.Min(chS - 1, (int)Math.Ceiling(yBotF) - 1);
+                byte* col = dst + ox * 4;
+                // Horizontal coverage of this column by the tile's span [phase, phase + pwF): the two edge
+                // columns are partial (that is the anti-aliasing of the vertical edges + the sub-pixel placement).
+                float xs0 = Math.Max(ox, j.Phase), xs1 = Math.Min(ox + 1f, j.Phase + pwF);
+                float cxv = xs1 - xs0;
+                if (cxv <= 0.0005f) { for (int y = 0; y < coverH + reflH; y++) *(int*)(col + y * stride) = 0; continue; }
+                if (cxv > 1f) cxv = 1f;
+                float xs = (xs0 + xs1) * 0.5f - j.Phase;                 // sample at the covered part's centre
+                float s = j.NearRight ? 1f - xs / pwF : xs / pwF;         // 0 = near (tall) edge .. 1 = far edge
+                if (s < 0f) s = 0f; else if (s > 1f) s = 1f;
+                float den = (1f - s) + s * q;
+                float hgt = coverH * den;                                  // this column's foreshortened height
+                float yTop = (coverH - hgt) * 0.5f, yBot = yTop + hgt;
+                float u = s * q / den;                                     // perspective-correct source position (near -> far)
+                float xfrac = j.NearRight ? 1f - u : u;                    // source x, left -> right
+                float sxs = j.Src.W0 * (q / (den * den)) / pwF;            // source px per output px across (level 0)
+                float sys = h / hgt;                                       // ... and down
+                // Horizontal filtering: the mip level whose step is <= 1 px, blended with the next (trilinear
+                // across levels, so the sharpness never seams between columns).
+                float lvl = sxs > 1f ? MathF.Log2(sxs) : 0f;
+                if (lvl > maxL) lvl = maxL;
+                int l0 = (int)lvl;
+                int wl = (int)((lvl - l0) * 256f + 0.5f);
+                if (wl < 8) wl = 0; else if (wl > 248 && l0 < maxL) { l0++; wl = 0; }
+                int l1 = Math.Min(l0 + 1, maxL);
+                bool two = wl > 0 && l1 != l0;
+                int w0 = j.Src.W[l0], w1 = j.Src.W[l1];
+                int* p0 = basePtr + j.Src.Off[l0], p1 = basePtr + j.Src.Off[l1];
+                float fx0 = xfrac * w0 - 0.5f; int ix0 = (int)MathF.Floor(fx0); int wx0 = (int)((fx0 - ix0) * 256f + 0.5f);
+                int xa0 = Math.Clamp(ix0, 0, w0 - 1), xb0 = Math.Clamp(ix0 + 1, 0, w0 - 1);
+                float fx1 = xfrac * w1 - 0.5f; int ix1 = (int)MathF.Floor(fx1); int wx1 = (int)((fx1 - ix1) * 256f + 0.5f);
+                int xa1 = Math.Clamp(ix1, 0, w1 - 1), xb1 = Math.Clamp(ix1 + 1, 0, w1 - 1);
+                // Vertical filtering: a box of n bilinear taps across the output pixel when the source is minified.
+                int n = sys <= 1.25f ? 1 : Math.Min(4, (int)MathF.Ceiling(sys - 0.25f));
+                // Rounded corners: the arc's signed distance in the source's unit square, scaled per axis into
+                // output pixels so the anti-aliasing ramp is one screen pixel wide whatever the foreshortening.
+                float du = Math.Min(xfrac, 1f - xfrac);
+                bool xCorner = du < rr;
+                float gx = sxs / j.Src.W0, gy = 1f / hgt;                  // unit-square distance per output px, across / down
+                float dxEdge = Math.Min(xs, pwF - xs);                     // px to the nearer vertical edge (the inner frame)
+
+                int y0 = Math.Max(0, (int)yTop), y1 = Math.Min(coverH - 1, (int)MathF.Ceiling(yBot) - 1);
+                for (int y = 0; y < y0; y++) *(int*)(col + y * stride) = 0;
+                for (int y = y1 + 1; y < coverH; y++) *(int*)(col + y * stride) = 0;
                 for (int oy = y0; oy <= y1; oy++)
                 {
-                    float cov = Math.Min(oy + 1f, yBotF) - Math.Max((float)oy, yTopF); // edge coverage 0..1
-                    if (cov <= 0f) continue;
-                    if (cov > 1f) cov = 1f;
-                    float fy = (oy + 0.5f - yTopF) / spanF * ih - 0.5f;
-                    int r0 = (int)Math.Floor(fy); float yf = fy - r0;
-                    int ra = Math.Clamp(r0, 0, ih - 1) * iw, rb = Math.Clamp(r0 + 1, 0, ih - 1) * iw;
-                    int px = Bilerp(sp[ra + xa], sp[ra + xb], sp[rb + xa], sp[rb + xb], xf, yf);
-                    int a = (int)(((px >> 24) & 0xFF) * cov);        // final alpha (× edge coverage)
-                    // store premultiplied (R*a/255 …) so the downscale interpolates transparency correctly
-                    int rr = (((px >> 16) & 0xFF) * a + 127) / 255, gg = (((px >> 8) & 0xFF) * a + 127) / 255, bb = ((px & 0xFF) * a + 127) / 255;
-                    *(int*)(hb + oy * hs + ox * 4) = (a << 24) | (rr << 16) | (gg << 8) | bb;
+                    int* op = (int*)(col + oy * stride);
+                    float covY = Math.Min(oy + 1f, yBot) - Math.Max((float)oy, yTop);   // vertical coverage (the slanted edges)
+                    if (covY <= 0.0005f) { *op = 0; continue; }
+                    if (covY > 1f) covY = 1f;
+                    float cov = covY * cxv;
+                    float yc = Math.Clamp(oy + 0.5f, yTop, yBot);
+                    float vc = (yc - yTop) / hgt;                                     // pixel-centre v, clamped into the tile
+                    float edge = Math.Min(dxEdge, Math.Min(yc - yTop, yBot - yc));   // px to the nearest straight edge
+                    if (xCorner)
+                    {
+                        float dvv = Math.Min(vc, 1f - vc);
+                        if (dvv < rr)
+                        {
+                            float ex = rr - du, ey = rr - dvv;
+                            float dd = MathF.Sqrt(ex * ex + ey * ey);
+                            float dist = dd - rr;                                          // > 0: outside the arc
+                            float inv = dd > 1e-6f ? 1f / dd : 0f;
+                            float nx = ex * inv * gx, ny = ey * inv * gy;
+                            float gm = MathF.Sqrt(nx * nx + ny * ny);                      // |d dist / d px|
+                            float px = gm > 1e-9f ? dist / gm : (dist > 0f ? 1e9f : -1e9f);  // signed distance in output px
+                            float cc = 0.5f - px;
+                            if (cc <= 0f) { *op = 0; continue; }
+                            if (cc < 1f) cov *= cc;
+                            if (-px < edge) edge = -px;
+                        }
+                    }
+                    int A = 0, R = 0, G = 0, B = 0;
+                    for (int k = 0; k < n; k++)
+                    {
+                        float v = (Math.Clamp(oy + (k + 0.5f) / n, yTop, yBot) - yTop) / hgt;
+                        float fy = v * h - 0.5f; int iy = (int)MathF.Floor(fy); int wy = (int)((fy - iy) * 256f + 0.5f);
+                        int ya = Math.Clamp(iy, 0, h - 1) , yb = Math.Clamp(iy + 1, 0, h - 1);
+                        int c = Bilerp(p0, w0, xa0, xb0, wx0, ya, yb, wy);
+                        if (two) c = Mix(c, Bilerp(p1, w1, xa1, xb1, wx1, ya, yb, wy), wl);
+                        A += (c >> 24) & 0xFF; R += (c >> 16) & 0xFF; G += (c >> 8) & 0xFF; B += c & 0xFF;
+                    }
+                    if (n > 1) { int half = n >> 1; A = (A + half) / n; R = (R + half) / n; G = (G + half) / n; B = (B + half) / n; }
+                    // the faint inner frame: a ~1.5 px lightening just inside every edge
+                    float fr = 1.6f - edge;
+                    if (fr > 0f)
+                    {
+                        if (fr > 1f) fr = 1f;
+                        float t = FrameAlpha * fr;
+                        R += (int)((255 - R) * t); G += (int)((255 - G) * t); B += (int)((255 - B) * t);
+                    }
+                    int a = (int)(A * cov + 0.5f);
+                    if (a <= 0) { *op = 0; continue; }
+                    *op = (a << 24) | (((R * a + 127) / 255) << 16) | (((G * a + 127) / 255) << 8) | ((B * a + 127) / 255);   // premultiplied
                 }
-            }
-        }
-        }
-
-        // 2) High-quality-downscale the supersample buffer straight into the sprite — the cover at the top and a
-        //    vertically-mirrored copy in the reflection band below — wrapping the pooled buffer in a thin Bitmap
-        //    header (no pixel copy). Skips the old intermediate `cover` bitmap entirely (one less LOH alloc/bake).
-        var sprite = new Bitmap(pw, coverH + reflH, PixelFormat.Format32bppPArgb); // premultiplied → fastest to blit
-        using (var hi = new Bitmap(pwS, chS, hStride, PixelFormat.Format32bppPArgb, hiPtr))
-        using (var g = Graphics.FromImage(sprite))
-        {
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear; // 2×→1× ≈ box average, no ringing
-            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.CompositingQuality = CompositingQuality.HighQuality;
-            g.DrawImage(hi, new Rectangle(0, 0, pw, coverH), 0, 0, pwS, chS, GraphicsUnit.Pixel);   // cover
-            // Mirror the cover straight below it; only the top reflH shows.
-            var flip = new[] { new PointF(0, coverH * 2), new PointF(pw, coverH * 2), new PointF(0, coverH) };
-            g.SetClip(new RectangleF(0, coverH, pw, reflH));
-            g.DrawImage(hi, flip, new RectangleF(0, 0, pwS, chS), GraphicsUnit.Pixel);              // reflection
-            g.ResetClip();
-        }
-        // Fade the reflection by colour toward the floor (NOT by alpha) so reflections OCCLUDE each other where
-        // they overlap — exactly like the covers above — instead of blending see-through.
-        FadeReflection(sprite, coverH, reflH);
-        return sprite;
-    }
-
-    /// <summary>Fade the reflection by COLOUR toward the floor colour (≈ the backdrop) while KEEPING each
-    /// pixel's coverage as its alpha — so a front cover's reflection occludes the one behind it (like the covers
-    /// above) instead of blending see-through. Over the bare backdrop it looks the same as the old alpha fade
-    /// (colour lerps 0.66→1.0 to the floor, matching a 0.34→0 alpha mirror over that floor); only the OVERLAP
-    /// changes. Premultiplied ARGB: un-premultiply, lerp the colour, keep alpha, re-premultiply.</summary>
-    private static void FadeReflection(Bitmap sprite, int coverH, int reflH)
-    {
-        const float floorB = 22f, floorG = 27f, floorR = 16f;   // ≈ Blend(Theme.Bg, Black, 0.22) in B,G,R byte order
-        var rect = new Rectangle(0, coverH, sprite.Width, reflH);
-        var data = sprite.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppPArgb);
-        unsafe
-        {
-            byte* b0 = (byte*)data.Scan0; int stride = data.Stride, w = sprite.Width;
-            for (int y = 0; y < reflH; y++)
-            {
-                float t = 0.66f + 0.34f * ((y + 0.5f) / reflH);   // blend-to-floor: 0.66 at the top → 1.0 at the bottom
-                if (t > 1f) t = 1f;
-                float keep = 1f - t;
-                byte* row = b0 + y * stride;
-                for (int x = 0; x < w; x++)
+                // The reflection: the tile's bottom rows mirrored, faded by COLOUR toward the floor while keeping each
+                // pixel's coverage as its alpha - so a front cover's reflection occludes the one behind it (like the
+                // covers above) instead of blending see-through.
+                for (int ry = 0; ry < reflH; ry++)
                 {
-                    byte* p = row + x * 4;
-                    int a = p[3];
-                    if (a == 0) continue;                         // transparent corner → leave it (no occlusion there)
-                    float inv = 255f / a;                          // un-premultiply to the mirror's true colour
-                    float B = p[0] * inv * keep + floorB * t;
-                    float G = p[1] * inv * keep + floorG * t;
-                    float R = p[2] * inv * keep + floorR * t;
-                    float am = a / 255f;                           // re-premultiply; alpha (coverage) unchanged → still occludes
-                    p[0] = (byte)(B * am); p[1] = (byte)(G * am); p[2] = (byte)(R * am);
+                    int c = *(int*)(col + (coverH - 1 - ry) * stride);
+                    int a = (c >> 24) & 0xFF;
+                    int* rp = (int*)(col + (coverH + ry) * stride);
+                    if (a == 0) { *rp = 0; continue; }
+                    float t = 0.66f + 0.34f * ((ry + 0.5f) / reflH);   // 0.66 at the top -> 1.0 (all floor) at the bottom
+                    if (t > 1f) t = 1f;
+                    float keep = 1f - t, fa = a * t / 255f;
+                    int pr = (int)(((c >> 16) & 0xFF) * keep + j.FloorR * fa + 0.5f);
+                    int pg = (int)(((c >> 8) & 0xFF) * keep + j.FloorG * fa + 0.5f);
+                    int pb = (int)((c & 0xFF) * keep + j.FloorB * fa + 0.5f);
+                    *rp = (a << 24) | (pr << 16) | (pg << 8) | pb;
                 }
             }
         }
-        sprite.UnlockBits(data);
     }
 
-    /// <summary>Bilinear blend of four ARGB pixels (tl, tr, bl, br) by horizontal/vertical fractions.</summary>
-    private static int Bilerp(int tl, int tr, int bl, int br, float xf, float yf)
+    /// <summary>Bilinear sample of one mip level: four taps with 8-bit fixed-point weights (0..256), integer maths.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe int Bilerp(int* p, int w, int xa, int xb, int wx, int ya, int yb, int wy)
     {
-        int o = 0;
+        int ra = ya * w, rb = yb * w;
+        int tl = p[ra + xa], tr = p[ra + xb], bl = p[rb + xa], br = p[rb + xb];
+        int ix = 256 - wx, iy = 256 - wy, o = 0;
         for (int sh = 0; sh < 32; sh += 8)
         {
-            float top = ((tl >> sh) & 0xFF) * (1 - xf) + ((tr >> sh) & 0xFF) * xf;
-            float bot = ((bl >> sh) & 0xFF) * (1 - xf) + ((br >> sh) & 0xFF) * xf;
-            int v = (int)(top * (1 - yf) + bot * yf + 0.5f);
+            int top = ((tl >> sh) & 0xFF) * ix + ((tr >> sh) & 0xFF) * wx;   // 0..65280
+            int bot = ((bl >> sh) & 0xFF) * ix + ((br >> sh) & 0xFF) * wx;
+            int v = (top * iy + bot * wy + (1 << 15)) >> 16;
             o |= (v & 0xFF) << sh;
         }
         return o;
     }
 
-    private void EvictIndex(int index)
+    /// <summary>Blend two ARGB pixels: weight 0..256 toward the second.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int Mix(int c0, int c1, int w)
     {
-        foreach (var k in _srcPx.Keys.Where(k => (int)(k >> 2) == index).ToList()) _srcPx.Remove(k);  // drop the old cover's pixels
-        _coverVer[index] = Ver(index) + 1;   // bump version so any in-flight stale-cover bake lands on a dead key (never returned)
-        lock (_spritesLock)
+        int iw = 256 - w, o = 0;
+        for (int sh = 0; sh < 32; sh += 8)
         {
-            var dead = _sprites.Keys.Where(k => (int)(k >> 12) == index).ToList();
-            foreach (var k in dead) { _sprites[k].Dispose(); _sprites.Remove(k); }
+            int v = (((c0 >> sh) & 0xFF) * iw + ((c1 >> sh) & 0xFF) * w + 128) >> 8;
+            o |= (v & 0xFF) << sh;
         }
-        lock (_qLock) { _pending.RemoveWhere(k => (int)(k >> 12) == index); }
+        return o;
     }
 
     private void DrawCentreText(Graphics g, float centreY, int coverH)
@@ -841,25 +965,15 @@ internal sealed class CoverFlowView : Control
         g.DrawLine(_closePen, cx + r, cy - r, cx - r, cy + r);
     }
 
-    private void ClearCaches()
-    {
-        lock (_qLock) { _queue.Clear(); _pending.Clear(); }          // abandon queued bakes
-        lock (_spritesLock)
-        {
-            _gen++;                                                  // any bake still in flight will be discarded on completion
-            foreach (var b in _sprites.Values) b.Dispose();
-            _sprites.Clear();
-        }
-        _srcPx.Clear();
-    }
+    /// <summary>Let go of everything cached (the resting sprites and the extracted cover pixels) once the browser is
+    /// hidden: reopening repopulates through <see cref="SetItems"/>, which starts from empty anyway.</summary>
+    public void Release() => ClearCaches();
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
-            _bakerStop = true; _bakeSignal.Set(); _baker?.Join(500); _bakeSignal.Dispose();
-            if (_hiPin.IsAllocated) _hiPin.Free();              // safe: worker has stopped, so no bake is mid-flight
-            _tw?.Cancel(); _introTween?.Cancel(); ClearCaches(); _bg?.Dispose(); _vignette?.Dispose();
+            _tw?.Cancel(); _introTween?.Cancel(); ClearCaches(); _bg?.Dispose(); _vignette?.Dispose(); _live?.Dispose();
             _fCentreTitle.Dispose(); _fCentreSub.Dispose(); _fMode.Dispose(); _fNpChip.Dispose(); _closePen.Dispose();
         }
         base.Dispose(disposing);

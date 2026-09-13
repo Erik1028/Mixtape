@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:l="using:Mixtape.App"
         x:Class="Mixtape.App.Views.SettingsWindow"
-        Title="Settings" Width="460" Height="368"
+        Title="Settings" Width="460" Height="516"
         Background="{StaticResource AppBrush}" Foreground="{StaticResource TextBrush}"
         FontFamily="Inter" CanResize="False" WindowStartupLocation="CenterOwner">
   <StackPanel Margin="26" Spacing="14">
@@ -15,6 +15,12 @@
     <StackPanel x:Name="LanguagePanel" Orientation="Horizontal" Spacing="8"/>
     <TextBlock x:Name="RestartNote" Text="{l:Loc 'Restart Mixtape to change the language.'}" FontSize="11"
                Foreground="{StaticResource AccentBrush}" IsVisible="False"/>
+    <TextBlock Text="{l:Loc 'DISCORD'}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource SubtleBrush}" Margin="0,8,0,0"/>
+    <CheckBox x:Name="DiscordToggle" Content="{l:Loc 'Show on Discord'}" IsCheckedChanged="OnDiscordToggled"/>
+    <TextBox x:Name="DiscordAppId" Watermark="{l:Loc 'Application ID'}" LostFocus="OnDiscordIdChanged" FontSize="12"/>
+    <CheckBox x:Name="DiscordCovers" Content="{l:Loc 'Album cover'}" IsCheckedChanged="OnDiscordToggled"/>
+    <TextBlock Text="{l:Loc 'Create a free app at discord.com/developers and paste its Application ID. Shows the song, the artist and how far along it is.'}"
+               FontSize="11" Foreground="{StaticResource SubtleBrush}" TextWrapping="Wrap"/>
     <Button Content="{l:Loc 'Done'}" Click="OnDone" HorizontalAlignment="Right" Margin="0,6,0,0"/>
   </StackPanel>
 </Window>

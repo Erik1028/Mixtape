@@ -29,6 +29,13 @@ internal sealed class UpNextPanel : Control
 
     private const int HeaderH = 44, NowH = 54, RowH = 46, Pad = 14, Art = 34, ThumbW = 6;
 
+    /// <summary>Docked in the side card (not a popover): the card's own surface, the tab strip names the panel so
+    /// the header row carries only the sum + Clear, and there is no × of its own.</summary>
+    public bool Docked { get => _docked; set { _docked = value; BackColor = Surface; Invalidate(); } }
+    private bool _docked;
+    private Color Surface => _docked ? Theme.Bg : Theme.PanelBg;
+    private int HeadH => _docked && _items.Count == 0 ? 0 : HeaderH;   // docked + empty: no header row (the tab strip is right above)
+
     // Cached fonts — the panel repaints on hover/scroll/drag and the item title/artist fonts were allocated PER ROW.
     private readonly Font _fHeader = Theme.DisplayFont(12.5f, FontStyle.Bold);
     private readonly Font _fCount = Theme.UiFont(9f, FontStyle.Bold);
@@ -44,7 +51,7 @@ internal sealed class UpNextPanel : Control
     {
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        BackColor = Theme.PanelBg;
+        BackColor = Surface;
     }
 
     public void SetData(Track? now, Bitmap? nowArt, IReadOnlyList<(Track t, Bitmap? art)> items, string? hint)
@@ -61,13 +68,13 @@ internal sealed class UpNextPanel : Control
         => HeaderH + (hasNow ? NowH : 0) + itemCount * RowH + 8 + (hasHint ? 26 : 0);
 
     // ---- geometry ----
-    private int ListTop => HeaderH + (_now is not null ? NowH : 0);
+    private int ListTop => HeadH + (_now is not null ? NowH : 0);
     private int ListViewH => Math.Max(0, Height - ListTop);
     private int ContentH => _items.Count * RowH + 6;
     private int MaxScroll => Math.Max(0, ContentH - ListViewH);
     private void ClampScroll() => _scrollY = Math.Clamp(_scrollY, 0, MaxScroll);
-    private Rectangle CloseRect => new(Width - Pad - 22, (HeaderH - 22) / 2, 22, 22);
-    private Rectangle ClearRect => new(CloseRect.Left - 8 - 50, (HeaderH - 22) / 2, 50, 22);
+    private Rectangle CloseRect => _docked ? Rectangle.Empty : new(Width - Pad - 22, (HeadH - 22) / 2, 22, 22);
+    private Rectangle ClearRect => new(_docked ? Width - Pad - 50 : Width - Pad - 22 - 8 - 50, (HeadH - 22) / 2, 50, 22);
     private int RowTop(int i) => ListTop - _scrollY + i * RowH;
     private int RowAt(int y)
     {
@@ -88,18 +95,32 @@ internal sealed class UpNextPanel : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Theme.PanelBg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Surface);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         // header
-        TextRenderer.DrawText(g, Loc.T("Up Next"), _fHeader, new Rectangle(Pad, 0, Width - 2 * Pad - 80, HeaderH),
-            Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-        if (_items.Count > 0)
+        if (_docked && HeadH == 0) { }   // docked + nothing queued: the tab strip is the header
+        else if (_docked)
         {
-            var ts = TextRenderer.MeasureText(g, Loc.T("Up Next"), _fHeader);
-            TextRenderer.DrawText(g, _items.Count.ToString(), _fCount, new Rectangle(Pad + ts.Width + 7, 0, 40, HeaderH),
-                Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            // the tab strip above already says "Up Next": this row is the sum ("8 songs · 31 min") + Clear
+            if (_items.Count > 0)
+            {
+                long ms = 0; foreach (var it in _items) ms += it.t.LengthMs;
+                TextRenderer.DrawText(g, SumLine(_items.Count, ms), _fClear, new Rectangle(Pad, 0, Width - 2 * Pad - 60, HeadH),
+                    Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            }
+        }
+        else
+        {
+            TextRenderer.DrawText(g, Loc.T("Up Next"), _fHeader, new Rectangle(Pad, 0, Width - 2 * Pad - 80, HeadH),
+                Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            if (_items.Count > 0)
+            {
+                var ts = TextRenderer.MeasureText(g, Loc.T("Up Next"), _fHeader);
+                TextRenderer.DrawText(g, _items.Count.ToString(), _fCount, new Rectangle(Pad + ts.Width + 7, 0, 40, HeadH),
+                    Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            }
         }
         if (_items.Count > 0)
         {
@@ -107,24 +128,24 @@ internal sealed class UpNextPanel : Control
             TextRenderer.DrawText(g, Loc.T("Clear"), _fClear, ClearRect, _hoverClear ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
-        DrawX(g, CloseRect, _hoverClose);
-        using (var pen = new Pen(Theme.HairLine)) g.DrawLine(pen, Pad, HeaderH - 1, Width - Pad, HeaderH - 1);
+        if (!_docked) DrawX(g, CloseRect, _hoverClose);
+        if (HeadH > 0) using (var pen = new Pen(Theme.HairLine)) g.DrawLine(pen, Pad, HeadH - 1, Width - Pad, HeadH - 1);
 
         // now-playing row (pinned)
         if (_now is not null)
         {
-            var nr = new Rectangle(0, HeaderH, Width, NowH);
-            using (var tint = new SolidBrush(Theme.Blend(Theme.PanelBg, Theme.Accent, 0.10))) g.FillRectangle(tint, nr);
-            int cy = HeaderH + (NowH - Art) / 2;
+            var nr = new Rectangle(0, HeadH, Width, NowH);
+            using (var tint = new SolidBrush(Theme.Blend(Surface, Theme.Accent, 0.10))) g.FillRectangle(tint, nr);
+            int cy = HeadH + (NowH - Art) / 2;
             DrawArt(g, _nowArt, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad;
-            TextRenderer.DrawText(g, Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeaderH + 8, tw, 12), Theme.Accent,
+            TextRenderer.DrawText(g, Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeadH + 8, tw, 12), Theme.Accent,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, _now.DisplayTitle, _fNowTitle, new Rectangle(tx, HeaderH + 20, tw, 18), Theme.TextCol,
+            TextRenderer.DrawText(g, _now.DisplayTitle, _fNowTitle, new Rectangle(tx, HeadH + 20, tw, 18), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, _now.Artist ?? "", _fArtist, new Rectangle(tx, HeaderH + 37, tw, 15), Theme.Subtle,
+            TextRenderer.DrawText(g, _now.Artist ?? "", _fArtist, new Rectangle(tx, HeadH + 37, tw, 15), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, Pad, HeaderH + NowH - 1, Width - Pad, HeaderH + NowH - 1);
+            using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, Pad, HeadH + NowH - 1, Width - Pad, HeadH + NowH - 1);
         }
 
         // upcoming list (clipped)
@@ -166,7 +187,7 @@ internal sealed class UpNextPanel : Control
         if (MaxScroll > 0)
         {
             var (ty, th) = Thumb();
-            using var b = new SolidBrush(Theme.Blend(Theme.PanelBg, Theme.TextCol, _thumbDrag ? 0.40 : 0.22));
+            using var b = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, _thumbDrag ? 0.40 : 0.22));
             using var p = Theme.RoundedRect(new RectangleF(Width - ThumbW - 3, ty, ThumbW, th), ThumbW / 2f);
             g.FillPath(b, p);
         }
@@ -180,12 +201,21 @@ internal sealed class UpNextPanel : Control
         }
     }
 
-    private static void DrawArt(Graphics g, Bitmap? art, Rectangle r)
+    /// <summary>"8 songs  ·  31 min" — the docked header's sum.</summary>
+    private static string SumLine(int n, long ms)
+    {
+        string songs = Loc.Lang != "en" ? Loc.T("{0} songs", n) : n == 1 ? "1 song" : $"{n} songs";
+        var span = TimeSpan.FromMilliseconds(ms);
+        string dur = span.TotalHours >= 1 ? Loc.T("{0} hr {1} min", (int)span.TotalHours, span.Minutes) : Loc.T("{0} min", Math.Max(1, span.Minutes));
+        return $"{songs}  ·  {dur}";
+    }
+
+    private void DrawArt(Graphics g, Bitmap? art, Rectangle r)
     {
         using var clip = Theme.RoundedRect(new RectangleF(r.X, r.Y, r.Width, r.Height), Math.Max(3, r.Width * Theme.TileFrac));
         using var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
         if (art is not null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(art, r); }
-        else using (var ph = new LinearGradientBrush(r, Theme.Blend(Theme.PanelBg, Color.White, 0.07), Theme.Blend(Theme.PanelBg, Color.Black, 0.18), 60f)) g.FillRectangle(ph, r);
+        else using (var ph = new LinearGradientBrush(r, Theme.Blend(Surface, Color.White, 0.07), Theme.Blend(Surface, Color.Black, 0.18), 60f)) g.FillRectangle(ph, r);
         g.Clip = saved;
     }
 

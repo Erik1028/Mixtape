@@ -30,7 +30,17 @@ internal static class MusicCopier
             catch (IOException) { continue; } // name already taken — draw another
             // If the copy fails (disk full, source vanished, USB drop), delete the 0-byte/partial file we just
             // claimed so it doesn't linger on the device as an orphan, then rethrow for the caller to report.
-            try { File.Copy(sourcePath, dest, overwrite: true); }
+            try
+            {
+                File.Copy(sourcePath, dest, overwrite: true);
+                // VERIFY the copy landed whole. A USB drop or a full/flaky FAT volume can leave a short
+                // file behind while File.Copy still returns: the DB row would then be written for audio
+                // that plays as silence or noise, and every later check (which only tests existence)
+                // would call it healthy. Compare sizes and treat a short write as a failed copy.
+                long want = new FileInfo(sourcePath).Length, got = new FileInfo(dest).Length;
+                if (got != want)
+                    throw new IOException($"The copy came out {got:N0} bytes instead of {want:N0} — the iPod may be full or the connection dropped.");
+            }
             catch { try { File.Delete(dest); } catch { } throw; }
             // ":iPod_Control:Music:F03:ipcm012345.mp3" — well under the ~112-byte device limit.
             return ($":iPod_Control:Music:{bucket}:{name}", dest);

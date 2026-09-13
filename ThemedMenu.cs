@@ -53,7 +53,7 @@ internal static class MenuStyle
     public static Color Hover => Theme.Blend(Surface, Theme.Accent, 0.20);
     public static Color SeparatorCol => Theme.Blend(Surface, Color.White, 0.09);
 
-    public static Font Font() => Theme.UiFont(9.75f);
+    public static Font Font() => Theme.UiFont(Theme.SzBody);
 
     /// <summary>Apply the surface look + shared renderer to a dropdown (top menu or any submenu).</summary>
     public static void Apply(ToolStripDropDownMenu d)
@@ -96,6 +96,18 @@ internal static class MenuStyle
         bool rightSide = (dr.Left + dr.Right) / 2 >= (pr.Left + pr.Right) / 2;
         int targetX = rightSide ? pr.Right - 1 : pr.Left - w + 1; // 1px overlap hides the seam
         if (dr.Left != targetX) SetWindowPos(d.Handle, IntPtr.Zero, targetX, dr.Top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Make room left of every item (and every submenu item) for a tick: call AFTER the items are
+    /// added. A <see cref="ToolStripMenuItem.Checked"/> item then gets an accent tick in that room (drawn by
+    /// the renderer); unchecked ones keep the indent, so the labels line up.</summary>
+    public static void Checkable(ToolStripDropDown d)
+    {
+        // The dropdown's own check column: WinForms lays the labels out past it and asks the renderer to draw
+        // each checked item's mark there (item Padding is ignored by the menu layout, so it cannot do this).
+        if (d is ToolStripDropDownMenu menu) menu.ShowCheckMargin = true;
+        foreach (ToolStripItem it in d.Items)
+            if (it is ToolStripMenuItem { HasDropDownItems: true } mi) Checkable(mi.DropDown);
     }
 
     /// <summary>Give an item a taller row + left text inset, and recursively style its submenu (if any).</summary>
@@ -284,6 +296,19 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     }
 
     protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { /* no gutter */ }
+
+    /// <summary>A checked item (menus made <see cref="MenuStyle.Checkable"/>): an accent tick in the check column,
+    /// no box, no highlight behind it.</summary>
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+    {
+        if (e.Item is not ToolStripMenuItem { Checked: true }) return;
+        var g = e.Graphics; var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var pen = new Pen(Theme.Accent, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        var r = e.ImageRectangle;
+        float cx = r.X + r.Width / 2f + 1, cy = e.Item.Height / 2f;
+        g.DrawLines(pen, new[] { new PointF(cx - 4.5f, cy), new PointF(cx - 1.5f, cy + 3), new PointF(cx + 5, cy - 4) });
+        g.SmoothingMode = sm;
+    }
 
     private static float Radius() => MenuStyle.Radius;
 }

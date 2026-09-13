@@ -50,6 +50,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private bool _sortAsc = true;
     private static readonly string[] ColBase = { "", "SONG", "ARTIST", "ALBUM", "RATING", "PLAYS", "ADDED", "TIME" };
     private string _emptyMsg = ""; // shown centred when the song list has no rows
+    private EmptyStateView? _emptyView;   // the content card with nothing connected (LAB concept)
     private string _baseStatus = ""; // the view's normal status line (restored when a multi-selection clears)
     private bool _baseStatusClickable; // true when _baseStatus is the clickable warning line
     private bool _populatingGrid;    // suppress selection-status churn while rows are being added
@@ -85,6 +86,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private Panel _gridHost = null!;          // the song-list host (a Dock=Fill centre sibling); set in BuildLayout
     private Func<Track, bool>? _browseFilter; // when set, the song grid is drilled into one album/artist
     private CoverFlowView? _coverFlow;        // immersive album browser overlay (lazily created)
+    private LyricsStage? _lyricsStage;        // full-window lyrics (cover + words on the album's colours)
     private UpNextFlyout? _upNext;            // "Up Next" queue popover (floating, rounded; open while non-null)
     private int _upNextClosedTick;            // when it last closed — so clicking the queue button to dismiss doesn't instantly reopen
     private CoverFlowView.BrowseMode _cfMode = CoverFlowView.BrowseMode.Albums; // Cover Flow: songs / albums / artists
@@ -107,7 +109,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private readonly System.Windows.Forms.Timer _dropHideTimer = new() { Interval = 130 }; // debounce hiding it between controls
     private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 140 }; // collapse a burst of keystrokes into one grid rebuild
     // A whisper-faint row divider, reused across every row + paint (was allocated per row, per repaint, during scroll).
-    private readonly Pen _rowDividerPen = new(Theme.Blend(Theme.Bg, Color.White, 0.03));
+    private Pen? _rowDividerPen; private int _rowDividerRev = -1;   // the row hairline, rebuilt whenever the palette changes (see DividerPen)
     // Inline click-to-rate in the RATING column (col 4): owner-drawn stars with a ghost hover preview.
     private const int RatingCol = 4, RatingPadX = 8, RatingStarW = 16;
     private const int AddedCol = 6;   // the ADDED (date) column — recent dates get an accent tint (see OnAddedCellFormatting)
@@ -118,6 +120,11 @@ internal sealed class MainForm : Form, IMessageFilter
     private bool _songDragArmed;
     private Point _songDragStart;
     private int _songDragRow = -1;
+
+    /// <summary>Harness (MIX_LIVE): show the window without activating it, so a capture run never steals the
+    /// keyboard focus from whatever the user is doing.</summary>
+    internal bool NoActivate;
+    protected override bool ShowWithoutActivation => NoActivate || base.ShowWithoutActivation;
 
     public MainForm(bool autoDetect = true)
     {
@@ -208,13 +215,30 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private const int Gap = 14;        // wallpaper gap around + between the floating cards
     private const int CardRadius = Theme.RadShell; // rounded card corners
-    private const int CaptionH = 36;   // the custom title-bar strip height
+    private int CaptionH => _deck ? NowPlayingBar.TopH : 36;   // the custom title-bar strip height (the whole deck, in deck mode)
+    private bool _deck;                 // LAB: the player is the window's top deck (AppSettings.BarOnTop / MIX_DECK)
+    private CardFoot? _foot;            // deck mode: the content card's bottom strip
     private const int ResizeBorder = 6;
+    private readonly ThemedButton _gearBtn = new() { Icon = ThemedButton.Ico.Settings, Ghost = true, Width = 34, Height = 26 };
+    private readonly ToolTip _tips = new();
     private readonly WindowButton _btnMini = new() { Which = WindowButton.Kind.MiniPlayer };
     private readonly WindowButton _btnMin = new() { Which = WindowButton.Kind.Minimize };
     private readonly WindowButton _btnMax = new() { Which = WindowButton.Kind.Maximize };
     private readonly WindowButton _btnClose = new() { Which = WindowButton.Kind.Close };
     private MiniPlayerForm? _mini;            // iTunes-style detached mini player (lazily created)
+    private SelectionBar? _selBar;            // the action bar at the foot of the song list while several rows are selected
+    private int _selReserve;                  // px the list gives up at the bottom while that bar is up
+    private Action? _layoutGridHost;          // re-runs the song-list layout (the reserve changes its height)
+    private HomeView _homeView = null!;                  // the home page (built in BuildLayout)
+    private Dictionary<string, Track>? _homeReps;        // representative track per home tile, so a cover that arrives later finds its tile
+    private int _homeArtGen;
+    private bool _landOnHome = true;                     // the first library to load opens on the home page; a navigation after that is the user's choice
+    private SidePanel? _side;                            // the Up Next · History · Lyrics card beside the content (wide windows)
+    private bool _sideOpen;
+    private const int SideMinWindowW = 1120;             // narrower than this the side card would squeeze the list → the popovers stay
+    private bool SideFits => _root is not null && _root.ClientSize.Width >= SideMinWindowW;
+    private readonly List<(Track Track, DateTime At)> _played = new();   // what played this session, oldest first (the History tab)
+    private int _resumeTicks;
     private Track? _miniTrack;                // last track pushed to the mini (avoids re-cloning cover each tick)
 
     private void BuildLayout()
@@ -224,23 +248,38 @@ internal sealed class MainForm : Form, IMessageFilter
         // LayoutShell() positions the cards + window buttons so the wallpaper shows through the gaps.
         // No empty title strip any more — the cards float right up under a thin draggable wallpaper gap, and the
         // window buttons live in the header's top-right. CaptionHeight = that top gap (still native-draggable).
-        var root = _root = new WallpaperPanel { Dock = DockStyle.Fill, CaptionHeight = Gap, ResizeBorder = ResizeBorder };
+        // ONE caption strip on the wallpaper: the wordmark and the window buttons live here, above BOTH
+        // cards, so the sidebar and the content card can start at the same y and share a baseline.
+        _deck = Environment.GetEnvironmentVariable("MIX_DECK") is { } deckEnv ? deckEnv != "0" : _settings.BarOnTop;
+        var root = _root = new WallpaperPanel { Dock = DockStyle.Fill, CaptionHeight = _deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH, ShowWordmark = !_deck, ResizeBorder = ResizeBorder };
+        root.Logo = CoverArt.AppLogo();   // the app icon with its tile re-hued to the accent (refreshed by RestyleEverything on a theme/accent change)
 
         var content = _content = new TableLayoutPanel { Dock = DockStyle.None, ColumnCount = 1, RowCount = 3, BackColor = Theme.Bg, Margin = new Padding(0) };
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 142));   // content header — now also hosts the window buttons (top-right), so it's a touch taller
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.BarH));   // the working bar: a 40 px row + its actions
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, NowPlayingBar.H));   // now-playing bar — always the bottom row (idle state when nothing plays)
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, _deck ? CardFoot.H : NowPlayingBar.H));   // now-playing bar — always the bottom row (idle state when nothing plays); in deck mode just the card's foot
 
         SetupTrackGrid();
         ApplyColumns();
         // No BOTTOM padding: the song list flows straight into the now-playing bar with no empty strip between them
         // (the bar's top is Theme.Bg so it stays seamless, and the frosted-glass slice can continue the list with no gap).
-        var gridHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(22, 10, 8, 0) };
+        // 14 + the cell's own 8 = the 22 px frame every page keeps to the card edge.
+        var gridHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(14, 10, 8, 0) };
         _gridHost = gridHost;
-        // The search box now lives in the header (top-right, left of the action-button stack).
+        _selBar = new SelectionBar();
+        _selBar.PlayNext += () => _queue.PlayNext(SelectedTracks());
+        _selBar.AddToQueue += () => _queue.Add(SelectedTracks());
+        _selBar.AddToPlaylist += ShowAddToPlaylistMenu;
+        _selBar.Delete += DeleteSelectionFromBar;
+        _selBar.Clear += () => _tracks.ClearSelection();
+        gridHost.Controls.Add(_selBar);
+        gridHost.Resize += (_, _) => PlaceSelectionBar();
+        gridHost.VisibleChanged += (_, _) => UpdateSelectionBar();
+        // ONE search for the whole app, pinned to the top of the nav rail. It used to sit in the content
+        // header and vanish on Photos and Device — the same control meaning something different per page.
         _search.Dock = DockStyle.None;
-        _header.Search = _search;
-        _header.Controls.Add(_search);
+        _sidebar.Search = _search;
+        _sidebar.Controls.Add(_search);
 
         // Photo-grid size slider (shown only on the Photos view, above the Add/Delete buttons).
         _photoView.TileSize = Math.Clamp(_settings.PhotoTileSize, 96, 240);
@@ -263,13 +302,20 @@ internal sealed class MainForm : Form, IMessageFilter
             _searchDebounce.Stop();
             if (_navigating) return;
             if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();   // filter the cached list — don't re-scan disk
-            else if (_viewKind != SidebarRowKind.Photos && _viewKind != SidebarRowKind.Device) ShowCurrent();
+            else if (_viewKind is SidebarRowKind.Photos or SidebarRowKind.Device or SidebarRowKind.Home)
+            {
+                // Typing always searches the music library — otherwise the one search box silently does
+                // nothing on two of the pages it is visible on.
+                if (_searchQuery.Length > 0) _sidebar.ActivateKind(SidebarRowKind.AllSongs);
+            }
+            else ShowCurrent();
         };
         // Song list: a fixed custom header on top + a clipping viewport holding the full-height grid,
         // which pixel-scrolls by moving its Top. The themed scrollbar drives it in panel mode.
         _trackViewport.BackColor = Theme.Bg;
         _trackHeader = new TrackHeader(_tracks) { Dock = DockStyle.Top };
         _trackHeader.SortRequested += DoSort;
+        _trackHeader.MenuRequested += ShowColumnMenu;
         _trackViewport.Controls.Add(_tracks);       // manual bounds (full height), scrolled by Top
         _trackViewport.Controls.Add(_scrollbar);    // Right
         _scrollbar.AttachScrollPanel(_trackViewport, _tracks);
@@ -285,8 +331,12 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             var disp = gridHost.DisplayRectangle;   // padded content area
             int hh = _trackHeader.Height;
-            _trackViewport.Bounds = new Rectangle(disp.X, disp.Y + hh, disp.Width, Math.Max(0, disp.Height - hh));
+            // The list ends above the selection bar rather than running under it: a translucent WinForms child
+            // cannot composite over the rows (its corners would punch flat holes in a tinted row), and a bar that
+            // hides the last rows is worse than one that makes room for itself.
+            _trackViewport.Bounds = new Rectangle(disp.X, disp.Y + hh, disp.Width, Math.Max(0, disp.Height - hh - _selReserve));
         }
+        _layoutGridHost = LayoutGridHost;
         gridHost.SizeChanged += (_, _) => LayoutGridHost();
         _trackHeader.SizeChanged += (_, _) => LayoutGridHost();
         LayoutGridHost();
@@ -303,7 +353,22 @@ internal sealed class MainForm : Form, IMessageFilter
         _deviceResizeTimer.Tick += (_, _) => RebuildDeviceView();   // re-lay-out the device page at the settled width
         center.Controls.Add(_photoView);    // Fill, hidden until the Photos view is active
         center.Controls.Add(_browseView);   // Fill, hidden until the Albums/Artists view is active
+        _homeView = new HomeView { Dock = DockStyle.Fill, Visible = false };
+        _homeView.TileActivated += OnHomeTile;
+        _homeView.TrackActivated += PlayAnywhere;
+        _homeView.ResumeRequested += ResumeFromHome;
+        _homeView.Scrolled += UpdateBarFrost;
+        center.Controls.Add(_homeView);     // Fill, hidden until the Home view is active
         center.Controls.Add(gridHost);      // Fill
+        _emptyView = new EmptyStateView(Loc.T("Open Local Music"), Loc.T("Add folder…"))
+        {
+            Dock = DockStyle.Fill, Visible = false,
+            Title = Loc.T("Nothing to show yet"),
+            Hint = Loc.T("Plug in your iPod and Mixtape picks it up by itself. Until then, the music on this PC is a click away."),
+        };
+        _emptyView.PrimaryClicked += () => OnSidebarActivated(SidebarRowKind.LocalMusic, null);
+        _emptyView.SecondaryClicked += AddLocalFolder;
+        center.Controls.Add(_emptyView);
         _photoView.SelectionChanged += () => UpdatePhotoStatus();
         _photoView.ItemRightClicked += ShowPhotoMenu;
         _photoView.ItemActivated += OpenPhotoViewer;
@@ -319,9 +384,18 @@ internal sealed class MainForm : Form, IMessageFilter
         _nowPlaying.ProRequested += OpenProFeatures;
         _nowPlaying.ApplyEq(_settings.EqEnabled, _settings.EqGains ?? EqualizerSampleProvider.FlatGains()); // restore saved EQ
         _nowPlaying.ApplyPro(_settings.GaplessEnabled, _settings.CrossfadeSeconds, _settings.CrossfadeEnabled, _settings.NormalizeVolume, _settings.MonoOutput); // restore Pro features
+        _nowPlaying.ApplyDiscord(_settings.DiscordRichPresence, _settings.DiscordAppId, _settings.DiscordCoverArt);   // Discord Rich Presence (no-op while off)
+        CoverDownloads.Init(this);
+        CoverDownloads.Enabled = Environment.GetEnvironmentVariable("MIX_COVERS") is { } cv ? cv != "0" : _settings.OnlineCovers;
+        CoverDownloads.EmbedLocal = _settings.EmbedDownloadedCovers;
+        CoverDownloads.Arrived += OnCoverArrived;
         _nowPlaying.NextTrackProvider = PeekNextForGapless;   // supply the next track for gapless/crossfade prefetch
         _nowPlaying.AdvancedToNext += OnGaplessAdvancedToNext;
         _nowPlaying.QueueRequested += OpenUpNext;
+        _nowPlaying.LyricsRequested += OpenLyrics;
+        // Holding the sync stepper steps every 80 ms; settings.json is read-merged-rewritten on every save,
+        // so the write waits until the pressing stops.
+        _lyricSave.Tick += (_, _) => FlushLyricSync();
         _queue.Changed += RefreshUpNext;
         _queue.JumpedToFront += () => _nowPlaying.InvalidatePrefetch();   // a late "Play next" must replace a committed prefetch
         Glass.PopupsEnabled = _settings.GlassPopups;                      // sync at startup — the themed menus read this before any flyout ever opens
@@ -329,6 +403,8 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.LocationChanged += (_, _) => { UpdateBarFrost(); ListScrolled?.Invoke(); InvalidateScrollEdge(); };   // EXPERIMENT: scroll → re-slice the cached capture (cheap) + poke any open flyout's live glass
         _tracks.Paint += OnTracksPaintScrollEdge;                         // scroll edge: rows dissolve into the chrome under the column header
         _nowPlaying.SetModes(_settings.Shuffle, ParseRepeat(_settings.RepeatMode));                          // restore shuffle/repeat
+        _nowPlaying.SetVolumeLevel(Math.Clamp(_settings.Volume, 0, 1));                                        // restore the volume slider
+        _volSave.Tick += (_, _) => { _volSave.Stop(); SaveResume(persist: false); SaveVolume(); };   // play/pause + volume → one settings write
         _nowPlaying.ModesChanged += () =>
         {
             _settings.Shuffle = _nowPlaying.Shuffle;
@@ -338,15 +414,66 @@ internal sealed class MainForm : Form, IMessageFilter
 
         content.Controls.Add(_header, 0, 0);
         content.Controls.Add(center, 0, 1);
-        content.Controls.Add(_nowPlaying, 0, 2);   // now-playing bar is the bottom row
+        if (_deck) content.Controls.Add(_foot = new CardFoot { Dock = DockStyle.Fill }, 0, 2);   // the bar is up in the deck; the card still needs its bottom corners
+        else content.Controls.Add(_nowPlaying, 0, 2);   // now-playing bar is the bottom row
 
         _nowPlaying.Changed += PushMiniState;   // keep the detached mini player in sync (metadata / play-state / volume)
         _nowPlaying.Tick += PushMiniProgress;   // …and its seek bar (engine position ticks)
+        _nowPlaying.Tick += () => { if (++_resumeTicks % 100 == 0) SaveResume(persist: true); };   // the "Continue listening" bookmark, every ~20 s
+        _nowPlaying.Tick += () => PushLyricsClock();      // live-lyrics clock
+        _nowPlaying.Changed += PushLyricsClock;           // play/pause reaches the sheets at once, not at the next tick
+        _nowPlaying.Changed += () => { _volSave.Stop(); _volSave.Start(); };   // remember the volume, debounced
 
         _sidebar.Dock = DockStyle.None;
         root.Controls.Add(_sidebar);
         root.Controls.Add(content);
-        _header.SetWindowButtons(_btnMini, _btnMin, _btnMax, _btnClose);   // hosted in the header's top-right now
+        // The side card: Up Next · History · Lyrics, docked to the right of the content on wide windows (LayoutShell
+        // shows it only when it fits; the queue button and the "···" open it, narrower windows get the popovers).
+        _side = new SidePanel { Visible = false };
+        _sideOpen = _settings.SidePanelOpen;
+        _side.Select(SidePanel.ParseTab(_settings.SidePanelTab));
+        _side.CloseRequested += () => SetSideOpen(false);
+        _side.TabChanged += t =>
+        {
+            _settings.SidePanelTab = t.ToString();
+            if (_side is not { Visible: true }) return;
+            if (t == SidePanel.Tab.Lyrics) { LoadLyrics(); PushLyricsClock(); }
+            else if (t == SidePanel.Tab.History) RefreshHistory();
+        };
+        _side.UpNext.ClearRequested += () => _queue.Clear();
+        _side.UpNext.RemoveRequested += t => _queue.Remove(t);
+        _side.UpNext.MoveRequested += (from, to) => _queue.Move(from, to);
+        _side.UpNext.ActivateRequested += JumpToQueued;
+        _side.History.ActivateRequested += PlayAnywhere;
+        WireLyricsPanel(_side.Lyrics);
+        root.Controls.Add(_side);
+        if (_deck)
+        {
+            _nowPlaying.UseTopLayout();
+            _nowPlaying.CoverClicked += RevealPlayingRow;
+            _nowPlaying.CardMenuRequested += ShowCardMenu;
+            _nowPlaying.OverflowRequested += ShowDeckOverflow;
+            // The card's subtitle links, the same jumps its right-click menu offers (songs only - a video has no artist page).
+            _nowPlaying.ArtistClicked += () => { if (_playingTrack is { } t && MediaType.IsAudio(t.MediaType)) { NavigateToArtist(ArtistKey(t), t.LocalPath is not null); BuildSidebar(); } };
+            _nowPlaying.AlbumClicked += () => { if (_playingTrack is { } t && MediaType.IsAudio(t.MediaType)) { NavigateToAlbum(AlbumKey(t), t.LocalPath is not null); BuildSidebar(); } };
+            _nowPlaying.RemainingToggled += on => { _settings.ShowRemaining = on; _settings.Save(); if (_mini is not null) _mini.ShowRemaining = on; };
+            _nowPlaying.ShowRemaining = _settings.ShowRemaining;
+            root.Controls.Add(_nowPlaying);   // on the wallpaper
+            _nowPlaying.SendToBack();         // …and BEHIND the gear + window buttons, whatever the add order says
+        }
+        // The window buttons and the gear sit in the caption strip, not inside a card. Settings is
+        // app-level, not navigation-level — it never belonged in the nav rail.
+        _root!.Controls.Add(_btnMini); _root.Controls.Add(_btnMin); _root.Controls.Add(_btnMax); _root.Controls.Add(_btnClose);
+        _gearBtn.Click += (_, _) => OpenSettings();
+        Deactivate += (_, _) => Tip.Disarm();           // alt-tab with the pointer parked on a button must not leave a chip on top of the other app
+        Tip.Attach(_gearBtn, () => Loc.T("Settings"));   // the app's own tooltip chip, not the system's yellow box
+        Tip.Attach(_btnMini, () => Loc.T("Mini player"));
+        Tip.Attach(_btnMin, () => Loc.T("Minimize"));
+        Tip.Attach(_btnMax, () => _btnMax.Maximized ? Loc.T("Restore") : Loc.T("Maximize"));
+        Tip.Attach(_btnClose, () => Loc.T("Close"));
+        foreach (var hb in new[] { _header.CoverButton, _header.AddButton, _header.DeleteButton })
+        { var b = hb; Tip.Attach(b, () => b.CompactIcon ? b.Text : ""); }   // only once the header squeezes them to icons
+        _root.Controls.Add(_gearBtn);
 
         _btnMini.Click += (_, _) => OpenMiniPlayer();
         _btnMin.Click += (_, _) => WindowState = FormWindowState.Minimized;
@@ -376,15 +503,41 @@ internal sealed class MainForm : Form, IMessageFilter
         int w = _root.ClientSize.Width, h = _root.ClientSize.Height;
         if (w <= 0 || h <= 0) return;
 
-        const int sideW = 236;
-        int top = Gap, bottom = h - Gap;
+        // Both cards start below the caption strip (or the deck), on one baseline.
+        int sideW = Theme.SidebarW;
+        int top = _deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH + 8, bottom = h - Gap;
+
+        // Caption strip: the window buttons right-aligned, the gear just left of them (centred on the deck's axis in deck mode).
+        int by = _deck ? (NowPlayingBar.TopH - Theme.TitleBtnH) / 2 : Gap + (Theme.TitleStripH - Theme.TitleBtnH) / 2;
+        int bx = w - Gap - 4 * Theme.TitleBtnW;
+        foreach (var b in new Control[] { _btnMini, _btnMin, _btnMax, _btnClose })
+        { b.SetBounds(bx, by, Theme.TitleBtnW, Theme.TitleBtnH); b.BringToFront(); bx += Theme.TitleBtnW; }
+        _gearBtn.SetBounds(w - Gap - 4 * Theme.TitleBtnW - 38, by, 34, Theme.TitleBtnH);
+        _gearBtn.BringToFront();
+        if (_deck)
+        {
+            _nowPlaying.RightReserve = Gap + 4 * Theme.TitleBtnW + 38 + 22;   // keep clear of the gear + window buttons (and a visible gap before them)
+            _nowPlaying.SetBounds(0, 0, w, NowPlayingBar.TopH);
+            _nowPlaying.SendToBack();
+        }
         _sidebar.Bounds = new Rectangle(Gap, top, sideW, Math.Max(1, bottom - top));
         int cx = Gap + sideW + Gap;
-        _content.Bounds = new Rectangle(cx, top, Math.Max(1, w - cx - Gap), Math.Max(1, bottom - top));
+        // The side card docks to the right when it is open AND the window is wide enough; narrower windows fall back
+        // to the popovers, so the list is never squeezed.
+        bool side = _side is not null && _sideOpen && w >= SideMinWindowW;
+        int right = side ? w - Gap - SidePanel.W - Gap : w - Gap;
+        _content.Bounds = new Rectangle(cx, top, Math.Max(1, right - cx), Math.Max(1, bottom - top));
+        if (_side is not null)
+        {
+            _side.Visible = side;
+            if (side) _side.Bounds = new Rectangle(w - Gap - SidePanel.W, top, SidePanel.W, Math.Max(1, bottom - top));
+            _nowPlaying.SetQueueOpen(side);
+        }
         // Corners are rounded by ANTI-ALIASED carving in each card's own paint (Sidebar/HeaderPanel/NowPlayingBar
         // → Theme.CarveCardCorners), which samples the wallpaper-with-shadow bitmap — smooth, unlike a Region clip.
         _root.InvalidateWallpaper();   // card bounds moved → re-bake the wallpaper + shadow the carving samples
         if (_coverFlow is { Visible: true }) { LayoutCoverFlow(); _coverFlow.BringToFront(); }
+        if (_lyricsStage is { Visible: true }) { LayoutLyricsStage(); _lyricsStage.BringToFront(); }
 
         _btnMax.Maximized = WindowState == FormWindowState.Maximized;   // window buttons are positioned by the header now
     }
@@ -403,7 +556,7 @@ internal sealed class MainForm : Form, IMessageFilter
         Theme.StyleGrid(_tracks);
         _tracks.RowTemplate.Height = _settings.RowHeight;
 
-        var art = new DataGridViewImageColumn { HeaderText = "", Width = 52, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, ImageLayout = DataGridViewImageCellLayout.Zoom, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ListArtwork };
+        var art = new DataGridViewImageColumn { HeaderText = "", Width = 64, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, ImageLayout = DataGridViewImageCellLayout.Zoom, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ListArtwork };
         _tracks.Columns.Add(art);
 
         var dimSel = Theme.Blend(Theme.Subtle, Color.White, 0.35); // secondary columns stay dimmer even when the row is selected
@@ -422,7 +575,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.Columns.Add(album);
 
         var rating = new DataGridViewTextBoxColumn { HeaderText = "RATING", Width = 92, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ShowRating };
-        rating.DefaultCellStyle.ForeColor = Theme.Accent;                 // stars pop in the accent colour
+        rating.DefaultCellStyle.ForeColor = Theme.TextCol;                // the accent is reserved for STATE
         rating.DefaultCellStyle.SelectionForeColor = Color.White;
         rating.DefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
         _tracks.Columns.Add(rating);
@@ -443,14 +596,15 @@ internal sealed class MainForm : Form, IMessageFilter
         added.HeaderCell.Style.Padding = new Padding(4, 0, 10, 0);
         _tracks.Columns.Add(added);
 
-        var time = new DataGridViewTextBoxColumn { HeaderText = "TIME", Width = 72, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable };
+        var time = new DataGridViewTextBoxColumn { HeaderText = "TIME", Width = 72 + RowActionW, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, SortMode = DataGridViewColumnSortMode.NotSortable };
         time.DefaultCellStyle.ForeColor = Theme.Subtle;
         time.DefaultCellStyle.SelectionForeColor = dimSel;
         time.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
-        time.DefaultCellStyle.Padding = new Padding(4, 0, 14, 0);
+        time.DefaultCellStyle.Padding = new Padding(4, 0, 14 + RowActionW, 0);   // a slot at the row's end for the hover "···" (Apple Music / Spotify reserve it too)
         time.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
-        time.HeaderCell.Style.Padding = new Padding(4, 0, 14, 0);          // header right-edge matches the values
+        time.HeaderCell.Style.Padding = new Padding(4, 0, 14 + RowActionW, 0);   // header right-edge matches the values
         _tracks.Columns.Add(time);
+        FitColumnHeaders();
 
         _tracks.ColumnHeadersVisible = false;              // a fixed TrackHeader strip replaces it (so the grid can scroll whole)
         // Keep the full-content height current as rows change — but NOT once per row during a bulk populate
@@ -472,18 +626,19 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.MouseUp += (_, _) => _songDragArmed = false;
         _tracks.CellPainting += OnRatingCellPainting;          // owner-draw the RATING column (stars + hover preview)
         _tracks.CellFormatting += OnAddedCellFormatting;       // accent-tint the ADDED date for Today/Yesterday
+        _tracks.CellFormatting += OnPlayingCellFormatting;     // accent the title of the song that is playing
         _tracks.CellMouseMove += OnRatingCellMouseMove;        // ghost-star hover preview
         _tracks.CellMouseClick += OnRatingCellClick;           // click a star to set the rating inline
         _tracks.CellMouseLeave += (_, e) => { if (e.ColumnIndex == RatingCol) ClearRatingHover(); };
-        _tracks.CellMouseDoubleClick += (_, e) => { if (e.ColumnIndex != RatingCol && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count) ActivateTrackRow(e.RowIndex); };
+        _tracks.CellMouseDoubleClick += (_, e) => { if (e.ColumnIndex != RatingCol && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && RowActionAt(_tracks.PointToClient(Cursor.Position), out int _r) == RowAction.None) ActivateTrackRow(e.RowIndex); };
+        _tracks.MouseMove += OnRowActionMouseMove;              // the hover play / "···" zones light up + a hand cursor
+        _tracks.MouseClick += OnRowActionClick;
         _tracks.Paint += (_, e) =>
         {
             // friendly empty-state when the list has no rows (the grid fills the viewport when empty)
             if (_tracks.RowCount == 0 && _emptyMsg.Length > 0)
             {
-                var area = new Rectangle(0, 0, _tracks.Width, _tracks.Height);
-                TextRenderer.DrawText(e.Graphics, _emptyMsg, _tracks.Font, area, Theme.Faint,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                Theme.DrawEmptyState(e.Graphics, new Rectangle(0, 0, _tracks.Width, _tracks.Height), _emptyMsg, null);
             }
 
             // drag-to-reorder: a teal insertion line at the drop position
@@ -510,6 +665,13 @@ internal sealed class MainForm : Form, IMessageFilter
         // ~26%). DrawToBitmap tiles columns exactly so it never shows there. An opaque base fill turns those
         // slivers into Bg instead of black, killing the seam without touching the (intentional) row dividers.
         if (e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
+        // Every fill from here on must be pixel-crisp. With anti-aliasing left on (the previous row's post-paint turns
+        // it on for its glyphs and never turned it off) GDI+ half-covers the edge pixels of each rectangle, and the
+        // live double buffer underneath is BLACK: a faint dark column down every row's left edge and a dark line
+        // along its top were exactly those half-covered pixels (an offscreen DrawToBitmap paints over a cleared
+        // bitmap, so the renders never showed it).
+        e.Graphics.SmoothingMode = SmoothingMode.None;
+        e.Graphics.PixelOffsetMode = PixelOffsetMode.None;
         // Three stable colours (selected tint / hover / normal). Reuse a cached brush per colour, rebuilt only when
         // the colour changes (theme/accent switch), so a fast scroll's per-row fills don't churn a fresh GDI brush.
         SolidBrush b = _tracks.Rows[e.RowIndex].Selected ? RowBrush(ref _bRowSel, ref _cRowSel, Theme.Blend(Theme.Bg, Theme.Accent, 0.12))
@@ -528,7 +690,27 @@ internal sealed class MainForm : Form, IMessageFilter
         return b;
     }
 
+    /// <summary>The whisper-faint row hairline, built from the CURRENT palette (a field initializer ran before the
+    /// saved theme was applied and left a grey Graphite line on every other theme) and rebuilt on any palette change.</summary>
+    private Pen DividerPen()
+    {
+        if (_rowDividerPen is null || _rowDividerRev != Theme.Revision)
+        {
+            _rowDividerPen?.Dispose();
+            _rowDividerPen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.03));
+            _rowDividerRev = Theme.Revision;
+        }
+        return _rowDividerPen;
+    }
+
     private void OnRowPostPaint(object? sender, DataGridViewRowPostPaintEventArgs e)
+    {
+        var gs = e.Graphics.Save();   // the glyphs below switch anti-aliasing on; hand the grid its state back afterwards
+        try { RowPostPaintCore(e); }
+        finally { e.Graphics.Restore(gs); }
+    }
+
+    private void RowPostPaintCore(DataGridViewRowPostPaintEventArgs e)
     {
         var b = e.RowBounds;
         // Start the divider at the Song column, leaving the artwork cell clean — but reach the row's
@@ -537,7 +719,8 @@ internal sealed class MainForm : Form, IMessageFilter
         int x0 = b.X + (artCol.Visible ? artCol.Width : 0);
         // A whisper-faint row divider — just enough to separate tracks without reading as a grid.
         // Draw it FIRST on integer bounds with AA off so it stays a true crisp 1px.
-        e.Graphics.DrawLine(_rowDividerPen, x0, b.Bottom - 1, b.Right, b.Bottom - 1);
+        e.Graphics.SmoothingMode = SmoothingMode.None;   // (a crisp 1 px line; the previous row's post-paint may have left anti-aliasing on)
+        e.Graphics.DrawLine(DividerPen(), x0, b.Bottom - 1, b.Right, b.Bottom - 1);
         // Selection is carried by one crisp, bright accent bar (the row fill itself only whispers a tint).
         if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
         {
@@ -549,6 +732,176 @@ internal sealed class MainForm : Form, IMessageFilter
             e.Graphics.FillPath(bar, _barPath);
             e.Graphics.Restore(st);
         }
+
+        // The song that is PLAYING, marked where the eye already is: an equaliser badge on its artwork, or
+        // at the row's left edge when the artwork column is switched off. Selection has the left bar, so the
+        // two never use the same mark and a row can carry both at once.
+        if (_playingTrack is not null && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count
+            && ReferenceEquals(_tracks.Rows[e.RowIndex].Tag, _playingTrack))
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var artC = _tracks.Columns[0];
+            var mark = artC.Visible
+                ? new Rectangle(b.X + artC.Width - 24, b.Bottom - 21, 14, 13)
+                : new Rectangle(b.X + 10, b.Y + (b.Height - 13) / 2, 14, 13);
+            if (artC.Visible)   // a dark chip so the bars read over any cover
+            {
+                using var chip = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
+                using var cp = Theme.RoundedRect(new RectangleF(mark.X - 4, mark.Y - 3, mark.Width + 8, mark.Height + 6), 5);
+                e.Graphics.FillPath(chip, cp);
+            }
+            if (artC.Visible || e.RowIndex != _hotRow) DrawPlayingMark(e.Graphics, mark);   // in the text-only gutter the hovered row shows pause instead
+        }
+
+        // Hover actions (Apple Music / Spotify): play at the left — on the cover, or in the gutter — and "···" at the right.
+        if (e.RowIndex == _hotRow && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Tag is Track ht)
+        {
+            var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+            bool isPlayingRow = ReferenceEquals(ht, _playingTrack);
+            bool hotPlay = _rowAction == RowAction.Play, hotMore = _rowAction == RowAction.More;
+            Color ink = hotPlay || isPlayingRow ? Theme.AccentBright : Theme.TextCol;
+            var artC = _tracks.Columns[0];
+            if (artC.Visible)
+            {
+                float cx = b.X + artC.Width / 2f, cy = b.Y + b.Height / 2f;   // a dark disc over the cover's centre so the glyph reads on any art
+                using (var disc = new SolidBrush(Color.FromArgb(hotPlay ? 200 : 150, 0, 0, 0))) g.FillEllipse(disc, cx - 13, cy - 13, 26, 26);
+                DrawRowActionGlyph(g, cx, cy, isPlayingRow && _nowPlaying.Playing, hotPlay ? Theme.AccentBright : Color.White);
+            }
+            else DrawRowActionGlyph(g, b.X + 17, b.Y + b.Height / 2f, isPlayingRow && _nowPlaying.Playing, ink);
+            if (_tracks.Columns[7].Visible)
+            {
+                var more = RowMoreRect(b);
+                float mx = more.X + more.Width / 2f, my = b.Y + b.Height / 2f;
+                if (hotMore) { using var hb = new SolidBrush(Theme.Blend(Theme.RowHover, Color.White, 0.08)); using var hp = Theme.RoundedRect(new RectangleF(mx - 12, my - 12, 24, 24), Theme.RadControl); g.FillPath(hb, hp); }
+                using var dots = new SolidBrush(hotMore ? Theme.TextCol : Theme.Subtle);
+                for (int k = -1; k <= 1; k++) g.FillEllipse(dots, mx + k * 6f - 1.6f, my - 1.6f, 3.2f, 3.2f);
+            }
+        }
+    }
+
+    /// <summary>Three accent bars — the universal "this one is playing". Static on purpose: animating it
+    /// would mean invalidating a grid row every frame, and the bar at the bottom already carries the motion.</summary>
+    private static void DrawPlayingMark(Graphics g, Rectangle r)
+    {
+        using var b = new SolidBrush(Theme.AccentBright);
+        float[] frac = { 0.55f, 1f, 0.72f };
+        float bw = 2.6f, gap = 2.2f, x = r.X;
+        foreach (float f in frac)
+        {
+            float h = r.Height * f;
+            g.FillRectangle(b, x, r.Bottom - h, bw, h);
+            x += bw + gap;
+        }
+    }
+
+    /// <summary>The playing song's title takes the accent colour, so the row is identifiable even with the
+    /// artwork column (and its badge) turned off.</summary>
+    private void OnPlayingCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.ColumnIndex != 1 || _playingTrack is null || e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
+        if (!ReferenceEquals(_tracks.Rows[e.RowIndex].Tag, _playingTrack)) return;
+        e.CellStyle.ForeColor = Theme.AccentBright;
+        e.CellStyle.SelectionForeColor = Theme.AccentBright;
+    }
+
+    // ---- row hover actions (Apple Music / Spotify): play at the left, "···" at the right ----
+
+    private enum RowAction { None, Play, More }
+    private RowAction _rowAction;          // which zone the mouse is over on the hot row
+    private const int RowActionW = 30;     // the text-only gutter (title padding) and the "···" slot at the row's end
+
+    /// <summary>The play zone: the cover cell when there is one, else the gutter the title keeps clear.</summary>
+    private Rectangle RowPlayRect(Rectangle b) => _tracks.Columns[0].Visible ? new Rectangle(b.X, b.Y, _tracks.Columns[0].Width, b.Height) : new Rectangle(b.X, b.Y, RowActionW, b.Height);
+    private static Rectangle RowMoreRect(Rectangle b) => new(b.Right - 34, b.Y, 34, b.Height);
+
+    private RowAction RowActionAt(Point p, out int row)
+    {
+        row = -1;
+        if (_tracks.RowCount == 0) return RowAction.None;
+        var hit = _tracks.HitTest(p.X, p.Y);
+        if (hit.RowIndex < 0 || hit.RowIndex >= _tracks.Rows.Count) return RowAction.None;
+        row = hit.RowIndex;
+        var b = _tracks.GetRowDisplayRectangle(row, false);
+        if (RowPlayRect(b).Contains(p)) return RowAction.Play;
+        if (_tracks.Columns[7].Visible && RowMoreRect(b).Contains(p)) return RowAction.More;
+        return RowAction.None;
+    }
+
+    private void OnRowActionMouseMove(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.None) return;   // a drag keeps its own cursor and state
+        var a = RowActionAt(e.Location, out int row);
+        if (a == _rowAction) return;
+        _rowAction = a;
+        if (row >= 0) _tracks.InvalidateRow(row);
+        if (_hotRow >= 0 && _hotRow != row && _hotRow < _tracks.Rows.Count) _tracks.InvalidateRow(_hotRow);
+        _tracks.Cursor = a != RowAction.None ? Cursors.Hand : Cursors.Default;
+    }
+
+    private void OnRowActionClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        var a = RowActionAt(e.Location, out int row);
+        if (a == RowAction.None || row < 0) return;
+        if (a == RowAction.Play)
+        {
+            if (_tracks.Rows[row].Tag is Track t && ReferenceEquals(t, _playingTrack)) _nowPlaying.TogglePlayback();   // the playing song: pause / resume
+            else ActivateTrackRow(row);
+            return;
+        }
+        if (!_tracks.Rows[row].Selected) { _tracks.ClearSelection(); _tracks.Rows[row].Selected = true; }
+        var b = _tracks.GetRowDisplayRectangle(row, false);
+        var pt = _tracks.PointToScreen(new Point(RowMoreRect(b).Left, b.Bottom + 2));
+        if (_viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists) ShowLocalTrackMenu(pt);
+        else ShowTrackMenu(pt);
+    }
+
+    /// <summary>Render harness: switch the background palette at RUNTIME (MIX_THEME_SWITCH=Forest|Midnight|...), the way
+    /// Settings does, so any surface still holding a baked colour shows up.</summary>
+    public void PreviewThemeSwitch(string variant) { _settings.ThemeVariant = variant; ApplyAllSettings(); }
+    public void PreviewAccent(string accent) { _settings.Accent = accent; ApplyAllSettings(); }   // MIX_ACCENT=<preset name | #hex>: a runtime accent change
+    public void PreviewRemaining(bool on) => _nowPlaying.ShowRemaining = on;       // MIX_REMAINING=1: the card's total slot counts down
+    /// <summary>Harness (MIX_SELECT=from-to): select a run of song rows, so the multi-select bar shows.</summary>
+    public void PreviewSelectRows(int from, int to)
+    {
+        _tracks.ClearSelection();
+        for (int i = Math.Max(0, from); i <= Math.Min(to, _tracks.Rows.Count - 1); i++) _tracks.Rows[i].Selected = true;
+        UpdateSelectionBar();
+    }
+    public void PreviewDeckHover(string hit) => _nowPlaying.PreviewHover(hit);   // MIX_DECK_HOVER=<control>: the deck with that control hovered
+
+    /// <summary>Render harness: the hover state of a row (MIX_HOT_ROW=n, MIX_ROW_ACTION=play|more).</summary>
+    /// <summary>Harness (MIX_LIVE): drive the song list through the incremental repaints a user causes - a hover
+    /// walking down a few rows, the selection moving and coming back, a scroll and return - each flushed with Update()
+    /// so the partial-clip paint path runs exactly as it does on screen.</summary>
+    public void PreviewLivePaint()
+    {
+        if (_tracks.Rows.Count < 8) return;
+        _tracks.Invalidate(); _tracks.Update();
+        foreach (int r in new[] { 2, 3, 4, 5, 6, -1 }) { SetHotRow(r); if (r >= 0) _tracks.InvalidateRow(r); _tracks.Update(); Application.DoEvents(); }
+        var sel = _tracks.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Index).ToList();   // the WHOLE selection comes back (a multi-select is a state worth capturing)
+        if (sel.Count == 0) sel.Add(0);
+        _tracks.ClearSelection(); _tracks.Rows[3].Selected = true; _tracks.Update(); Application.DoEvents();
+        _tracks.ClearSelection();
+        foreach (int i in sel) if (i >= 0 && i < _tracks.Rows.Count) _tracks.Rows[i].Selected = true;
+        _tracks.Update(); Application.DoEvents();
+        ScrollGrid(3); _tracks.Update(); Application.DoEvents(); ScrollGrid(-3); _tracks.Update(); Application.DoEvents();
+    }
+
+    public void PreviewRowHover(int row, string? action)
+    {
+        if (row < 0 || row >= _tracks.Rows.Count) return;
+        SetHotRow(row);
+        _rowAction = action == "play" ? RowAction.Play : action == "more" ? RowAction.More : RowAction.None;
+        _tracks.InvalidateRow(row);
+    }
+
+    /// <summary>The play / pause glyph of a hover action, centred on (cx, cy).</summary>
+    private static void DrawRowActionGlyph(Graphics g, float cx, float cy, bool pause, Color ink)
+    {
+        using var b = new SolidBrush(ink);
+        if (pause) { g.FillRectangle(b, cx - 5f, cy - 5.5f, 3.4f, 11f); g.FillRectangle(b, cx + 1.6f, cy - 5.5f, 3.4f, 11f); }
+        else g.FillPolygon(b, new[] { new PointF(cx - 4.5f, cy - 6f), new PointF(cx - 4.5f, cy + 6f), new PointF(cx + 6f, cy) });
     }
 
     // ---- inline click-to-rate (RATING column) ----
@@ -605,7 +958,9 @@ internal sealed class MainForm : Form, IMessageFilter
             case Keys.Control | Keys.Up: _sidebar.ActivateAdjacent(-1); return true;
             case Keys.Control | Keys.Down: _sidebar.ActivateAdjacent(1); return true;
             case Keys.Escape:
+                if (_lyricsStage is { Visible: true }) { CloseLyricsStage(); return true; }
                 if (_coverFlow is { Visible: true }) { CloseCoverFlow(); return true; }
+                if (_selBar is { Visible: true }) { _tracks.ClearSelection(); return true; }   // the action bar is up: Esc lets the selection go
                 if (_searchQuery.Length > 0) { _search.ClearQuery(); return true; }
                 break;
         }
@@ -651,7 +1006,9 @@ internal sealed class MainForm : Form, IMessageFilter
         int shown = hovering ? _ratingHotStar : curStars;     // how many filled stars
         bool ghosts = hovering || curStars > 0;               // empty slots only when rated or hovering
         bool selected = _tracks.Rows[e.RowIndex].Selected;
-        Color fill = hovering ? Theme.AccentBright : selected ? Color.White : Theme.Accent;
+        // The accent means "this is active/selected/playing/on" everywhere in the app. A rating is a value,
+        // not a state, so a rated row is white — and only the LIVE hover preview spends accent.
+        Color fill = hovering ? Theme.AccentBright : selected ? Color.White : Theme.TextCol;
         var cb = e.CellBounds;
         for (int i = 0; i < 5; i++)
         {
@@ -670,7 +1027,8 @@ internal sealed class MainForm : Form, IMessageFilter
         if (e.ColumnIndex != AddedCol || e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
         var row = _tracks.Rows[e.RowIndex];
         if (row.Selected || row.Tag is not Track t || t.DateAdded is not { } d || d.Year <= 1970) return;
-        if (d.Date == DateTime.Today || d.Date == DateTime.Today.AddDays(-1)) e.CellStyle.ForeColor = Theme.AccentBright;
+        // Today/Yesterday still lift out of the Subtle column, but with brightness rather than accent.
+        if (d.Date == DateTime.Today || d.Date == DateTime.Today.AddDays(-1)) e.CellStyle.ForeColor = Theme.TextCol;
     }
 
     /// <summary>Apply a rating to one track through the verified write path, then refresh just its cell so the
@@ -750,9 +1108,9 @@ internal sealed class MainForm : Form, IMessageFilter
         try
         {
             bool listView = _viewKind is SidebarRowKind.AllSongs or SidebarRowKind.Playlist or SidebarRowKind.Videos
-                                       or SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist
-                          || (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists && _browseFilter is not null);
-            bool gridFrost = (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists && _browseFilter is null) || _viewKind == SidebarRowKind.Photos;
+                                       or SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists
+                          || (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _browseFilter is not null);
+            bool gridFrost = (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _browseFilter is null) || _viewKind == SidebarRowKind.Photos;
             _frostStrip = gridFrost;
             _frostCtl = listView ? _tracks : gridFrost ? (_viewKind == SidebarRowKind.Photos ? _photoView : (Control)_browseView) : null;
             if (gridFrost) return _frostCtl is { Visible: true };
@@ -795,7 +1153,7 @@ internal sealed class MainForm : Form, IMessageFilter
     /// the slide drives the frost there.</summary>
     private void UpdateBarFrost()
     {
-        if (!_settings.GlassPopups || _viewTransitionBusy) return;
+        if (_deck || !_settings.GlassPopups || _viewTransitionBusy) return;   // the deck sits on the wallpaper — nothing to frost
         // Scroll/settle path: draw into the REUSED scratch bitmap (no per-frame alloc) and hand it to the bar BORROWED
         // (owned:false) so the bar never disposes our scratch. The view-switch path (TransitionCenter) uses owned:false=>true.
         var (tiny, h, dx, w) = ComputeFrostTuple(useScratch: true);
@@ -1090,11 +1448,14 @@ internal sealed class MainForm : Form, IMessageFilter
             try { cover = new Bitmap(img); } catch { cover = null; }
         if (rowIndex >= 0) _tracks.EnsureRowVisible(rowIndex);   // scroll the now-playing row into view
         _playingTrack = t;
+        NotePlayed(t);
+        _tracks.Invalidate();          // move the "playing" mark to the new row
         SetNowPlayingVisible(true); // expand the row first so the hosted media engine is realized before playing
         _nowPlaying.Play(t, path, cover);
         cover?.Dispose(); // the bar took its own copy
         if (_coverFlow is not null && MediaType.IsAudio(t.MediaType)) _coverFlow.PlayingTag = CoverTag(t, _cfMode); // mark it in Cover Flow (per current mode)
         RefreshUpNext();   // update the Up Next panel's Now-Playing row
+        LoadLyrics();      // …and the lyrics sheet, if it's open
     }
 
     private void OpenVideoPreview(Track t, string path)
@@ -1195,7 +1556,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void SetNowPlayingVisible(bool on)
     {
         if (_content is null) return;
-        _content.RowStyles[2].Height = NowPlayingBar.H;   // always visible; the bar shows an idle state when nothing plays
+        _content.RowStyles[2].Height = _deck ? CardFoot.H : NowPlayingBar.H;   // always visible; the bar shows an idle state when nothing plays
     }
 
     private void OpenPhotoViewer(uint startId)
@@ -1307,6 +1668,8 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private bool _scanning; // a drive scan (DetectAll) is in flight on a background thread
 
+    private bool _firstScan = true;   // the startup scan — see RefreshDevices
+
     private async void RefreshDevices()
     {
         if (_scanning) return;
@@ -1322,10 +1685,17 @@ internal sealed class MainForm : Form, IMessageFilter
             _devices.Clear();
             _devices.AddRange(found);
             if (_devices.Count > 0) LoadDevice(_devices[0]);
-            else ShowNoDevice();
+            else
+            {
+                ShowNoDevice();
+                // The FIRST scan of a session with nothing plugged in opens the music that IS here, instead
+                // of a "No iPod connected" placeholder. Only the first: a manual Refresh that finds nothing
+                // must not yank the user off whatever they were looking at.
+                if (_firstScan) OnSidebarActivated(_settings.LocalMusicFolders.Count > 0 ? SidebarRowKind.Home : SidebarRowKind.LocalMusic, null);
+            }
         }
         catch (Exception ex) { if (!IsDisposed) { SetStatus(Loc.T("Detection error: {0}", ex.Message)); ShowNoDevice(); } }
-        finally { _scanning = false; }
+        finally { _scanning = false; _firstScan = false; }
     }
 
     /// <summary>Transient "scanning for an iPod" state shown while the background drive scan runs.</summary>
@@ -1476,10 +1846,198 @@ internal sealed class MainForm : Form, IMessageFilter
 
     /// <summary>Used by the headless --render preview to populate the window without scanning drives.</summary>
     public void PreviewDevice(IPodDevice device) => LoadDevice(device);
+    public void PreviewNoDevice() => ShowNoDevice();
+    public void PreviewLyricsStage() => OpenLyricsStage();
+    /// <summary>Render harness: comfortable or compact rows, in memory only (never saved).</summary>
+    public void PreviewRows(bool compact)
+    {
+        _settings.Compact = compact;
+        _tracks.RowTemplate.Height = _settings.RowHeight;
+        ApplyColumns();
+        ShowCurrent();
+    }
 
     /// <summary>Headless preview: switch to a named view (songs/videos/photos) before capture.</summary>
+    /// <summary>The shell root, for the --render harness. Capturing the FORM composites the native caption
+    /// (the window keeps WS_CAPTION for its DWM shadow and hides it behind the extended frame), which painted
+    /// a Windows title bar over the app's own title strip in every design render. The root panel is exactly
+    /// the app's own pixels.</summary>
+    public Control? PreviewRoot => _root;
+
+    /// <summary>Deck: the card's cover was clicked — scroll the playing song into view and select it (when the
+    /// list on screen contains it; a browse page or another list is left alone).</summary>
+    private void RevealPlayingRow()
+    {
+        if (_playingTrack is null) return;
+        int ri = RowIndexOf(_playingTrack);
+        if (ri < 0) return;
+        _tracks.EnsureRowVisible(ri);
+        _tracks.ClearSelection();
+        _tracks.Rows[ri].Selected = true;
+        try { _tracks.Focus(); } catch { }
+    }
+
+    /// <summary>The deck card's right-click menu: where the playing song lives, and what can be done with it.</summary>
+    private void ShowCardMenu(Point screen)
+    {
+        if (_playingTrack is not Track t) return;
+        var m = ThemedMenu.New();
+        bool inList = RowIndexOf(t) >= 0;
+        var show = new ToolStripMenuItem(Loc.T("Show in list")) { Enabled = inList };
+        show.Click += (_, _) => RevealPlayingRow();
+        m.Items.Add(show);
+        bool ipodSong = _db is not null && t.LocalPath is null && MediaType.IsAudio(t.MediaType);
+        bool localSong = t.LocalPath is not null && MediaType.IsAudio(t.MediaType);
+        if (ipodSong || localSong)
+        {
+            var album = new ToolStripMenuItem(Loc.T("Go to album")); album.Click += (_, _) => { NavigateToAlbum(AlbumKey(t), localSong); BuildSidebar(); }; m.Items.Add(album);
+            var artist = new ToolStripMenuItem(Loc.T("Go to artist")); artist.Click += (_, _) => { NavigateToArtist(ArtistKey(t), localSong); BuildSidebar(); }; m.Items.Add(artist);
+        }
+        m.Items.Add(new ToolStripSeparator());
+        if (ipodSong && _device is { Profile.CanWrite: true })
+        {
+            // Same rules as the list's menu: user playlists only (smart lists are rule-fed, podcasts are not lists).
+            var ids = new List<uint> { t.UniqueId };
+            var addTo = new ToolStripMenuItem(Loc.T("Add to playlist"));
+            foreach (var pl in _shownPlaylists.Where(p => _db is not null && !ReferenceEquals(p, _db.Master) && !p.IsPodcast && !IsSmart(p.PersistentId)))
+            {
+                var plRef = pl;
+                var it = new ToolStripMenuItem(pl.Name.Length == 0 ? Loc.T("Untitled") : pl.Name);
+                it.Click += (_, _) => AddSelectedToPlaylist(plRef, ids);
+                addTo.DropDownItems.Add(it);
+            }
+            if (addTo.DropDownItems.Count > 0) addTo.DropDownItems.Add(new ToolStripSeparator());
+            var newWith = new ToolStripMenuItem(Loc.T("New playlist…"));
+            newWith.Click += (_, _) => CreatePlaylistWithTracks(ids);
+            addTo.DropDownItems.Add(newWith);
+            m.Items.Add(addTo);
+            m.Items.Add(new ToolStripSeparator());
+        }
+        var lyr = new ToolStripMenuItem(Loc.T("Lyrics")); lyr.Click += (_, _) => OpenLyrics(Rectangle.Empty); m.Items.Add(lyr);
+        if (ipodSong && _device is { Profile.CanWrite: true })
+        {
+            var info = new ToolStripMenuItem(Loc.T("Edit info…")) { Enabled = inList };
+            info.Click += (_, _) => { RevealPlayingRow(); OnEditTrackInfo(); };
+            m.Items.Add(info);
+        }
+        m.Show(screen);
+    }
+
+    /// <summary>The deck's "···": whatever the window width folded away — a narrower window never loses a function.</summary>
+    private void ShowDeckOverflow(Rectangle anchor)
+    {
+        var (eq, pro, queue, modes) = _nowPlaying.Folded;
+        var m = ThemedMenu.New();
+        if (eq) { var it = new ToolStripMenuItem(Loc.T("Equalizer…")); it.Click += (_, _) => OpenEqualizer(anchor); m.Items.Add(it); }
+        if (pro) { var it = new ToolStripMenuItem(Loc.T("Pro features…")); it.Click += (_, _) => OpenProFeatures(anchor); m.Items.Add(it); }
+        if (queue) { var it = new ToolStripMenuItem(Loc.T("Up Next…")); it.Click += (_, _) => OpenUpNext(anchor); m.Items.Add(it); }
+        if (modes)
+        {
+            if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+            var sh = new ToolStripMenuItem(Loc.T("Shuffle")) { Checked = _nowPlaying.Shuffle };
+            sh.Click += (_, _) => _nowPlaying.ToggleShuffle();
+            m.Items.Add(sh);
+            var rep = new ToolStripMenuItem(Loc.T("Repeat"));
+            foreach (var (mode, name) in new[] { (NowPlayingBar.RepeatMode.Off, Loc.T("Off")), (NowPlayingBar.RepeatMode.All, Loc.T("All songs")), (NowPlayingBar.RepeatMode.One, Loc.T("This song")) })
+            {
+                var mm = mode;
+                var it = new ToolStripMenuItem(name) { Checked = _nowPlaying.Repeat == mode };
+                it.Click += (_, _) => _nowPlaying.SetRepeat(mm);
+                rep.DropDownItems.Add(it);
+            }
+            m.Items.Add(rep);
+        }
+        if (m.Items.Count == 0) return;
+        MenuStyle.Checkable(m);
+        m.Show(new Point(anchor.Left, anchor.Bottom + 6));
+    }
+
+    /// <summary>Right-click on the column header: sort by any visible column, and choose which columns show.</summary>
+    private void ShowColumnMenu(Point screen)
+    {
+        var m = ThemedMenu.New();
+        var ti = System.Globalization.CultureInfo.CurrentCulture.TextInfo;
+        string Name(int i) => ti.ToTitleCase(Loc.T(ColBase[i]).ToLowerInvariant());   // the header's caption, as a word
+        var sort = new ToolStripMenuItem(Loc.T("Sort by"));
+        for (int i = 1; i < ColBase.Length && i < _tracks.Columns.Count; i++)
+        {
+            if (!_tracks.Columns[i].Visible) continue;
+            int idx = i;
+            var it = new ToolStripMenuItem(Name(i)) { Checked = _sortCol == i };
+            it.Click += (_, _) => DoSort(idx);
+            sort.DropDownItems.Add(it);
+        }
+        m.Items.Add(sort);
+        m.Items.Add(new ToolStripSeparator());
+        void Col(string name, bool on, Action<bool> set)
+        {
+            var it = new ToolStripMenuItem(name) { Checked = on };
+            it.Click += (_, _) => { set(!on); _settings.Save(); ApplyColumns(); };
+            m.Items.Add(it);
+        }
+        bool local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
+        if (!_settings.Compact) Col(Loc.T("Artwork"), _settings.ShowArtwork, v => _settings.ShowArtwork = v);   // compact rows never show art (ListArtwork derives from both)
+        Col(Name(2), _settings.ShowArtist, v => _settings.ShowArtist = v);
+        Col(Name(3), _settings.ShowAlbum, v => _settings.ShowAlbum = v);
+        if (!local) Col(Name(4), _settings.ShowRating, v => _settings.ShowRating = v);
+        if (!local) Col(Name(5), _settings.ShowPlays, v => _settings.ShowPlays = v);
+        Col(Name(6), _settings.ShowDateAdded, v => _settings.ShowDateAdded = v);
+        Col(Name(7), _settings.ShowTime, v => _settings.ShowTime = v);
+        MenuStyle.Checkable(m);
+        m.Show(screen);
+    }
+
+    /// <summary>Render harness: show the list's <paramref name="row"/> as the playing song (no audio), with a
+    /// synthetic cover when <paramref name="coverId"/> ≥ 0.</summary>
+    public void PreviewNowPlaying(int row, double atSec, int coverId)
+    {
+        Track? t;
+        if (_tracks.Rows.Count > 0) { row = Math.Clamp(row, 0, _tracks.Rows.Count - 1); t = _tracks.Rows[row].Tag as Track; }
+        else t = _db?.Tracks.Where(x => MediaType.IsAudio(x.MediaType)).Skip(Math.Max(0, row)).FirstOrDefault();   // the landing page holds no rows
+        if (t is null) return;
+        _playingTrack = t;
+        _tracks.Invalidate();
+        Bitmap? cover = coverId >= 0 ? CoverArt.Generate(coverId, 96) : null;
+        _nowPlaying.Preview(t, cover, atSec, Math.Max(1, t.LengthMs / 1000.0));
+    }
+
+    /// <summary>Harness (MIX_NP_LOCAL=&lt;title part | index&gt;): show a PC-library song as playing, with its real path.</summary>
+    public bool PreviewNowPlayingLocal(string sel, double atSec)
+    {
+        var audio = _localTracks.Where(x => MediaType.IsAudio(x.MediaType)).ToList();
+        Track? t = int.TryParse(sel, out int idx) ? audio.Skip(Math.Max(0, idx)).FirstOrDefault()
+            : audio.FirstOrDefault(x => (x.DisplayTitle ?? "").Contains(sel, StringComparison.OrdinalIgnoreCase));
+        if (t is null) return false;
+        _playingTrack = t;
+        _tracks.Invalidate();
+        _nowPlaying.Preview(t, null, atSec, Math.Max(1, t.LengthMs / 1000.0), t.LocalPath);
+        return true;
+    }
+    public int PreviewLocalCount => _localTracks.Count;
+
+    /// <summary>Harness (MIX_PLAY_LOCAL=&lt;title part | index&gt;): REALLY play a PC-library song through the engine, muted.</summary>
+    public bool PreviewPlayLocal(string sel)
+    {
+        var audio = _localTracks.Where(x => MediaType.IsAudio(x.MediaType)).ToList();
+        Track? t = int.TryParse(sel, out int idx) ? audio.Skip(Math.Max(0, idx)).FirstOrDefault()
+            : audio.FirstOrDefault(x => (x.DisplayTitle ?? "").Contains(sel, StringComparison.OrdinalIgnoreCase));
+        if (t is null) return false;
+        _nowPlaying.SetVolumeLevel(0);
+        PlayAnywhere(t);
+        return true;
+    }
+
+    /// <summary>Harness (MIX_TRACE=&lt;file&gt;): a timestamped line per step, to see where a live path stalls.</summary>
+    internal static string? TracePath;
+    internal static void Trace(string s) { if (TracePath is null) return; try { File.AppendAllText(TracePath, DateTime.Now.ToString("HH:mm:ss.fff") + " " + s + Environment.NewLine); } catch { } }
+
     public void PreviewSelectView(string view)
     {
+        // MIX_RESUME=row|seconds: a "Continue listening" bookmark on that song, in memory only (settings are frozen)
+        if (Environment.GetEnvironmentVariable("MIX_RESUME") is { } rs && rs.Split('|') is { Length: 2 } rp && int.TryParse(rp[0], out int rrow)
+            && double.TryParse(rp[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double rsec)
+            && _db?.Tracks.Where(x => MediaType.IsAudio(x.MediaType)).Skip(rrow).FirstOrDefault() is { } rt)
+        { _settings.ResumeTrack = "db:" + rt.Dbid; _settings.ResumeSeconds = rsec; }
         _viewKind = view.ToLowerInvariant() switch
         {
             "videos" => SidebarRowKind.Videos,
@@ -1488,12 +2046,23 @@ internal sealed class MainForm : Form, IMessageFilter
             "albums" => SidebarRowKind.Albums,
             "artists" => SidebarRowKind.Artists,
             "local" => SidebarRowKind.LocalMusic,
+            "localalbums" => SidebarRowKind.LocalAlbums,
+            "localartists" => SidebarRowKind.LocalArtists,
+            "home" => SidebarRowKind.Home,
             _ => SidebarRowKind.AllSongs,
         };
         _current = null;
         _browseFilter = null;
         BuildSidebar();
         ShowCurrent();
+        if (_viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists or SidebarRowKind.Home && _localStale) { _localStale = false; ScanLocalMusicAsync(); }   // harness: the PC library is scanned on demand
+    }
+
+    /// <summary>Render harness: dock the side card open on a tab (UpNext | History | Lyrics).</summary>
+    public void PreviewSidePanel(string tab)
+    {
+        if (tab == "History") { var t = _playingTrack ?? _tracks.Rows.Cast<DataGridViewRow>().Select(r => r.Tag as Track).FirstOrDefault(x => x is not null); if (t is not null) _played.Add((t, DateTime.Now.AddMinutes(-3))); }
+        SetSideOpen(true, SidePanel.ParseTab(tab));
     }
 
     private void LoadDevice(IPodDevice device)
@@ -1521,11 +2090,12 @@ internal sealed class MainForm : Form, IMessageFilter
         RebuildPlaylists();
         SeedDefaultSort();
         _queue.Clear();   // a freshly-loaded library invalidates any queued track instances
-        _viewKind = SidebarRowKind.AllSongs;
+        _viewKind = _landOnHome || _viewKind == SidebarRowKind.Home ? SidebarRowKind.Home : SidebarRowKind.AllSongs;   // the first library lands on the home page
         _current = null;
         _browseFilter = null;
         BuildSidebar();
         ShowCurrent();
+        if (_viewKind == SidebarRowKind.Home && _localStale && _settings.LocalMusicFolders.Count > 0) { _localStale = false; ScanLocalMusicAsync(); }   // the page's PC shelf
         MaybeAutoRecoverGuid();
     }
 
@@ -1561,25 +2131,40 @@ internal sealed class MainForm : Form, IMessageFilter
     private void BuildSidebar()
     {
         _sidebar.Begin();
-        _sidebar.AddSection(Loc.T("DEVICE"));
+        _sidebar.AddItem(SidebarRowKind.Home, Loc.T("Home"), "home", _viewKind == SidebarRowKind.Home);   // the front door, above everything
+        // The device is the first ROW, not a section: its picture, its name, its free space — the same 40 px
+        // object the working bar and the player use. A "DEVICE" header above one row said nothing.
         foreach (var d in _devices)
-            // Clicking the device opens its info page; the row is highlighted when that page is shown.
-            _sidebar.AddItem(SidebarRowKind.Device, d.Profile.ModelName ?? d.Profile.ModelNumber ?? "iPod", d,
-                _viewKind == SidebarRowKind.Device && ReferenceEquals(d, _device));
+        {
+            // "iPod mini (2nd gen)" does not fit a 220 px row beside the eject button. The model is line one;
+            // the generation goes to line two with the free space, where a caption has the room.
+            string full = d.Profile.ModelName ?? d.Profile.ModelNumber ?? "iPod";
+            string name = full, gen = "";
+            int paren = full.IndexOf(" (", StringComparison.Ordinal);
+            if (paren > 0 && full.EndsWith(')')) { name = full[..paren]; gen = full[(paren + 2)..^1]; }
+            // Line two is the free space alone: "2nd gen · 24,2 GB free" still ran out of room beside the eject
+            // button, and the generation is on the device page and in the working bar's title anyway.
+            string? sub = FreeSpaceLine(d) ?? (gen.Length > 0 ? gen : null);
+            _sidebar.AddItem(SidebarRowKind.Device, name, d,
+                _viewKind == SidebarRowKind.Device && ReferenceEquals(d, _device), sub: sub);
+        }
         if (_devices.Count == 0) _sidebar.AddHint(Loc.T("Not connected"));   // no bare header — same hint pattern as the playlist sections
 
         var others = new List<Playlist>();
         if (_db is not null)
         {
             var master = _db.Master;
+            // Counts on the rows — the figure the old banner subtitle used to carry, now where the eye already is.
+            var audio = _db.Tracks.Where(t => !MediaType.IsVideo(t.MediaType)).ToList();
+            int videoN = _db.Tracks.Count(t => MediaType.IsVideo(t.MediaType));
             _sidebar.AddSection(Loc.T("LIBRARY"));
-            _sidebar.AddItem(SidebarRowKind.AllSongs, Loc.T("All songs"), "all", _viewKind == SidebarRowKind.AllSongs);
-            _sidebar.AddItem(SidebarRowKind.Albums, Loc.T("Albums"), "albums", _viewKind == SidebarRowKind.Albums);
-            _sidebar.AddItem(SidebarRowKind.Artists, Loc.T("Artists"), "artists", _viewKind == SidebarRowKind.Artists);
+            _sidebar.AddItem(SidebarRowKind.AllSongs, Loc.T("All songs"), "all", _viewKind == SidebarRowKind.AllSongs, Fig(audio.Count));
+            _sidebar.AddItem(SidebarRowKind.Albums, Loc.T("Albums"), "albums", _viewKind == SidebarRowKind.Albums, Fig(audio.Select(AlbumKey).Distinct().Count()));
+            _sidebar.AddItem(SidebarRowKind.Artists, Loc.T("Artists"), "artists", _viewKind == SidebarRowKind.Artists, Fig(audio.Select(ArtistKey).Distinct().Count()));
             if (_device?.Profile.SupportsVideo == true && _settings.ShowVideos)
-                _sidebar.AddItem(SidebarRowKind.Videos, Loc.T("Videos"), "videos", _viewKind == SidebarRowKind.Videos);
+                _sidebar.AddItem(SidebarRowKind.Videos, Loc.T("Videos"), "videos", _viewKind == SidebarRowKind.Videos, Fig(videoN));
             if (_device?.Profile.SupportsPhotos == true && _settings.ShowPhotos)
-                _sidebar.AddItem(SidebarRowKind.Photos, Loc.T("Photos"), "photos", _viewKind == SidebarRowKind.Photos);
+                _sidebar.AddItem(SidebarRowKind.Photos, Loc.T("Photos"), "photos", _viewKind == SidebarRowKind.Photos, Fig(_photos?.Photos.Count ?? 0));
 
             others = _shownPlaylists.Where(p => !ReferenceEquals(p, master)).ToList();
             // Always show the PLAYLISTS section so the area is discoverable; when empty, a faint hint
@@ -1588,20 +2173,28 @@ internal sealed class MainForm : Form, IMessageFilter
             if (others.Count > 0)
                 foreach (var pl in others)
                     _sidebar.AddItem(IsSmart(pl.PersistentId) ? SidebarRowKind.SmartPlaylist : SidebarRowKind.Playlist, pl.Name, pl,
-                        _viewKind == SidebarRowKind.Playlist && ReferenceEquals(pl, _current));
+                        _viewKind == SidebarRowKind.Playlist && ReferenceEquals(pl, _current), Fig(pl.TrackIds.Count));
             else if (_device?.Profile.CanWrite == true)
                 _sidebar.AddHint(Loc.T("Right-click here to add one"));
         }
 
         // Always available, with or without an iPod: music that lives on this PC.
         _sidebar.AddSection(Loc.T("ON THIS PC"), showAdd: true, addKind: SidebarRowKind.LocalPlaylist);   // "+" → new local playlist (always available, PC-side)
-        _sidebar.AddItem(SidebarRowKind.LocalMusic, Loc.T("Local Music"), "local", _viewKind == SidebarRowKind.LocalMusic);
+        _sidebar.AddItem(SidebarRowKind.LocalMusic, Loc.T("Local Music"), "local", _viewKind == SidebarRowKind.LocalMusic,
+            _localTracks.Count > 0 ? Fig(_localTracks.Count) : null);
+        if (_localTracks.Count > 0)   // the PC library browses like the iPod's: by album and by artist
+        {
+            var la = _localTracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+            _sidebar.AddItem(SidebarRowKind.LocalAlbums, Loc.T("Albums"), "localalbums", _viewKind == SidebarRowKind.LocalAlbums, Fig(la.Select(AlbumKey).Distinct().Count()));
+            _sidebar.AddItem(SidebarRowKind.LocalArtists, Loc.T("Artists"), "localartists", _viewKind == SidebarRowKind.LocalArtists, Fig(la.Select(ArtistKey).Distinct().Count()));
+        }
         foreach (var lp in _settings.LocalPlaylists)
             _sidebar.AddItem(SidebarRowKind.LocalPlaylist, lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name, lp,
                 _viewKind == SidebarRowKind.LocalPlaylist && ReferenceEquals(lp, _currentLocalPlaylist));
         if (_settings.LocalPlaylists.Count == 0) _sidebar.AddHint(Loc.T("Right-click to add a playlist"));
 
         _sidebar.End();
+        foreach (var d in _devices) _sidebar.SetIcon(d, DeviceRailIcon(d));   // the iPod's own picture, 40 px
         // Playlists with a chosen cover get it as their sidebar icon instantly; the rest fall back to
         // the background first-track cover.
         var custom = new List<Playlist>();
@@ -1623,6 +2216,28 @@ internal sealed class MainForm : Form, IMessageFilter
             if (cid >= 0) _sidebar.SetIcon(lp, cid == CoverArt.CassetteId ? CoverArt.GenerateTitled(cid, SidebarIconPx, lpName) : CoverArt.Generate(cid, SidebarIconPx));
         }
         LoadSidebarIconsAsync(others.Where(p => !custom.Contains(p)).ToList());
+    }
+
+    private static string? Fig(int n) => n > 0 ? n.ToString("N0") : null;
+
+    /// <summary>"20,6 GB free" for the rail's device row — from the drive, which is instant for a mounted iPod.</summary>
+    private static string? FreeSpaceLine(IPodDevice d)
+    {
+        try
+        {
+            string? root = Path.GetPathRoot(d.MountRoot);
+            if (string.IsNullOrEmpty(root)) return null;
+            var di = new DriveInfo(root);
+            return di.IsReady ? Loc.T("{0} free", CapacityBar.Human(di.AvailableFreeSpace)) : null;
+        }
+        catch { return null; }
+    }
+
+    private readonly Dictionary<IPodDevice, Bitmap> _railIcons = new();
+    private Bitmap DeviceRailIcon(IPodDevice d)
+    {
+        if (!_railIcons.TryGetValue(d, out var bmp)) { bmp = IpodArt.Render(d.Profile.Generation, 40, d.Profile.ModelNumber); _railIcons[d] = bmp; }
+        return bmp;
     }
 
     /// <summary>Background-loads each playlist's first-track cover as its sidebar icon (gen-guarded).</summary>
@@ -1657,6 +2272,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void OnSidebarActivated(SidebarRowKind kind, object? tag)
     {
+        _landOnHome = false;   // from here on the view is the user's choice, not the landing page
         ClearSearch(); // a query from a previous view must not leak into the one we're switching to
         TransitionCenter(() =>
         {
@@ -1673,8 +2289,16 @@ internal sealed class MainForm : Form, IMessageFilter
                 case SidebarRowKind.Videos:
                 case SidebarRowKind.Photos:
                 case SidebarRowKind.LocalMusic:
+                case SidebarRowKind.LocalAlbums:
+                case SidebarRowKind.LocalArtists:
                     if (kind == SidebarRowKind.LocalMusic) _localStale = true; // re-clicking the row rescans for new files
+                    if (kind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _localStale) { _localStale = false; ScanLocalMusicAsync(); }   // first visit from an iPod view: the folders are not scanned yet
                     _viewKind = kind; _current = null; _browseFilter = null; // clicking the section resets any drill-in
+                    BuildSidebar(); ShowCurrent();
+                    break;
+                case SidebarRowKind.Home:
+                    if (_localStale && _settings.LocalMusicFolders.Count > 0) { _localStale = false; ScanLocalMusicAsync(); }   // the page shows the PC's albums too
+                    _viewKind = kind; _current = null; _browseFilter = null;
                     BuildSidebar(); ShowCurrent();
                     break;
                 case SidebarRowKind.Playlist when tag is Playlist pl:
@@ -1731,7 +2355,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // cross-slide from the old one (old pushes left / new rides in from the right, 360ms OutCubic — same as the
         // content). A re-snap on settle then refreshes covers that streamed in during the slide.
         (Bitmap? nt, int nh, int ndx, int nw) = (null, 0, 0, 0);
-        if (PrepareFrostSource()) (nt, nh, ndx, nw) = ComputeFrostTuple(useScratch: false);   // owned: the slide holds it for 360ms
+        if (!_deck && PrepareFrostSource()) (nt, nh, ndx, nw) = ComputeFrostTuple(useScratch: false);   // owned: the slide holds it for 360ms
         _nowPlaying.SlideFrost(nt, nh, ndx, nw);
         center.Controls.Add(overlay);
         overlay.BringToFront();
@@ -1749,18 +2373,22 @@ internal sealed class MainForm : Form, IMessageFilter
         _collageGen++;   // any view switch invalidates an in-flight mosaic-header load (so it can't land on the new view)
         bool photos = _viewKind == SidebarRowKind.Photos;
         bool device = _viewKind == SidebarRowKind.Device;
-        bool browse = _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists && _browseFilter is null; // the grid, not a drill-in
-        bool songs = !photos && !device && !browse;
+        bool browse = _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _browseFilter is null; // the grid, not a drill-in
+        bool home = _viewKind == SidebarRowKind.Home;
+        bool songs = !photos && !device && !browse && !home;
         // The four centre panels are all Dock=Fill siblings. Only ONE must be Visible at a time — otherwise two
         // visible Fill siblings compete and only the back-most gets real size, so the front one collapses to zero.
         // (Previously this toggled _tracks.Parent — the INNER viewport — and left the gridHost itself always
         // visible, so Albums/Artists/Photos rendered for a frame then "went away" when a later layout pass flipped
         // which Fill won.) Hide the whole song-list host instead, and keep only the active panel visible + at back.
-        _gridHost.Visible = songs;
+        bool empty = (songs && _lib is null && _viewKind == SidebarRowKind.AllSongs || home && _homeView?.IsEmpty == true) && _emptyView is not null;   // nothing connected, nothing to list (or show)
+        _gridHost.Visible = songs && !empty;
+        if (_emptyView is not null) _emptyView.Visible = empty;
         _photoView.Visible = photos;
         _deviceView.Visible = device;
         _browseView.Visible = browse;
-        Control active = photos ? _photoView : device ? _deviceView : browse ? _browseView : _gridHost;
+        if (_homeView is not null) _homeView.Visible = home && !empty;
+        Control active = photos ? _photoView : device ? _deviceView : browse ? _browseView : home && !empty ? _homeView : empty ? _emptyView! : _gridHost;
         active.SendToBack();
     }
 
@@ -1768,11 +2396,13 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         _header.SetBadge("", false);   // cleared for every view; the song list re-sets it below when the DB has warnings
         ApplyColumns();                // rating/plays visibility depends on the view (hidden for PC-side files)
+        if (_viewKind == SidebarRowKind.Home) { ShowHome(); return; }
         if (_viewKind == SidebarRowKind.LocalPlaylist) { ShowLocalPlaylist(); return; }
         if (_viewKind == SidebarRowKind.LocalMusic) { ShowLocalMusic(); return; }
+        if (_viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists) { if (_browseFilter is null) ShowBrowse(); else ShowLocalMusic(); return; }   // the PC library's grid, or one of its albums/artists
         if (_viewKind == SidebarRowKind.Photos) { ShowPhotos(); return; }
         if (_viewKind == SidebarRowKind.Device) { ShowDevice(); return; }
-        if (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists && _browseFilter is null) { ShowBrowse(); return; }
+        if (_viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _browseFilter is null) { ShowBrowse(); return; }
 
         SetCenter();
         _tracks.Rows.Clear();
@@ -1784,7 +2414,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         List<Track> list;
         string kicker, title;
-        if (_browseFilter is not null && _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists)
+        if (_browseFilter is not null && _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists)
         {
             kicker = Loc.T(_browseKicker); title = _browseTitle;
             list = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).Where(_browseFilter).ToList();
@@ -1833,6 +2463,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         _populatingGrid = false;
         _tracks.ResumeLayout();
+        UpdateSelectionBar();   // a repopulate drops the selection without an event - the action bar must go with it
         SizeTracks();   // once, after the bulk populate (the per-row handler is suppressed during it)
 
         string noun = isVideos ? "video" : "song";
@@ -1860,6 +2491,171 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_settings.ListArtwork) LoadArtworkAsync(list, artSize);   // skip cover loading when text-only
     }
 
+    // ---- the home page ----
+
+    private const string HomeIpod = "ipod:", HomePc = "pc:";   // tile-key prefixes: which library the album is in
+
+    /// <summary>The overview: the newest albums (the iPod's, then the PC's), the song that was playing when Mixtape last
+    /// closed, and the most-played (else most recently played) songs. Every part is optional; with nothing at all the
+    /// centre shows the empty state instead.</summary>
+    private void ShowHome()
+    {
+        _tracks.Rows.Clear();
+        _hotRow = -1;
+        _header.ArtClickable = false;
+        var ipod = _db?.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList() ?? new List<Track>();
+        var pc = _localTracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        var reps = new Dictionary<string, Track>();
+        var strips = new List<HomeView.Strip>();
+        if (ipod.Count > 0) strips.Add(RecentShelf(ipod, false, Loc.T("Recently added"), reps));
+        if (pc.Count > 0) strips.Add(RecentShelf(pc, true, ipod.Count > 0 ? Loc.T("New on your PC") : Loc.T("Recently added"), reps));
+        var rediscover = RediscoverShelf(ipod.Count > 0 ? ipod : pc, ipod.Count == 0, reps);   // stays at the bottom: the shelves above are the news
+
+        // the list: the most-played songs, else the most recently played (both from the iPod's own counters)
+        var rows = new List<HomeView.Row>(); string listLabel = "";
+        var most = ipod.Where(t => t.PlayCount > 0).OrderByDescending(t => t.PlayCount).ThenByDescending(t => t.LastPlayed ?? DateTime.MinValue).Take(6).ToList();
+        if (most.Count > 0)
+        {
+            listLabel = Loc.T("Most played");
+            foreach (var t in most) rows.Add(new HomeView.Row { Track = t, Title = t.DisplayTitle, Sub = t.Artist ?? "", Figure = t.PlayCount.ToString(), Accent = true });
+        }
+        else
+        {
+            var recent = ipod.Where(t => t.LastPlayed is { } d && d.Year > 1970).OrderByDescending(t => t.LastPlayed).Take(6).ToList();
+            if (recent.Count > 0)
+            {
+                listLabel = Loc.T("Recently played");
+                foreach (var t in recent) rows.Add(new HomeView.Row { Track = t, Title = t.DisplayTitle, Sub = t.Artist ?? "", Figure = DateAddedStr(t.LastPlayed) });
+            }
+        }
+
+        if (rediscover is not null) strips.Add(rediscover);
+        var resume = ResumeCard(reps);
+        _homeView.SetContent(strips, resume, listLabel, rows);
+        SetCenter();
+
+        // the header: the page, and where the music is
+        var parts = new List<string>();
+        if (_device is not null)
+        {
+            string name = _device.Profile.ModelName ?? _device.Profile.ModelNumber ?? "iPod";
+            int paren = name.IndexOf(" (", StringComparison.Ordinal);
+            if (paren > 0) name = name[..paren];
+            parts.Add(name);
+            if (FreeSpaceLine(_device) is { } free) parts.Add(free);
+        }
+        if (pc.Count > 0) parts.Add(Loc.T("{0} on your PC", CountNoun(pc.Count, "song")));
+        if (parts.Count == 0) parts.Add(Loc.T("No iPod connected"));
+        _header.SetInfo("", Loc.T("Home"), string.Join("  ·  ", parts), Theme.StableHash("Home"), keepArt: true);
+        using (var tile = HomeView.HeaderTile(150)) _header.SetArt(tile);
+        _baseStatus = ""; _baseStatusClickable = false; SetStatus("");
+        SetActionButtons();
+        LoadHomeCoversAsync(reps);
+        ScheduleSnap();
+    }
+
+    /// <summary>One shelf: the newest albums of a library (by the date their songs were added), newest first.</summary>
+    private HomeView.Strip RecentShelf(List<Track> audio, bool local, string label, Dictionary<string, Track> reps)
+    {
+        var strip = new HomeView.Strip { Label = label };
+        foreach (var grp in audio.GroupBy(AlbumKey).OrderByDescending(g => g.Max(t => t.DateAdded ?? DateTime.MinValue)).Take(10))
+        {
+            var first = grp.First();
+            string title = DisplayAlbum(first), artist = DisplayAlbumArtist(first);
+            string key = (local ? HomePc : HomeIpod) + grp.Key;
+            strip.Tiles.Add(new HomeView.Tile { Key = key, Title = title, Subtitle = artist, Local = local, Seed = Theme.StableHash(title + artist), Initials = Theme.Initials(title, artist) });
+            reps[key] = first;
+        }
+        return strip;
+    }
+
+    /// <summary>"Rediscover": albums drawn at random from the larger library — the same draw all day, a new one tomorrow —
+    /// so the page also surfaces what the news shelves never would. Needs a library big enough for a draw to mean anything.</summary>
+    private HomeView.Strip? RediscoverShelf(List<Track> audio, bool local, Dictionary<string, Track> reps)
+    {
+        var albums = audio.GroupBy(AlbumKey).ToList();
+        if (albums.Count < 12) return null;
+        var rnd = new Random(DateTime.Today.DayOfYear * 131 + DateTime.Today.Year);
+        var strip = new HomeView.Strip { Label = Loc.T("Rediscover") };
+        foreach (var grp in albums.OrderBy(_ => rnd.Next()).Take(10))
+        {
+            var first = grp.First();
+            string title = DisplayAlbum(first), artist = DisplayAlbumArtist(first);
+            string key = (local ? HomePc : HomeIpod) + grp.Key;
+            strip.Tiles.Add(new HomeView.Tile { Key = key, Title = title, Subtitle = artist, Local = local, Seed = Theme.StableHash(title + artist), Initials = Theme.Initials(title, artist) });
+            reps.TryAdd(key, first);
+        }
+        return strip;
+    }
+
+    /// <summary>"Continue listening": the song that was playing when Mixtape last closed — if it is still here, was
+    /// well under way, had not ended, and is not the one playing right now.</summary>
+    private HomeView.Resume? ResumeCard(Dictionary<string, Track> reps)
+    {
+        string key = _settings.ResumeTrack; double sec = _settings.ResumeSeconds;
+        if (key.Length == 0 || sec < 10) return null;
+        Track? t = null; bool local = false;
+        if (key.StartsWith("db:", StringComparison.Ordinal) && _db is not null && ulong.TryParse(key.AsSpan(3), out ulong id)) t = _db.Tracks.FirstOrDefault(x => x.Dbid == id);
+        else if (key.StartsWith("file:", StringComparison.Ordinal)) { string p = key[5..]; t = _localTracks.FirstOrDefault(x => string.Equals(x.LocalPath, p, StringComparison.OrdinalIgnoreCase)); local = t is not null; }
+        if (t is null || MediaType.IsVideo(t.MediaType) || ReferenceEquals(t, _playingTrack)) return null;
+        double len = t.LengthMs / 1000.0;
+        if (len > 0 && sec > len - 10) return null;
+        string tileKey = (local ? HomePc : HomeIpod) + AlbumKey(t);
+        reps.TryAdd(tileKey, t);
+        _homeView.ResumeKey = tileKey;
+        string sub = string.Join("  •  ", new[] { t.Artist, t.Album }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        return new HomeView.Resume
+        {
+            Track = t, Title = t.DisplayTitle, Sub = sub, Seconds = sec,
+            Times = NowPlayingBar.Fmt(sec) + " / " + NowPlayingBar.Fmt(len),
+            Cover = _settings.ShowArtwork ? ArtworkService.TryGet("br:" + ArtworkService.KeyFor(t), BrowseCover) : null,
+        };
+    }
+
+    private void LoadHomeCoversAsync(Dictionary<string, Track> reps)
+    {
+        if (!_settings.ShowArtwork || reps.Count == 0) return;
+        int gen = ++_homeArtGen;
+        string? mount = _device?.MountRoot;
+        _homeReps = reps;
+        var jobs = reps.Select(kv => (kv.Key, Path: kv.Value.LocalPath ?? (mount is not null ? kv.Value.ResolveFilePath(mount) : null), ArtKey: ArtworkService.KeyFor(kv.Value), Track: kv.Value)).ToList();
+        var pending = new List<(string Key, string? Path, string ArtKey, Track Track)>();
+        foreach (var j in jobs)   // already-cached covers land before the view-switch snapshot; the rest stream in
+        {
+            var hit = ArtworkService.TryGet("br:" + j.ArtKey, BrowseCover);
+            if (hit != null) _homeView.SetCover(j.Key, hit, animate: false);
+            else pending.Add(j);
+        }
+        if (pending.Count == 0) return;
+        Task.Run(() =>
+        {
+            foreach (var j in pending)
+            {
+                if (_homeArtGen != gen) return;
+                var art = ArtworkService.Load("br:" + j.ArtKey, j.Path, BrowseCover);
+                if (art != null) { string key = j.Key; TryBeginInvoke(() => { if (_homeArtGen == gen) { _homeView.SetCover(key, art); ScheduleSnap(); } }); }
+                else CoverDownloads.Request(j.Track, j.Path);
+            }
+        });
+    }
+
+    /// <summary>A shelf tile → that album's songs (the iPod's or the PC's), the rail following.</summary>
+    private void OnHomeTile(HomeView.Tile tile)
+    {
+        string key = tile.Key[(tile.Local ? HomePc.Length : HomeIpod.Length)..];
+        _landOnHome = false;
+        TransitionCenter(() => { NavigateToAlbum(key, tile.Local); BuildSidebar(); });
+    }
+
+    /// <summary>"Continue": play the bookmarked song and pick it up where it was.</summary>
+    private void ResumeFromHome(HomeView.Resume r)
+    {
+        PlayAnywhere(r.Track);
+        if (!ReferenceEquals(_playingTrack, r.Track)) return;
+        double dur = _nowPlaying.DurationSeconds > 0 ? _nowPlaying.DurationSeconds : r.Track.LengthMs / 1000.0;
+        if (dur > 0) _nowPlaying.SeekFraction(r.Seconds / dur);
+    }
+
     // ---- album / artist browse ----
 
     private const int BrowseCover = 150;
@@ -1877,11 +2673,13 @@ internal sealed class MainForm : Form, IMessageFilter
         _hotRow = -1;
         _header.ArtClickable = false;
 
-        bool albums = _viewKind == SidebarRowKind.Albums;
+        bool albums = _viewKind is SidebarRowKind.Albums or SidebarRowKind.LocalAlbums;
+        bool local = _viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;   // the PC library instead of the iPod's
         string title = albums ? Loc.T("Albums") : Loc.T("Artists");
-        if (_db is null) { _browseView.SetItems(Array.Empty<(string, string, string)>(), "—"); _header.SetInfo(Loc.T("LIBRARY"), title, "", 0); SetActionButtons(); return; }
+        string kicker = local ? Loc.T("ON THIS PC") : Loc.T("LIBRARY");
+        if (!local && _db is null) { _browseView.SetItems(Array.Empty<(string, string, string)>(), "—"); _header.SetInfo(kicker, title, "", 0); SetActionButtons(); return; }
 
-        var audio = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        var audio = (local ? _localTracks : _db!.Tracks).Where(t => MediaType.IsAudio(t.MediaType)).ToList();
         var cards = new List<(string Key, string Title, string Subtitle)>();
         var reps = new Dictionary<string, Track>(); // representative track per card (for the cover)
 
@@ -1916,13 +2714,14 @@ internal sealed class MainForm : Form, IMessageFilter
             foreach (var k in reps.Keys.Where(k => !keep.Contains(k)).ToList()) reps.Remove(k);
         }
 
-        _browseView.SetItems(cards, albums ? Loc.T("No albums on this iPod.") : Loc.T("No artists on this iPod."));
+        _browseView.SetItems(cards, albums ? (local ? Loc.T("No albums in your folders.") : Loc.T("No albums on this iPod."))
+                                          : (local ? Loc.T("No artists in your folders.") : Loc.T("No artists on this iPod.")));
         ScheduleSnap();   // frost the now-playing bar with the album/artist grid behind it
         string sub = CountNoun(cards.Count, albums ? "album" : "artist");
         // Header art = a MOSAIC of the first few real covers (not the ♪ placeholder). Hold the current cover until it
         // lands; fall back to the gradient when there's nothing to show.
         bool collage = cards.Count > 0 && _settings.ShowArtwork;
-        _header.SetInfo(Loc.T("LIBRARY"), title, sub, Theme.StableHash(albums ? "Albums" : "Artists"), keepArt: collage);
+        _header.SetInfo(kicker, title, sub, Theme.StableHash(albums ? "Albums" : "Artists"), keepArt: collage);
         if (!collage) _header.SetArt(null);
         else LoadCardCollageHeader(cards.Take(4).Select(c => (reps[c.Key], Theme.StableHash(c.Title + c.Subtitle))).ToList(), "br:", BrowseCover);
         _baseStatus = ""; _baseStatusClickable = false; SetStatus("");  // count shows in the subtitle
@@ -1933,14 +2732,15 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Drill into the clicked album/artist card → show its songs in the track grid.</summary>
     private void OnBrowseActivated(string key)
     {
-        if (_db is null) return;
+        bool local = _viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
+        if (!local && _db is null) return;
         ClearSearch(); // drilling into an album/artist starts unfiltered (no leftover query)
         TransitionCenter(() =>
         {
-            if (_viewKind == SidebarRowKind.Albums)
+            if (_viewKind is SidebarRowKind.Albums or SidebarRowKind.LocalAlbums)
             {
                 _browseFilter = t => AlbumKey(t) == key;
-                var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
+                var first = (local ? _localTracks : _db!.Tracks).FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
                 _browseTitle = first is not null ? DisplayAlbum(first) : Loc.T("Album");
                 _browseKicker = "ALBUM";
             }
@@ -1956,14 +2756,15 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void LoadBrowseCoversAsync(Dictionary<string, Track> reps)
     {
-        if (!_settings.ShowArtwork || _device is null || reps.Count == 0) return;
+        if (!_settings.ShowArtwork || reps.Count == 0) return;
         int gen = ++_browseArtGen;
-        string mount = _device.MountRoot;
-        var jobs = reps.Select(kv => (kv.Key, Path: kv.Value.ResolveFilePath(mount), ArtKey: ArtworkService.KeyFor(kv.Value))).ToList();
+        string? mount = _device?.MountRoot;
+        _browseReps = reps;   // kept so a cover that arrives later can find its card
+        var jobs = reps.Select(kv => (kv.Key, Path: kv.Value.LocalPath ?? (mount is not null ? kv.Value.ResolveFilePath(mount) : null), ArtKey: ArtworkService.KeyFor(kv.Value), Track: kv.Value)).ToList();
         // Apply ALREADY-CACHED covers synchronously + instantly first, so they're present when the view-switch
         // snapshot is taken (revisits show real covers sliding in, instead of placeholders that pop after the
         // transition). Only genuinely-uncached covers go to the background decode + cross-dissolve in.
-        var pending = new List<(string Key, string? Path, string ArtKey)>();
+        var pending = new List<(string Key, string? Path, string ArtKey, Track Track)>();
         foreach (var j in jobs)
         {
             var hit = ArtworkService.TryGet("br:" + j.ArtKey, BrowseCover);
@@ -1978,6 +2779,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (_browseArtGen != gen) return;
                 var art = ArtworkService.Load("br:" + j.ArtKey, j.Path, BrowseCover);
                 if (art != null) { string key = j.Key; TryBeginInvoke(() => { if (_browseArtGen == gen) { _browseView.SetCover(key, art); ScheduleSnap(); } }); }   // re-snap (debounced) so the frost picks up loaded covers
+                else CoverDownloads.Request(j.Track, j.Path);
             }
         });
     }
@@ -2005,7 +2807,11 @@ internal sealed class MainForm : Form, IMessageFilter
             _mini.RepeatRequested += () => _nowPlaying.CycleRepeat();
             _mini.EqualizerRequested += OpenEqualizer;
             _mini.ProFeaturesRequested += OpenProFeatures;
-            _mini.SpectrumProvider = _nowPlaying.ReadSpectrum;   // live spectrum for the mini's visualizer
+            _mini.QueueRequested += OpenUpNext;
+            _mini.LyricsRequested += OpenLyricsPopover;
+            _mini.ShowRemaining = _settings.ShowRemaining;
+            _mini.SpectrumProvider = _nowPlaying.ReadSpectrum;   // live spectrum for the card's cover bars
+            _mini.CoverClicked += () => { RestoreFromMini(); RevealPlayingRow(); };   // the cover: back to the window, at the playing song
             _mini.ExpandRequested += RestoreFromMini;
         }
 
@@ -2020,7 +2826,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         // Seed it with the current state before showing.
         _miniTrack = _nowPlaying.NowTrack;
-        _mini.SetTrack(_miniTrack, _nowPlaying.LoadHeroCover(460));   // hi-res so the big cover hero stays sharp
+        _mini.SetTrack(_miniTrack, _nowPlaying.LoadHeroCover(NowPlayingBar.CoverArtPx));   // the card's 40 px cover, decoded as on the deck
         _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted, _nowPlaying.Shuffle, _nowPlaying.Repeat);
 
         _mini.Show();
@@ -2046,7 +2852,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (!ReferenceEquals(_nowPlaying.NowTrack, _miniTrack))
         {
             _miniTrack = _nowPlaying.NowTrack;
-            _mini.SetTrack(_miniTrack, _nowPlaying.LoadHeroCover(460));   // hi-res so the big cover hero stays sharp
+            _mini.SetTrack(_miniTrack, _nowPlaying.LoadHeroCover(NowPlayingBar.CoverArtPx));   // the card's 40 px cover, decoded as on the deck
         }
         _mini.SetProgress(_nowPlaying.Playing, _nowPlaying.PositionSeconds, _nowPlaying.DurationSeconds, _nowPlaying.VolumeLevel, _nowPlaying.Muted, _nowPlaying.Shuffle, _nowPlaying.Repeat);
     }
@@ -2062,6 +2868,9 @@ internal sealed class MainForm : Form, IMessageFilter
     /// single-instance mutex) and Windows shutdown must never be blocked by a modal prompt.</summary>
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        FlushLyricSync();
+        SaveResume(persist: false);   // the "Continue listening" bookmark rides the volume write
+        SaveVolume();
         if (e.CloseReason != CloseReason.UserClosing || e.Cancel) { base.OnFormClosing(e); return; }
 
         if (_bgWriteRunning)
@@ -2118,10 +2927,10 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_mini is not null) { _mini.Dispose(); _mini = null; }
         // App-lifetime timers aren't in a components container — dispose them so repeated show/close
         // (test harness / --render reuse) doesn't leak Win32 timer registrations.
-        _deviceChangeTimer.Dispose(); _dropHideTimer.Dispose(); _searchDebounce.Dispose(); _rowDividerPen.Dispose(); _ratingFont.Dispose();
+        _deviceChangeTimer.Dispose(); _dropHideTimer.Dispose(); _searchDebounce.Dispose(); _rowDividerPen?.Dispose(); _ratingFont.Dispose();
         _snapTimer.Dispose(); _listSnap?.Dispose(); _frostScratch?.Dispose();
         _bRowSel?.Dispose(); _bRowHot?.Dispose(); _bRowBg?.Dispose();
-        _deviceResizeTimer.Dispose();
+        _deviceResizeTimer.Dispose(); _lyricSave.Dispose(); _volSave.Dispose();
         base.OnFormClosed(e);
     }
 
@@ -2129,7 +2938,7 @@ internal sealed class MainForm : Form, IMessageFilter
     /// views, otherwise the whole iPod library.</summary>
     private List<Track> CoverFlowSource(out bool local)
     {
-        local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist;
+        local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
         IEnumerable<Track> src = local ? _localTracks : (_db?.Tracks ?? Enumerable.Empty<Track>());
         return src.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
     }
@@ -2240,6 +3049,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int gen = ++_cfGen;
         string? mount = _device?.MountRoot;
         var jobs = reps;
+        _cfReps = reps;
         Task.Run(() =>
         {
             foreach (var (i, rep) in jobs)
@@ -2247,7 +3057,29 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (_cfGen != gen) return;
                 string? path = rep.LocalPath ?? (mount is not null ? rep.ResolveFilePath(mount) : null);
                 Bitmap? art = null;
-                try { art = ArtworkService.Load("cf:" + ArtworkService.KeyFor(rep), path, 300); } catch { }
+                try { art = ArtworkService.LoadSquare("cf:" + ArtworkService.KeyFor(rep), path, CoverFlowView.SourcePx); } catch { }
+                if (art is not null) { int ii = i; TryBeginInvoke(() => { if (_cfGen == gen && _coverFlow is { Visible: true }) _coverFlow.SetCover(ii, art); }); }
+                else CoverDownloads.Request(rep, path);
+            }
+        });
+    }
+
+    private List<(int, Track)>? _cfReps;   // Cover Flow's (index, representative track) list, for late covers
+
+    private void LoadCoverFlowCoversFor(string baseKey)
+    {
+        if (_cfReps is null || _coverFlow is null) return;
+        int gen = _cfGen;
+        string? mount = _device?.MountRoot;
+        var hits = _cfReps.Where(p => CoverDownloads.BaseKey(ArtworkService.KeyFor(p.Item2)) == baseKey).ToList();
+        if (hits.Count == 0) return;
+        Task.Run(() =>
+        {
+            foreach (var (i, rep) in hits)
+            {
+                string? path = rep.LocalPath ?? (mount is not null ? rep.ResolveFilePath(mount) : null);
+                Bitmap? art = null;
+                try { art = ArtworkService.LoadSquare("cf:" + ArtworkService.KeyFor(rep), path, CoverFlowView.SourcePx); } catch { }
                 if (art is not null) { int ii = i; TryBeginInvoke(() => { if (_cfGen == gen && _coverFlow is { Visible: true }) _coverFlow.SetCover(ii, art); }); }
             }
         });
@@ -2259,15 +3091,20 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (_coverFlow is null || _content is null) return;
         var a = _content.Bounds;
-        a.Height = Math.Max(1, a.Height - NowPlayingBar.H);
+        if (!_deck) a.Height = Math.Max(1, a.Height - NowPlayingBar.H);   // deck mode: the whole card is content
         _coverFlow.Bounds = a;
 
         int w = a.Width, h = a.Height, r = CardRadius;
-        if (w <= r * 2 || h <= r) { _coverFlow.Region = null; return; }
+        if (w <= r * 2 || h <= r * 2) { _coverFlow.Region = null; return; }
         using var p = new System.Drawing.Drawing2D.GraphicsPath();
         p.AddArc(0, 0, r * 2, r * 2, 180, 90);
         p.AddArc(w - r * 2, 0, r * 2, r * 2, 270, 90);
-        p.AddLine(w, h, 0, h);     // square bottom edge — sits against the Now-Playing bar
+        if (_deck)
+        {
+            p.AddArc(w - r * 2, h - r * 2, r * 2, r * 2, 0, 90);     // all four corners: nothing sits under it
+            p.AddArc(0, h - r * 2, r * 2, r * 2, 90, 90);
+        }
+        else p.AddLine(w, h, 0, h);     // square bottom edge — sits against the Now-Playing bar
         p.CloseFigure();
         _coverFlow.Region = new Region(p);
     }
@@ -2277,15 +3114,292 @@ internal sealed class MainForm : Form, IMessageFilter
         _cfGen++; // cancel any in-flight cover load
         if (_coverFlow is null) return;
         var cf = _coverFlow;
-        cf.AnimateOut(() => { cf.Visible = false; try { _tracks.Focus(); } catch { } }); // fade/zoom out, then hide
+        cf.AnimateOut(() => { cf.Visible = false; cf.Release(); try { _tracks.Focus(); } catch { } }); // fade/zoom out, hide, and give the sprite cache back (it is rebuilt on the next open anyway)
     }
 
     // ---- Up Next queue panel (right-side overlay, mirrors Cover Flow's hosting) ----
 
     /// <summary>Open the Up Next queue as a floating, rounded popover anchored to the queue button (like the
     /// Equalizer / Pro-features flyouts: click-away / Esc / × dismiss). Re-clicking the button reopens it.</summary>
+    private LyricsFlyout? _lyrics;
+    private int _lyricsClosedTick;
+    private int _lyricsGen;            // cancels a load whose song changed while it was in flight
+    private string? _lyricsKey;        // which song the open sheet belongs to, for the saved sync nudge
+    private readonly System.Windows.Forms.Timer _volSave = new() { Interval = 900 };
+
+    /// <summary>Persist the volume slider if it moved (VolumeLevel is 0 while muted, which is what the
+    /// slider shows and therefore what "remember the slider" means).</summary>
+    private void SaveVolume()
+    {
+        double v = Math.Clamp(_nowPlaying.VolumeLevel, 0, 1);
+        if (Math.Abs(v - _settings.Volume) < 0.001) return;
+        _settings.Volume = v;
+        _settings.Save();
+    }
+    private readonly System.Windows.Forms.Timer _lyricSave = new() { Interval = 700 };
+    private string? _lyricSaveKey;
+    private int _lyricSaveMs;
+
+    /// <summary>The length lyrics are filed under: the decoder's, which is exact, falling back to the
+    /// database's before playback has opened the file.</summary>
+    private TimeSpan LyricsDuration(Track t)
+        => TimeSpan.FromSeconds(_nowPlaying.DurationSeconds > 0 ? _nowPlaying.DurationSeconds : t.LengthMs / 1000.0);
+
+    /// <summary>Write out a pending sync nudge now (the debounce timer, closing the sheet, or changing song).</summary>
+    private void FlushLyricSync()
+    {
+        _lyricSave.Stop();
+        if (_lyricSaveKey is null) return;
+        string key = _lyricSaveKey; _lyricSaveKey = null;
+        _settings.SetLyricSync(key, _lyricSaveMs);
+    }
+
+    private void PushLyricsClock()
+    {
+        Trace("clock: push");
+        _lyrics?.SetPosition(LyricsClock(), _nowPlaying.Playing);
+        if (_side is { Visible: true } && _side.Current == SidePanel.Tab.Lyrics) _side.Lyrics.SetPosition(LyricsClock(), _nowPlaying.Playing);
+        if (_lyricsStage is { Visible: true })
+        {
+            _lyricsStage.SetPosition(LyricsClock(), TimeSpan.FromSeconds(_nowPlaying.DurationSeconds), _nowPlaying.Playing);
+            _lyricsStage.SetVolume(_nowPlaying.VolumeLevel);
+        }
+    }
+
+    // ---- the full-window lyrics view ----
+
+    private void OpenLyricsStage()
+    {
+        if (_root is null || _content is null) return;
+        if (_lyricsStage is null)
+        {
+            _lyricsStage = new LyricsStage { Visible = false };
+            _lyricsStage.CloseRequested += CloseLyricsStage;
+            _lyricsStage.PlayPauseRequested += () => _nowPlaying.TogglePlayback();
+            _lyricsStage.PrevRequested += () => PlayRelative(-1);
+            _lyricsStage.NextRequested += () => PlayRelative(+1);
+            _lyricsStage.SeekFractionRequested += f => _nowPlaying.SeekFraction(f);
+            _lyricsStage.VolumeRequested += v => _nowPlaying.SetVolumeLevel(v);
+            _lyricsStage.MoreRequested += () => { if (_lyricsStage is not null) OpenLyricsPopover(_lyricsStage.MoreAnchorScreen); };
+            _lyricsStage.SeekToRequested += t =>
+            {
+                double dur = _nowPlaying.DurationSeconds;
+                if (dur > 0) _nowPlaying.SeekFraction(t.TotalSeconds / dur);
+            };
+            _root.Controls.Add(_lyricsStage);
+        }
+        Trace("stage: visible");
+        _lyricsStage.Visible = true;
+        _nowPlaying.SetLyricsOpen(true);
+        Trace("stage: layout");
+        LayoutLyricsStage();
+        Trace("stage: LoadLyrics");
+        LoadLyrics();                    // feeds the stage as well as the popover
+        Trace("stage: clock");
+        PushLyricsClock();
+        _lyricsStage.BringToFront();
+        Trace("stage: focus");
+        _lyricsStage.Focus();
+        Trace("stage: animate");
+        _lyricsStage.AnimateIn();
+        Trace("stage: opened");
+    }
+
+    private void LayoutLyricsStage()
+    {
+        if (_lyricsStage is null || _root is null) return;
+        if (_deck && _content is not null)
+        {
+            // Under the deck the stage IS the content card: the deck keeps playing the song, the rail stays,
+            // the words take the card. Its corners are carved in its own paint.
+            _lyricsStage.UnderDeck = true;
+            _lyricsStage.Bounds = _content.Bounds;
+        }
+        else
+        {
+            // The whole window: the sidebar, the list and the bar all go under it (it carries its own transport),
+            // and the window's own DWM corners do the rounding — no Region needed.
+            _lyricsStage.UnderDeck = false;
+            _lyricsStage.Bounds = _root.ClientRectangle;
+        }
+        _lyricsStage.Region = null;
+    }
+
+    private void CloseLyricsStage()
+    {
+        if (_lyricsStage is null) return;
+        var st = _lyricsStage;
+        _nowPlaying.SetLyricsOpen(false);
+        st.AnimateOut(() => { st.Visible = false; try { _tracks.Focus(); } catch { } });
+    }
+
+    /// <summary>The position the lyrics sheet runs on: the player's clock, pulled back by the audio still
+    /// sitting in the output buffer, so the highlighted word is the one being HEARD rather than the one
+    /// being decoded.</summary>
+    private TimeSpan LyricsClock()
+    {
+        var t = TimeSpan.FromSeconds(_nowPlaying.PositionSeconds) - _nowPlaying.OutputLead;
+        return t < TimeSpan.Zero ? TimeSpan.Zero : t;
+    }
+
+    /// <summary>Open the live-lyrics popover for the song that is playing. The lookup runs on a worker
+    /// (it can touch the network), so the panel opens instantly with a "looking…" line and fills in.</summary>
+    /// <summary>The bar's lyrics button: the full-window view, on and off.</summary>
+    private void OpenLyrics(Rectangle anchor)
+    {
+        if (_lyricsStage is { Visible: true }) CloseLyricsStage();
+        else OpenLyricsStage();
+    }
+
+    /// <summary>The popover — the sync nudge and the "other lyrics" list — opened from the stage's "···".</summary>
+    private void OpenLyricsPopover(Rectangle anchor)
+    {
+        if (Environment.TickCount - _lyricsClosedTick < 250) return;   // the click that closed it
+
+        Glass.PopupsEnabled = _settings.GlassPopups;
+        var flyout = new LyricsFlyout();
+        flyout.SeekRequested += t =>
+        {
+            double dur = _nowPlaying.DurationSeconds;
+            if (dur > 0) _nowPlaying.SeekFraction(t.TotalSeconds / dur);
+        };
+        // Wired ONCE per popover — LoadLyrics runs again on every track change and would otherwise stack
+        // handlers, each writing the settings file.
+        flyout.OffsetChanged += ms =>
+        {
+            if (_lyricsKey is null) return;
+            _lyricSaveKey = _lyricsKey; _lyricSaveMs = ms;
+            _lyricSave.Stop(); _lyricSave.Start();
+        };
+        // "Wrong words?" — ask LRCLIB what else it has for this song. The panel never touches the network
+        // itself; it asks, we look, we hand back a list.
+        flyout.VersionsRequested += () =>
+        {
+            var t = _playingTrack;
+            if (t is null || !_settings.OnlineLyrics) { flyout.SetCandidates(Array.Empty<LyricsCandidate>()); return; }
+            var dur = LyricsDuration(t);
+            int gen = _lyricsGen;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                IReadOnlyList<LyricsCandidate> found;
+                try { found = LyricsLookup.Search(t.Artist, t.DisplayTitle, dur); }
+                catch { found = Array.Empty<LyricsCandidate>(); }
+                try
+                {
+                    BeginInvoke(() =>
+                    {
+                        if (gen != _lyricsGen || !ReferenceEquals(_lyrics, flyout) || flyout.IsDisposed) return;
+                        flyout.SetCandidates(found);
+                    });
+                }
+                catch { /* the window went away mid-search */ }
+            });
+        };
+        flyout.VersionChosen += c =>
+        {
+            var t = _playingTrack;
+            if (t is null) return;
+            LyricsLookup.Adopt(t.Artist, t.DisplayTitle, LyricsDuration(t), c.Text);
+            // A different sheet starts from zero — the old nudge was measured against the old timings, and
+            // silently carrying it over would put the new one out by exactly as much as the old one was.
+            if (_lyricsKey is not null) { _lyricSave.Stop(); _lyricSaveKey = null; _settings.SetLyricSync(_lyricsKey, 0); }
+            LoadLyrics();
+        };
+        flyout.ExpandRequested += () =>
+        {
+            flyout.Close();
+            if (_lyricsStage is not { Visible: true }) OpenLyricsStage();
+        };
+        flyout.FormClosed += (_, _) => { FlushLyricSync(); if (ReferenceEquals(_lyrics, flyout)) _lyrics = null; _lyricsClosedTick = Environment.TickCount; };
+        _lyrics = flyout;
+        flyout.Owner = this;
+        LoadLyrics();
+        BeginInvoke(() => { if (ReferenceEquals(_lyrics, flyout) && !flyout.IsDisposed) flyout.ShowAnchored(anchor, _deck); });
+    }
+
+    /// <summary>Fetch the current song's lyrics into the open popover. Safe to call on every track change.</summary>
+    private void LoadLyrics()
+    {
+        var flyout = _lyrics is { IsDisposed: false } ? _lyrics : null;
+        var stage = _lyricsStage is { Visible: true } ? _lyricsStage : null;
+        var side = _side is { Visible: true } && _side.Current == SidePanel.Tab.Lyrics ? _side.Lyrics : null;
+        if (flyout is null && stage is null && side is null) return;
+        FlushLyricSync();   // the pending nudge belongs to the song we are leaving
+        var track = _playingTrack;
+        if (track is null)
+        {
+            _lyricsKey = null;
+            flyout?.SetLyrics("", Array.Empty<LyricLine>(), false, Loc.T("Play a song to see its lyrics."));
+            side?.SetLyrics("", Array.Empty<LyricLine>(), false, Loc.T("Play a song to see its lyrics."));
+            stage?.SetTrack("", "", null);
+            stage?.SetLyrics(Array.Empty<LyricLine>(), false, Loc.T("Play a song to see its lyrics."));
+            return;
+        }
+
+        string song = track.DisplayTitle + (string.IsNullOrEmpty(track.Artist) ? "" : "  —  " + track.Artist);
+        string? path = _device is not null ? track.ResolveFilePath(_device.MountRoot) : track.LocalPath;
+        var dur = LyricsDuration(track);
+        bool online = _settings.OnlineLyrics;
+        int gen = ++_lyricsGen;
+
+        _lyricsKey = LyricsLookup.SongKey(track.Artist, track.DisplayTitle);
+        string looking = LyricsLookup.IsCached(track.Artist, track.DisplayTitle, dur, path) ? "" : Loc.T("Looking for lyrics…");
+        int savedOffset = _settings.GetLyricSync(_lyricsKey);
+        if (flyout is not null)
+        {
+            flyout.CanSearchVersions = online;
+            flyout.SetSongLength(dur);
+            flyout.SetLyrics(song, Array.Empty<LyricLine>(), false, looking);
+            flyout.SetOffsetMs(savedOffset);
+        }
+        if (side is not null)
+        {
+            side.CanSearchVersions = online;
+            side.SetSongLength(dur);
+            side.SetLyrics(song, Array.Empty<LyricLine>(), false, looking);
+            side.SetOffsetMs(savedOffset);
+        }
+        if (stage is not null)
+        {
+            stage.SetTrack(track.DisplayTitle, track.Artist ?? "", _nowPlaying.LoadHeroCover(640), TrackFormat.Line(track, withSize: false));
+            stage.SetLyrics(Array.Empty<LyricLine>(), false, looking);
+            stage.SetOffsetMs(savedOffset);
+        }
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            IReadOnlyList<LyricLine> lines; bool synced = false;
+            try { lines = LyricsLookup.Find(track.Artist, track.DisplayTitle, dur, path, online, out synced); }
+            catch { lines = Array.Empty<LyricLine>(); }
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    if (gen != _lyricsGen) return;
+                    string none = lines.Count > 0 ? "" :
+                        online ? Loc.T("No lyrics found for this song.")
+                               : Loc.T("No lyrics stored with this song. Turn on “Online lyrics” in Settings to look them up.");
+                    if (flyout is not null && ReferenceEquals(_lyrics, flyout) && !flyout.IsDisposed)
+                        flyout.SetLyrics(song, lines, synced, none);
+                    if (stage is not null && ReferenceEquals(_lyricsStage, stage) && stage.Visible)
+                        stage.SetLyrics(lines, synced, none);
+                    if (side is not null && _side is { Visible: true } && ReferenceEquals(_side.Lyrics, side))
+                        side.SetLyrics(song, lines, synced, none);
+                    if (lines.Count > 0) PushLyricsClock();
+                });
+            }
+            catch { /* the window went away mid-load */ }
+        });
+    }
+
     private void OpenUpNext(Rectangle anchor)
     {
+        if (SideFits && _side is not null && Visible)   // wide, visible window: the docked card (toggle on its Up Next tab); the mini player keeps the popover
+        {
+            bool onUpNext = _sideOpen && _side.Visible && _side.Current == SidePanel.Tab.UpNext;
+            SetSideOpen(!onUpNext, SidePanel.Tab.UpNext);
+            return;
+        }
         // Clicking the queue button while it's open closes it (the button's mouse-down already dismissed the
         // popover via click-away); the just-closed timestamp tells us not to reopen on the same click.
         if (Environment.TickCount - _upNextClosedTick < 250) return;
@@ -2301,7 +3415,7 @@ internal sealed class MainForm : Form, IMessageFilter
         flyout.Owner = this;   // so the flyout can snap the frosted-glass backdrop from behind it
         RefreshUpNext();   // populate + size it to the queue before it's anchored
         // Defer the show so it isn't dismissed by the click that opened it (button mouse-down → reactivation race).
-        BeginInvoke(() => { if (ReferenceEquals(_upNext, flyout) && !flyout.IsDisposed) flyout.ShowAnchored(anchor); });
+        BeginInvoke(() => { if (ReferenceEquals(_upNext, flyout) && !flyout.IsDisposed) flyout.ShowAnchored(anchor, _deck); });
     }
 
     /// <summary>Push the queue into the open popover (and reflect the count on the bar icon). Cheap: covers are
@@ -2309,12 +3423,115 @@ internal sealed class MainForm : Form, IMessageFilter
     private void RefreshUpNext()
     {
         _nowPlaying.SetQueueCount(_queue.Count);
-        if (_upNext is null || _upNext.IsDisposed) return;
+        bool popover = _upNext is { IsDisposed: false }, side = _side is { Visible: true };
+        if (!popover && !side) return;
         var now = _nowPlaying.NowTrack;
         var nowArt = now is not null ? QueueCover(now) : null;
         var items = _queue.Items.Select(t => (t, QueueCover(t))).ToList();
         string? hint = _queue.Count > 0 && _nowPlaying.Repeat == NowPlayingBar.RepeatMode.One ? Loc.T("Repeat One is on — queue advances on Next") : null;
-        _upNext.SetData(now, nowArt, items, hint);
+        if (popover) _upNext!.SetData(now, nowArt, items, hint);
+        if (side) _side!.UpNext.SetData(now, nowArt, items, hint);
+    }
+
+    /// <summary>Open/close the docked side card (Up Next · History · Lyrics), optionally on a tab. Remembered across
+    /// runs; the deck's queue button reads as pressed while it is open.</summary>
+    private void SetSideOpen(bool on, SidePanel.Tab? tab = null)
+    {
+        if (_side is null) return;
+        _sideOpen = on;
+        if (tab is { } t && _side.Current != t) _side.Select(t);
+        _settings.SidePanelOpen = on;
+        _settings.SidePanelTab = _side.Current.ToString();
+        _settings.Save();
+        LayoutShell();
+        if (_side.Visible)
+        {
+            RefreshUpNext();
+            if (_side.Current == SidePanel.Tab.History) RefreshHistory();
+            if (_side.Current == SidePanel.Tab.Lyrics) { LoadLyrics(); PushLyricsClock(); }
+        }
+    }
+
+    /// <summary>What played this session, for the History tab (newest first when shown).</summary>
+    private void NotePlayed(Track t)
+    {
+        if (_played.Count == 0 || !ReferenceEquals(_played[^1].Track, t)) _played.Add((t, DateTime.Now));
+        if (_played.Count > 100) _played.RemoveAt(0);
+        SaveResume(persist: false);
+        RefreshHistory();
+    }
+
+    private void RefreshHistory()
+    {
+        if (_side is not { Visible: true } || _side.Current != SidePanel.Tab.History) return;
+        var items = new List<(Track t, Bitmap? art, DateTime at)>();
+        for (int i = _played.Count - 1; i >= 0; i--) items.Add((_played[i].Track, QueueCover(_played[i].Track), _played[i].At));
+        _side.History.SetData(items);
+    }
+
+    /// <summary>The side card's lyrics sheet gets the same wiring as the popover's: seek on click, the sync nudge, the
+    /// "other lyrics" picker, and the full view.</summary>
+    private void WireLyricsPanel(LyricsPanel p)
+    {
+        p.SeekRequested += t => { double dur = _nowPlaying.DurationSeconds; if (dur > 0) _nowPlaying.SeekFraction(t.TotalSeconds / dur); };
+        p.OffsetChanged += ms => { if (_lyricsKey is null) return; _lyricSaveKey = _lyricsKey; _lyricSaveMs = ms; _lyricSave.Stop(); _lyricSave.Start(); };
+        p.VersionsRequested += () =>
+        {
+            var t = _playingTrack;
+            if (t is null || !_settings.OnlineLyrics) { p.SetCandidates(Array.Empty<LyricsCandidate>()); return; }
+            var dur = LyricsDuration(t);
+            int gen = _lyricsGen;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                IReadOnlyList<LyricsCandidate> found;
+                try { found = LyricsLookup.Search(t.Artist, t.DisplayTitle, dur); }
+                catch { found = Array.Empty<LyricsCandidate>(); }
+                TryBeginInvoke(() => { if (gen == _lyricsGen && !p.IsDisposed) p.SetCandidates(found); });
+            });
+        };
+        p.VersionChosen += c =>
+        {
+            var t = _playingTrack;
+            if (t is null) return;
+            LyricsLookup.Adopt(t.Artist, t.DisplayTitle, LyricsDuration(t), c.Text);
+            if (_lyricsKey is not null) { _lyricSave.Stop(); _lyricSaveKey = null; _settings.SetLyricSync(_lyricsKey, 0); }
+            LoadLyrics();
+        };
+        p.ExpandRequested += () => { if (_lyricsStage is not { Visible: true }) OpenLyricsStage(); };
+        p.CloseRequested += () => SetSideOpen(false);
+    }
+
+    /// <summary>Remember the playing song + where it is, for the home page's "Continue listening". With nothing playing
+    /// the last bookmark stays. <paramref name="persist"/> writes settings.json now (else the next settings write carries it).</summary>
+    private void SaveResume(bool persist)
+    {
+        var t = _playingTrack;
+        if (t is null) return;
+        string key = !string.IsNullOrEmpty(t.LocalPath) ? "file:" + t.LocalPath : "db:" + t.Dbid;
+        double pos = _nowPlaying.PositionSeconds;
+        if (key == _settings.ResumeTrack && Math.Abs(pos - _settings.ResumeSeconds) < 1) return;
+        _settings.ResumeTrack = key; _settings.ResumeSeconds = pos;
+        if (persist) _settings.Save();
+    }
+
+    /// <summary>Play a song from wherever it lives: if it is in the list on screen, from there (so prev/next walk that
+    /// list); otherwise open its library (the iPod's songs or the PC's) and play it there.</summary>
+    private void PlayAnywhere(Track t)
+    {
+        int row = RowIndexOf(t);
+        if (row >= 0) { ActivateTrackRow(row); return; }
+        bool local = !string.IsNullOrEmpty(t.LocalPath);
+        if (!local && _db is null) return;
+        _landOnHome = false;
+        ClearSearch();
+        TransitionCenter(() =>
+        {
+            _viewKind = local ? SidebarRowKind.LocalMusic : SidebarRowKind.AllSongs;
+            _current = null; _browseFilter = null;
+            BuildSidebar(); ShowCurrent();
+        });
+        int ri = RowIndexOf(t);
+        if (ri >= 0) ActivateTrackRow(ri);
     }
 
     /// <summary>A small rounded cover for a queued track (album-cached via ArtworkService), or null.</summary>
@@ -2373,24 +3590,24 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     /// <summary>Point the song grid at one album (no view transition — used while Cover Flow is on top).</summary>
-    private void NavigateToAlbum(string key)
+    private void NavigateToAlbum(string key, bool local = false)
     {
-        if (_db is null) return;
+        if (!local && _db is null) return;
         ClearSearch();
-        _viewKind = SidebarRowKind.Albums;
+        _viewKind = local ? SidebarRowKind.LocalAlbums : SidebarRowKind.Albums;
         _browseFilter = t => AlbumKey(t) == key;
-        var first = _db.Tracks.FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
+        var first = (local ? _localTracks : _db!.Tracks).FirstOrDefault(t => MediaType.IsAudio(t.MediaType) && AlbumKey(t) == key);
         _browseTitle = first is not null ? DisplayAlbum(first) : Loc.T("Album");
         _browseKicker = "ALBUM";
         ShowCurrent();
     }
 
     /// <summary>Point the song grid at one artist (no view transition — used while Cover Flow is on top).</summary>
-    private void NavigateToArtist(string key)
+    private void NavigateToArtist(string key, bool local = false)
     {
-        if (_db is null) return;
+        if (!local && _db is null) return;
         ClearSearch();
-        _viewKind = SidebarRowKind.Artists;
+        _viewKind = local ? SidebarRowKind.LocalArtists : SidebarRowKind.Artists;
         _browseFilter = t => ArtistKey(t) == key;
         _browseTitle = key.Length > 0 ? key : Loc.T("Unknown Artist");
         _browseKicker = "ARTIST";
@@ -2486,19 +3703,24 @@ internal sealed class MainForm : Form, IMessageFilter
     private void SetActionButtons()
     {
         // Search lives in the header; show it for the library/list views, not the device or photo pages.
-        _search.Visible = _viewKind is not (SidebarRowKind.Device or SidebarRowKind.Photos);
+        // The search is always there now; typing on a page that cannot be searched takes you to the music.
         if (_photoSize is not null) _photoSize.Visible = _viewKind == SidebarRowKind.Photos;   // the size slider takes the search row on Photos
         _header.Invalidate();   // re-layout the header cluster for the changed search/slider visibility
+        if (_viewKind == SidebarRowKind.Home)   // the home page has no list actions of its own
+        {
+            _header.CoverButton.Visible = false; _header.AddButton.Visible = false; _header.DeleteButton.Visible = false;
+            return;
+        }
 
         // Cover Flow is available wherever an audio library is on screen (iPod views use the iPod DB; the
         // Local-Music views use the PC library). Not on the device/photos/videos pages.
-        bool localView = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist;
+        bool localView = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
         bool hasAudio = localView
             ? _localTracks.Any(t => MediaType.IsAudio(t.MediaType))
             : _db is not null && _db.Tracks.Any(t => MediaType.IsAudio(t.MediaType));
         _header.CoverButton.Visible = hasAudio
             && _viewKind is SidebarRowKind.AllSongs or SidebarRowKind.Albums or SidebarRowKind.Artists
-                or SidebarRowKind.Playlist or SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist;
+                or SidebarRowKind.Playlist or SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
 
         if (_viewKind == SidebarRowKind.LocalPlaylist)   // a local playlist: add/remove songs via right-click, no header buttons
         {
@@ -2754,7 +3976,8 @@ internal sealed class MainForm : Form, IMessageFilter
         int photoCount = _photos?.Photos.Count ?? 0;
         long other = Math.Max(0, total - free - music - video - photoBytes);
 
-        string cap = total > 0 ? Loc.T("{0} of {1} used", CapacityBar.Human(total - free), CapacityBar.Human(total)) : Loc.T("Connected");
+        // The header's meta line: what is on it and what is left — the same two facts the rail's device row shows.
+        string cap = total > 0 ? CountNoun(songCount, "song") + "  ·  " + Loc.T("{0} free", CapacityBar.Human(free)) : Loc.T("Connected");
         _header.SetInfo(Loc.T("DEVICE"), p.ModelName ?? p.ModelNumber ?? "iPod", cap, Theme.StableHash(p.ModelName ?? "iPod"));
         using (var art = IpodArt.Render(p.Generation, 150, p.ModelNumber)) _header.SetArt(art); // a picture of THIS iPod, in its real colour
         _header.ArtClickable = false;
@@ -2764,11 +3987,7 @@ internal sealed class MainForm : Form, IMessageFilter
         SetActionButtons();
         // The device name is already the header title + the sidebar row — don't echo it at the bottom.
         // Show a useful at-a-glance summary instead (consistent with the song views' status line).
-        var bits = new List<string> { CountNoun(songCount, "song") };
-        if (videoCount > 0) bits.Add(CountNoun(videoCount, "video"));
-        if (photoCount > 0) bits.Add(CountNoun(photoCount, "photo"));
-        if (total > 0) bits.Add(Loc.T("{0} free", CapacityBar.Human(free)));
-        SetStatus(string.Join("   ·   ", bits));
+        SetStatus("");   // the header's meta line carries the summary now; a third copy of "free" helped nobody
     }
 
     private long PhotoBytes()
@@ -2807,16 +4026,17 @@ internal sealed class MainForm : Form, IMessageFilter
             // No iPod picture here — the page header already shows one; the hero centres its capacity donut instead.
             var segs = new List<DeviceHero.Seg>
             {
-                new(Loc.T("Music"), music, Theme.Accent),
-                new(Loc.T("Video"), video, Color.FromArgb(255, 149, 56)),
-                new(Loc.T("Photos"), photo, Color.FromArgb(54, 200, 110)),
+                // One grey ramp for what is USED, the accent for what is FREE — free is the number you came for.
+                new(Loc.T("Music"), music, Theme.Blend(Theme.Bg, Color.White, 0.34)),
+                new(Loc.T("Video"), video, Theme.Blend(Theme.Bg, Color.White, 0.26)),
+                new(Loc.T("Photos"), photo, Theme.Blend(Theme.Bg, Color.White, 0.19)),
             };
             // "Other/System": space used by neither media nor free — system files, or non-media content when a plain
             // folder is opened on a large drive. Shown only when non-zero (a media-only iPod never gets an "Other 0 B"
             // row), and it keeps the legend's "Free" equal to the REAL free — the same number the donut centre shows —
             // instead of folding "other" into Free and contradicting the centre (43 GB centre vs "251 GB free" legend).
-            if (other > 0) segs.Add(new DeviceHero.Seg(Loc.T("Other"), other, Theme.Blend(Theme.Bg, Color.White, 0.14)));
-            segs.Add(new DeviceHero.Seg(Loc.T("Free"), free, Theme.Blend(Theme.Bg, Color.White, 0.07)));
+            if (other > 0) segs.Add(new DeviceHero.Seg(Loc.T("Other"), other, Theme.Blend(Theme.Bg, Color.White, 0.13)));
+            segs.Add(new DeviceHero.Seg(Loc.T("Free"), free, Theme.Accent));
             hero.Set(null, total, free, segs.ToArray());
             Add(hero);
         }
@@ -2824,12 +4044,13 @@ internal sealed class MainForm : Form, IMessageFilter
         SectionLabel(Loc.T("ABOUT"));
         var about = new CardPanel(cardW);
         about.AddInfoRow(Loc.T("Model"), p.ModelName ?? p.ModelNumber ?? "iPod");
-        about.AddInfoRow(Loc.T("Generation"), p.GenerationDisplay);
-        if (total > 0) about.AddInfoRow(Loc.T("Capacity"), Loc.T("{0}  ·  {1} free", CapacityBar.Human(total), CapacityBar.Human(free)));
+        // No Generation row when it would print the model's own string again; no Capacity row — the ring
+        // above IS the capacity, and the header already says how much is free.
+        if (p.GenerationDisplay != (p.ModelName ?? p.ModelNumber)) about.AddInfoRow(Loc.T("Generation"), p.GenerationDisplay);
         about.AddInfoRow(Loc.T("Songs"), songCount.ToString());
         if (p.SupportsVideo) about.AddInfoRow(Loc.T("Videos"), videoCount.ToString());
         if (p.SupportsPhotos) about.AddInfoRow(Loc.T("Photos"), photoCount.ToString());
-        about.AddInfoRow(Loc.T("Signature"), p.SchemeLabel);
+        about.AddInfoRow(Loc.T("Signature"), Loc.T(p.SchemeLabel));
         about.AddInfoRow(Loc.T("Writable"), p.CanWrite ? Loc.T("Yes") : Loc.T("No"));
         if (!string.IsNullOrEmpty(p.SerialNumber)) about.AddInfoRow(Loc.T("Serial"), p.SerialNumber!);
         if (!string.IsNullOrEmpty(p.FirewireGuid)) about.AddInfoRow(Loc.T("FireWire GUID"), p.FirewireGuid!);
@@ -2928,11 +4149,7 @@ internal sealed class MainForm : Form, IMessageFilter
         return Math.Clamp(avail - 48, 360, 720);                        // 24px gutter each side
     }
     /// <summary>Left edge of the device card column: 24px on a narrow window, centred when there's extra width.</summary>
-    private int DeviceCardLeft(int cardW)
-    {
-        int avail = Math.Max(360, _deviceView.ClientSize.Width - 14);
-        return Math.Max(24, (avail - cardW) / 2);
-    }
+    private int DeviceCardLeft(int cardW) => 22;   // left-aligned on the frame: switching Device → Songs no longer slides the page sideways
 
     /// <summary>Re-lay-out the device page at the current width (from the cached data — no disk re-query), keeping
     /// the scroll position. Fired debounced from <see cref="LayoutDeviceView"/> after the window stops resizing.</summary>
@@ -3333,8 +4550,26 @@ internal sealed class MainForm : Form, IMessageFilter
 
     /// <summary>Compact ISO date for the Added column; blank when there's no (valid) date.</summary>
     // Conversational dates (matches the app's "185 songs · 11 hr" voice) instead of raw yyyy-MM-dd.
-    // English month names via InvariantCulture so it stays consistent with the English UI (a localised
-    // "ddd" weekday collapses to a cryptic single letter in some cultures, e.g. Hungarian "P").
+    /// <summary>Widen any fixed column whose HEADER does not fit once translated. The widths above are chosen
+    /// for the English captions, so "PLAYS" (76 px) became "LEJÁTSZ…" the moment the UI spoke Hungarian.
+    /// Only fixed columns are touched and only ever outward, so the fill columns keep the rest.</summary>
+    private void FitColumnHeaders()
+    {
+        using var f = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);   // matches TrackHeader's caption font
+        foreach (DataGridViewColumn c in _tracks.Columns)
+        {
+            if (c.AutoSizeMode != DataGridViewAutoSizeColumnMode.None || c.HeaderText.Length == 0) continue;
+            int need = TextRenderer.MeasureText(Loc.T(c.HeaderText), f).Width + 40;   // side padding + the sort arrow
+            if (c.Width < need) c.Width = need;
+        }
+    }
+
+    private static readonly System.Globalization.CultureInfo HuDates = new("hu-HU");
+
+    /// <summary>The date a song was added, in the UI's own language — NOT the machine's. An English UI on a
+    /// Hungarian PC (or the reverse) must not mix "Mar 27" with "márc. 27."; the language the user chose in
+    /// Settings decides. Each language also gets its own pattern, because Hungarian writes the day with a
+    /// full stop and puts the year first.</summary>
     private static string DateAddedStr(DateTime? d)
     {
         if (d is not { } dt || dt.Year <= 1970) return "";
@@ -3342,14 +4577,17 @@ internal sealed class MainForm : Form, IMessageFilter
         var day = dt.Date;
         if (day == today) return Loc.T("Today");
         if (day == today.AddDays(-1)) return Loc.T("Yesterday");
-        var ci = System.Globalization.CultureInfo.InvariantCulture;
-        return dt.Year == today.Year ? dt.ToString("MMM d", ci) : dt.ToString("MMM d, yyyy", ci);  // Mar 27 / Mar 27, 2025
+        bool thisYear = dt.Year == today.Year;
+        return Loc.Lang == "hu"
+            ? dt.ToString(thisYear ? "MMM d." : "yyyy. MMM d.", HuDates)          // márc. 27.  /  2025. ápr. 2.
+            : dt.ToString(thisYear ? "MMM d" : "MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>Show count + total time + size in the status bar while several songs are selected.</summary>
     private void OnTrackSelectionChanged()
     {
         if (_populatingGrid) return;
+        UpdateSelectionBar();
         if (_tracks.Parent is Control gh && !gh.Visible) return; // only when the track grid is the visible centre
         int n = _tracks.SelectedRows.Count;
         if (n <= 1) { SetStatus(_baseStatus, _baseStatusClickable); return; }
@@ -3357,6 +4595,80 @@ internal sealed class MainForm : Form, IMessageFilter
         foreach (DataGridViewRow row in _tracks.SelectedRows)
             if (row.Tag is Track t) { ms += t.LengthMs; bytes += t.FileSize; }
         SetStatus(Loc.T("{0} selected   ·   {1}   ·   {2}", n, FormatDur(ms), CapacityBar.Human(bytes)));
+    }
+
+    // ---- the floating selection bar (from two selected rows) ----
+
+    /// <summary>Show/refresh/hide the action bar for the current selection.</summary>
+    private void UpdateSelectionBar()
+    {
+        if (_selBar is null) return;
+        int n = _tracks.SelectedRows.Count;
+        bool show = n >= 2 && !_populatingGrid && _gridHost.Visible;
+        int want = show ? SelectionBar.H + 20 : 0;   // 6 above the bar, 14 below it
+        if (_selReserve != want) { _selReserve = want; _layoutGridHost?.Invoke(); }
+        if (!show) { _selBar.Dismiss(); return; }
+        bool local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
+        bool writable = _lib is not null && _device is { Profile.CanWrite: true };
+        bool inLocalList = local && _viewKind == SidebarRowKind.LocalPlaylist && _currentLocalPlaylist is not null;
+        _selBar.Configure(n, local || writable, local ? inLocalList : writable, inLocalList ? Loc.T("Remove") : Loc.T("Delete"), Math.Max(240, _trackViewport.Width - 24));
+        _selBar.Reveal(SelectionBarSpot());
+    }
+
+    private Point SelectionBarSpot() =>
+        new(_trackViewport.Left + Math.Max(0, (_tracks.Width - _selBar!.Width) / 2), _trackViewport.Bottom + 6);
+
+    /// <summary>The window resized: the bar is laid out again for the width it has now, then re-placed.</summary>
+    private void PlaceSelectionBar() { if (_selBar is { Visible: true }) UpdateSelectionBar(); }
+
+    /// <summary>The bar's "Add to playlist": the targets the row menu offers, as a menu above the button.</summary>
+    private void ShowAddToPlaylistMenu()
+    {
+        if (_selBar is null) return;
+        var m = ThemedMenu.New();
+        bool local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
+        if (local)
+        {
+            var paths = SelectedLocalPaths();
+            if (paths.Count == 0) return;
+            foreach (var lp in _settings.LocalPlaylists)
+            {
+                if (ReferenceEquals(lp, _currentLocalPlaylist)) continue;   // already in this one
+                var r = lp;
+                var it = new ToolStripMenuItem(lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name);
+                it.Click += (_, _) => AddPathsToLocalPlaylist(r, paths);
+                m.Items.Add(it);
+            }
+            if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+            var nu = new ToolStripMenuItem(Loc.T("New playlist…"));
+            nu.Click += (_, _) => CreateLocalPlaylist(paths);
+            m.Items.Add(nu);
+        }
+        else
+        {
+            var ids = SelectedTrackIds();
+            if (ids.Count == 0) return;
+            foreach (var pl in _shownPlaylists.Where(p => _db is not null && !ReferenceEquals(p, _db.Master) && !p.IsPodcast && !IsSmart(p.PersistentId)))
+            {
+                var plRef = pl;
+                var it = new ToolStripMenuItem(pl.Name.Length == 0 ? Loc.T("Untitled") : pl.Name);
+                it.Click += (_, _) => AddSelectedToPlaylist(plRef, ids);
+                m.Items.Add(it);
+            }
+            if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+            var newWith = new ToolStripMenuItem(Loc.T("New playlist…"));
+            newWith.Click += (_, _) => CreatePlaylistWithTracks(ids);
+            m.Items.Add(newWith);
+        }
+        var a = _selBar.PlaylistAnchor;
+        m.Show(new Point(a.Left, a.Top - 6), ToolStripDropDownDirection.AboveRight);
+    }
+
+    private void DeleteSelectionFromBar()
+    {
+        bool local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
+        if (!local) { OnDelete(); return; }
+        if (_viewKind == SidebarRowKind.LocalPlaylist && _currentLocalPlaylist is { } cur) RemoveFromLocalPlaylist(cur, SelectedLocalPaths());
     }
 
     private static string FormatDur(long ms)
@@ -3420,9 +4732,76 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     /// <summary>Background-loads real embedded cover art into the header + each row (album-cached, gen-guarded).</summary>
+    private Dictionary<string, Track>? _browseReps;   // the album/artist grid's representative tracks (for late covers)
+    private int _rowArtSize = 36;
+
+    /// <summary>A downloaded cover landed (UI thread): put it wherever that album is on screen — the grid card, the
+    /// list rows, the header, the deck card, Cover Flow — through the same loaders, which now find the file.</summary>
+    private void OnCoverArrived(string baseKey)
+    {
+        if (IsDisposed) return;
+        string? mount = _device?.MountRoot;
+        string? PathOf(Track t) => !string.IsNullOrEmpty(t.LocalPath) ? t.LocalPath : mount is not null ? t.ResolveFilePath(mount) : null;
+        bool Matches(Track t) => CoverDownloads.BaseKey(ArtworkService.KeyFor(t)) == baseKey;
+
+        // the album / artist grid
+        if (_browseReps is not null && _browseView.Visible)
+        {
+            var cards = _browseReps.Where(kv => Matches(kv.Value)).Select(kv => (kv.Key, kv.Value)).ToList();
+            if (cards.Count > 0)
+                Task.Run(() =>
+                {
+                    foreach (var (key, rep) in cards)
+                    {
+                        var art = ArtworkService.Load("br:" + ArtworkService.KeyFor(rep), PathOf(rep), BrowseCover);
+                        if (art is not null) TryBeginInvoke(() => { if (_browseView.Visible) { _browseView.SetCover(key, art); ScheduleSnap(); } });
+                    }
+                });
+        }
+        // the home page's shelves
+        if (_homeReps is not null && _homeView is { Visible: true })
+        {
+            var tiles = _homeReps.Where(kv => Matches(kv.Value)).Select(kv => (kv.Key, kv.Value)).ToList();
+            if (tiles.Count > 0)
+                Task.Run(() =>
+                {
+                    foreach (var (key, rep) in tiles)
+                    {
+                        var art = ArtworkService.Load("br:" + ArtworkService.KeyFor(rep), PathOf(rep), BrowseCover);
+                        if (art is not null) TryBeginInvoke(() => { if (_homeView.Visible) _homeView.SetCover(key, art); });
+                    }
+                });
+        }
+        // the song list rows + the header
+        if (_gridHost.Visible && _settings.ShowArtwork)
+        {
+            var rows = new List<(int Index, Track Track)>();
+            for (int i = 0; i < _tracks.Rows.Count; i++) if (_tracks.Rows[i].Tag is Track t && Matches(t)) rows.Add((i, t));
+            bool headerToo = _tracks.Rows.Count > 0 && _tracks.Rows[0].Tag is Track f0 && Matches(f0) && !_currentHasCustomCover
+                             && _viewKind is not (SidebarRowKind.LocalMusic or SidebarRowKind.Videos);
+            if (rows.Count > 0)
+            {
+                int gen = _artGen, size = _rowArtSize;
+                Task.Run(() =>
+                {
+                    Bitmap? hdr = headerToo ? ArtworkService.Load(ArtworkService.KeyFor(rows[0].Track), PathOf(rows[0].Track), 150) : null;
+                    if (hdr is not null) TryBeginInvoke(() => { if (_artGen == gen) _header.SetArt(hdr); });
+                    foreach (var (idx, t) in rows)
+                    {
+                        var art = ArtworkService.Load(ArtworkService.KeyFor(t), PathOf(t), size);
+                        if (art is not null) TryBeginInvoke(() => { if (_artGen == gen && idx < _tracks.Rows.Count) _tracks.Rows[idx].Cells[0].Value = art; });
+                    }
+                });
+            }
+        }
+        _nowPlaying.RefreshCover(baseKey);
+        if (_coverFlow is { Visible: true }) LoadCoverFlowCoversFor(baseKey);
+    }
+
     private void LoadArtworkAsync(List<Track> tags, int size)
     {
         if (!_settings.ShowArtwork || tags.Count == 0) return;   // works for Local Music too — no iPod required
+        _rowArtSize = size;
         int gen = ++_artGen;
         string? mount = _device?.MountRoot;
         // Local Music tracks live on the PC (LocalPath); iPod tracks resolve against the mount.
@@ -3447,6 +4826,7 @@ internal sealed class MainForm : Form, IMessageFilter
                     int idx = j.Index;
                     TryBeginInvoke(() => { if (_artGen == gen && idx < _tracks.Rows.Count) _tracks.Rows[idx].Cells[0].Value = art; });
                 }
+                else CoverDownloads.Request(tags[j.Index], j.Path);
             }
         });
     }
@@ -3476,6 +4856,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 var t = slots[i].Track;
                 string? path = !string.IsNullOrEmpty(t.LocalPath) ? t.LocalPath : mount is not null ? t.ResolveFilePath(mount) : null;
                 reals[i] = string.IsNullOrEmpty(path) ? null : ArtworkService.Load(prefix + ArtworkService.KeyFor(t), path!, size);
+                if (reals[i] is null) CoverDownloads.Request(t, path);
             }
             TryBeginInvoke(() =>
             {
@@ -3865,6 +5246,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         int artSize = _settings.Compact ? 22 : 36;
         var list = _localTracks.AsEnumerable();
+        bool drill = _viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _browseFilter is not null;   // one album / artist of the PC library
+        if (drill) list = list.Where(_browseFilter!);
         if (_searchQuery.Length > 0) list = list.Where(t => Match(t, _searchQuery));
         var shown = list.ToList();
         SortTracks(shown);
@@ -3884,6 +5267,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         _populatingGrid = false;
         _tracks.ResumeLayout();
+        UpdateSelectionBar();
         SizeTracks();   // once, after the bulk populate
         if (_settings.ListArtwork) LoadArtworkAsync(shown, artSize);   // replace placeholder thumbs with real covers (skipped when text-only)
 
@@ -3892,6 +5276,14 @@ internal sealed class MainForm : Form, IMessageFilter
             : _searchQuery.Length > 0 ? Loc.T("No results for “{0}”", _searchQuery)
             : shown.Count == 0 ? Loc.T("No playable audio found in your folders.")
             : "";
+        if (drill)
+        {
+            // An album or artist of the PC library: named like the iPod's drill-in; the art comes from the first song (LoadArtworkAsync).
+            _header.SetInfo(Loc.T(_browseKicker), _browseTitle, Summary(shown.Count, totalMs, "song"), Theme.StableHash(_browseTitle));
+            _baseStatus = ""; _baseStatusClickable = false; SetStatus("");
+            SetActionButtons();
+            return;
+        }
         _header.SetInfo(Loc.T("ON THIS PC"), Loc.T("Local Music"),
             folders == 0 ? Loc.T("Music from folders on your PC") : Summary(shown.Count, totalMs, "song"), Theme.StableHash("Local Music"));
         using (var pcTile = Theme.LocalMusicTile(150)) _header.SetArt(pcTile);   // a computer/monitor mark for "on this PC" (set AFTER SetInfo, which clears the art)
@@ -3928,7 +5320,7 @@ internal sealed class MainForm : Form, IMessageFilter
                     try
                     {
                         var nt = MetadataExtractor.Read(f, isVideo: false);
-                        t = new Track { Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(f), Artist = nt.Artist, Album = nt.Album, LengthMs = nt.LengthMs };
+                        t = new Track { Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(f), Artist = nt.Artist, Album = nt.Album, LengthMs = nt.LengthMs, Bitrate = nt.Bitrate, SampleRate = nt.SampleRate, FileSize = nt.FileSize, FileTypeDescription = nt.FileTypeDescription };
                     }
                     catch { t = new Track { Title = Path.GetFileNameWithoutExtension(f) }; }
                     t.MediaType = MediaType.Audio;
@@ -3943,6 +5335,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (_localGen != gen) return;
                 _localTracks.Clear(); _localTracks.AddRange(found);
                 if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();
+                else if (_viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists or SidebarRowKind.Home) { BuildSidebar(); ShowCurrent(); }
             });
         });
     }
@@ -3978,7 +5371,7 @@ internal sealed class MainForm : Form, IMessageFilter
             if (cache.TryGetValue(p, out var c)) { result.Add(c); continue; }
             if (cacheOnly || !File.Exists(p)) continue;
             Track t;
-            try { var nt = MetadataExtractor.Read(p, isVideo: false); t = new Track { Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(p), Artist = nt.Artist, Album = nt.Album, LengthMs = nt.LengthMs }; }
+            try { var nt = MetadataExtractor.Read(p, isVideo: false); t = new Track { Title = !string.IsNullOrWhiteSpace(nt.Title) ? nt.Title : Path.GetFileNameWithoutExtension(p), Artist = nt.Artist, Album = nt.Album, LengthMs = nt.LengthMs, Bitrate = nt.Bitrate, SampleRate = nt.SampleRate, FileSize = nt.FileSize, FileTypeDescription = nt.FileTypeDescription }; }
             catch { t = new Track { Title = Path.GetFileNameWithoutExtension(p) }; }
             t.MediaType = MediaType.Audio; t.LocalPath = p;
             try { t.DateAdded = File.GetLastWriteTime(p); } catch { }
@@ -4003,7 +5396,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 RatingStars(t.Rating), t.PlayCount > 0 ? t.PlayCount.ToString() : "", DateAddedStr(t.DateAdded), t.DurationStr);
             _tracks.Rows[r].Tag = t;
         }
-        _populatingGrid = false; _tracks.ResumeLayout(); SizeTracks();
+        _populatingGrid = false; _tracks.ResumeLayout(); UpdateSelectionBar(); SizeTracks();
         string name = lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name;
         _emptyMsg = list.Count == 0 ? Loc.T("This playlist is empty — right-click songs in Local Music to add them.") : "";
         // A chosen cover wins over the auto (name-derived) header tile; either way the tile is clickable to pick one.
@@ -4069,11 +5462,13 @@ internal sealed class MainForm : Form, IMessageFilter
         SetStatus(Loc.T("Removed {0} song(s) from “{1}”.", n, lp.Name));
     }
 
+    /// <summary>The selected songs' files IN LIST ORDER (see <see cref="SelectedTrackIds"/>).</summary>
     private List<string> SelectedLocalPaths()
     {
-        var paths = new List<string>();
-        foreach (DataGridViewRow row in _tracks.SelectedRows) if (row.Tag is Track t && t.LocalPath is { } p) paths.Add(p);
-        return paths;
+        var rows = new List<(int Index, string Path)>();
+        foreach (DataGridViewRow row in _tracks.SelectedRows) if (row.Tag is Track t && t.LocalPath is { } p) rows.Add((row.Index, p));
+        rows.Sort((a, b) => a.Index.CompareTo(b.Index));
+        return rows.Select(x => x.Path).ToList();
     }
 
     /// <summary>Right-click menu for tracks in Local Music / a local playlist (no iPod write involved).</summary>
@@ -4685,7 +6080,7 @@ internal sealed class MainForm : Form, IMessageFilter
             _tracks.Rows[hit.RowIndex].Selected = true;
         }
         var pt = _tracks.PointToScreen(e.Location);
-        if (_viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist) ShowLocalTrackMenu(pt);
+        if (_viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists) ShowLocalTrackMenu(pt);
         else ShowTrackMenu(pt);
     }
 
@@ -4763,11 +6158,15 @@ internal sealed class MainForm : Form, IMessageFilter
         m.Show(screen);
     }
 
+    /// <summary>The selected songs' ids IN LIST ORDER. DataGridView hands its SelectedRows back in the
+    /// order they were selected (a dragged range arrives bottom-to-top), which used to add a run of songs
+    /// to a playlist upside down.</summary>
     private List<uint> SelectedTrackIds()
     {
-        var ids = new List<uint>();
-        foreach (DataGridViewRow row in _tracks.SelectedRows) if (row.Tag is Track t) ids.Add(t.UniqueId);
-        return ids;
+        var rows = new List<(int Index, uint Id)>();
+        foreach (DataGridViewRow row in _tracks.SelectedRows) if (row.Tag is Track t) rows.Add((row.Index, t.UniqueId));
+        rows.Sort((a, b) => a.Index.CompareTo(b.Index));
+        return rows.Select(x => x.Id).ToList();
     }
 
     private void DeletePlaylist(Playlist pl)
@@ -4971,7 +6370,7 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         // If a drilled album/artist is now empty (all its tracks deleted, or edited so they no longer match),
         // drop back to the overview grid instead of stranding the user on an empty filtered page.
-        if (_browseFilter is not null && _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists
+        if (_browseFilter is not null && _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists
             && !(_db?.Tracks.Any(t => MediaType.IsAudio(t.MediaType) && _browseFilter(t)) ?? false))
             _browseFilter = null;
         BuildSidebar();
@@ -4999,7 +6398,7 @@ internal sealed class MainForm : Form, IMessageFilter
         });
         dlg.Owner = this;   // so the flyout can snap the frosted-glass backdrop from behind it
         // Defer the show so it isn't dismissed by the click that opened it (button mouse-down → reactivation race).
-        BeginInvoke(() => dlg.ShowAnchored(anchor));
+        BeginInvoke(() => dlg.ShowAnchored(anchor, _deck));
     }
 
     private void OpenProFeatures(Rectangle anchor)
@@ -5018,7 +6417,7 @@ internal sealed class MainForm : Form, IMessageFilter
             },
             minutes => _nowPlaying.SetSleepMinutes(minutes));
         dlg.Owner = this;   // so the flyout can snap the frosted-glass backdrop from behind it
-        BeginInvoke(() => dlg.ShowAnchored(anchor));
+        BeginInvoke(() => dlg.ShowAnchored(anchor, _deck));
     }
 
     /// <summary>Supply the next track (path + small cover) for gapless/crossfade prefetch — mirrors the forward
@@ -5063,10 +6462,12 @@ internal sealed class MainForm : Form, IMessageFilter
             if (_navHistory.Count > 200) _navHistory.RemoveAt(0);
         }
         _playingTrack = t;
+        NotePlayed(t);
         int ri = RowIndexOf(t);
         if (ri >= 0) _tracks.EnsureRowVisible(ri);
         if (_coverFlow is not null && MediaType.IsAudio(t.MediaType)) _coverFlow.PlayingTag = CoverTag(t, _cfMode);
         RefreshUpNext();   // update the Up Next panel (Now-Playing row + dequeued item)
+        LoadLyrics();
     }
 
     /// <summary>Pick a local audio file on the PC and play it in the now-playing bar (independent of the iPod).</summary>
@@ -5084,6 +6485,8 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_viewKind == SidebarRowKind.Photos && !(_device?.Profile.SupportsPhotos == true && _settings.ShowPhotos)) _viewKind = SidebarRowKind.AllSongs;
         BuildSidebar();
         ShowCurrent();
+        _nowPlaying.ApplyDiscord(_settings.DiscordRichPresence, _settings.DiscordAppId, _settings.DiscordCoverArt);   // connect/disconnect without a restart
+        CoverDownloads.Enabled = _settings.OnlineCovers; CoverDownloads.EmbedLocal = _settings.EmbedDownloadedCovers;
         Glass.PopupsEnabled = _settings.GlassPopups;   // keep the themed menus' glass gate live (the flyout-open sites also set it, but a menu can open first)
         if (!_settings.GlassPopups) { _listSnap?.Dispose(); _listSnap = null; _nowPlaying.SetFrost(null); }  // toggled off → drop the frost
         Invalidate(true);
@@ -5102,8 +6505,9 @@ internal sealed class MainForm : Form, IMessageFilter
         // PC-side files never carry a rating or play count (the scanner reads title/artist/album/length only,
         // and click-to-rate needs a writable iPod) — so in the local views those two columns are always empty.
         // Hide them there and let their width flow to SONG/ARTIST/ALBUM instead.
-        bool local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist;
+        bool local = _viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
         _tracks.Columns[0].Visible = _settings.ListArtwork;   // compact = text-only (no cover), like iTunes
+        _tracks.Columns[1].DefaultCellStyle.Padding = new Padding(_settings.ListArtwork ? 8 : RowActionW, 0, 4, 0);   // text-only: a gutter for the playing mark + the hover play glyph
         _tracks.Columns[2].Visible = _settings.ShowArtist    && w >= 380;
         _tracks.Columns[3].Visible = _settings.ShowAlbum     && w >= 460;
         _tracks.Columns[6].Visible = _settings.ShowDateAdded && w >= 550;
@@ -5121,7 +6525,8 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.BackColor = Theme.Bg;
         _sidebar.BackColor = Theme.SidebarBg;
         _search.Restyle();
-        if (_search.Parent is Control searchHost) searchHost.BackColor = Theme.Bg;
+        // (the search box's host is the rail now, coloured above; re-tinting it to the content colour painted the
+        //  rail lighter than its own surface - square corners around the search pill and the footer buttons)
         _scrollbar.BackColor = Theme.Bg;       // music-list scrollbar track (baked at field-init)
         _deviceScroll.BackColor = Theme.Bg;
     }
@@ -5137,10 +6542,24 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_content is not null) _content.BackColor = Theme.Bg;
         RecolorBakedControls();
         if (_photoView.Parent is Control center) center.BackColor = Theme.Bg;
-        if (_tracks.Parent is Control gh) gh.BackColor = Theme.Bg;
+        if (_tracks.Parent is Control gh) gh.BackColor = Theme.Bg;   // the viewport
+        // Every surface that bakes its BackColor at creation. The list's HOST is the one whose padding frames the
+        // grid (it stayed in the old palette: a green frame on a blue theme); the empty state's + the home page's
+        // buttons clear with their parent's colour; the side card's tabs hold three more baked panels.
+        _gridHost.BackColor = Theme.Bg;
+        _selBar?.Restyle();
+        _trackViewport.BackColor = Theme.Bg;
+        _browseView.BackColor = Theme.Bg;
+        _photoView.BackColor = Theme.Bg;
+        if (_emptyView is not null) _emptyView.BackColor = Theme.Bg;
+        if (_homeView is not null) _homeView.BackColor = Theme.Bg;
+        if (_side is not null) { _side.BackColor = Theme.Bg; _side.UpNext.BackColor = Theme.Bg; _side.History.BackColor = Theme.Bg; _side.Lyrics.BackColor = Theme.Bg; }
         _deviceView.BackColor = Theme.Bg;
         _deviceScrollPanel.BackColor = Theme.Bg;
         _deviceScroll.BackColor = Theme.Bg;
+        if (_root is not null) { var oldLogo = _root.Logo; _root.Logo = CoverArt.AppLogo(); oldLogo?.Dispose(); _nowPlaying.Invalidate(); }   // the corner mark follows the accent
+        // the Cover Flow placeholder cover is painted in theme colours once and kept; let the next open rebuild it
+        if (_cfPlaceholder is not null && _coverFlow is not { Visible: true }) { _cfPlaceholder.Dispose(); _cfPlaceholder = null; }
         Theme.StyleGrid(_tracks);
         _tracks.RowTemplate.Height = _settings.RowHeight;
         var sel = Theme.Blend(Theme.Bg, Theme.Accent, 0.12);

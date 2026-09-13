@@ -360,7 +360,15 @@ internal sealed class RawDb
         foreach (var ds in Datasets.Where(d => d.Type is 2 or 3 && d.Playlists is not null))
             foreach (var pl in ds.Playlists!.Where(p => !IsMaster(p) && PlaylistPid(p) == persistentId))
             {
-                pl.Mhips = pl.Mhips.OrderBy(m => rank.TryGetValue(ReadU32(m, 0x18), out int r) ? r : int.MaxValue).ToList();
+                var sorted = pl.Mhips.OrderBy(m => rank.TryGetValue(ReadU32(m, 0x18), out int r) ? r : int.MaxValue).ToList();
+                // Only touch the playlist when the order ACTUALLY moves: a reorder into the order it already
+                // has must stay byte-identical (a --reordertest invariant), so the legacy sortorder repair
+                // rides along with a real change rather than rewriting a healthy DB on a no-op.
+                if (!sorted.Select(m => ReadU32(m, 0x18)).SequenceEqual(pl.Mhips.Select(m => ReadU32(m, 0x18))))
+                {
+                    RepairSortOrder(pl);   // a dragged order only sticks under sortorder 1
+                    pl.Mhips = sorted;
+                }
                 changed = true;
             }
         return changed;
@@ -397,7 +405,10 @@ internal sealed class RawDb
             byte[] prefix = template is not null ? (byte[])template.Prefix.Clone() : BuildMinimalMhypPrefix();
             if (prefix.Length > 0x14) prefix[0x14] = 0;             // not the master playlist
             if (prefix.Length >= 0x2C) { prefix[0x2A] = 0; prefix[0x2B] = 0; } // not a podcast playlist (clear the flag the template may carry)
-            if (prefix.Length >= 0x30) PatchU32(prefix, 0x2C, 0);  // default sort order (don't inherit the template's)
+            // Sort order (@0x2C): 1 = MANUAL, i.e. "play in the order the list stores". Every playlist iTunes
+            // writes carries 1, and it is what makes a hand-dragged order actually stick on the device — 0 is
+            // an unspecified default no real playlist uses, so never inherit the template's value either.
+            if (prefix.Length >= 0x30) PatchU32(prefix, 0x2C, 1);
             if (prefix.Length >= 0x24) PatchU64(prefix, 0x1C, pid); // same persistent id in every dataset
             prefix = RebuildPrefixWithName(prefix, name);
             ds.Playlists!.Add(new RawPlaylist { Prefix = prefix, Mhips = new List<byte[]>(), Trailing = Array.Empty<byte>() });
@@ -438,6 +449,7 @@ internal sealed class RawDb
             foreach (var pl in ds.Playlists!.Where(p => !IsMaster(p) && PlaylistPid(p) == persistentId))
             {
                 if (pl.Mhips.Select(m => ReadU32(m, 0x18)).SequenceEqual(orderedIds)) continue;  // already exact → no change
+                RepairSortOrder(pl);   // this list's order is explicit too, so make sure the device honours it
                 pl.Mhips = orderedIds.Select(id => template is not null ? CloneMhip(template, id) : BuildMinimalMhip(id)).ToList();
                 changed = true;
             }
@@ -504,6 +516,15 @@ internal sealed class RawDb
     }
 
     private static bool IsMaster(RawPlaylist pl) => pl.Prefix.Length > 0x14 && pl.Prefix[0x14] != 0;
+
+    /// <summary>Playlists Mixtape created before the sort-order fix carry 0 at mhyp @0x2C — a value no real
+    /// playlist uses, and one under which a hand-dragged order does not stick on the device. Normalise it to
+    /// 1 (MANUAL) whenever we rewrite the playlist anyway, and ONLY when it is 0, so a genuine iTunes sort
+    /// order (e.g. 5) is never touched.</summary>
+    private static void RepairSortOrder(RawPlaylist pl)
+    {
+        if (pl.Prefix.Length >= 0x30 && ReadU32(pl.Prefix, 0x2C) == 0) PatchU32(pl.Prefix, 0x2C, 1);
+    }
 
     /// <summary>Master (library) playlists counted across EVERY playlist dataset. iTunes mirrors the
     /// playlist list into mhsd type 2 AND type 3, so a healthy DB reports one master per dataset. The

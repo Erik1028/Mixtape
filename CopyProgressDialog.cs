@@ -43,11 +43,10 @@ internal sealed class ThemedProgressBar : Control
 /// window stays responsive. The work delegate receives a <c>report(done, text)</c> callback and
 /// a <c>cancelled()</c> check; the dialog closes itself when the work finishes (or is cancelled).
 /// </summary>
-internal sealed class CopyProgressDialog : Form
+internal sealed class CopyProgressDialog : CardDialog
 {
     private readonly ThemedProgressBar _bar = new() { Dock = DockStyle.Top, Height = 8, Margin = new Padding(0) };
     private readonly Label _status = new() { Dock = DockStyle.Top, Height = 22, ForeColor = Theme.Subtle, AutoEllipsis = true };
-    private readonly Label _heading;
     private readonly ThemedButton _cancel = new() { Text = Loc.T("Cancel"), Width = 96, Height = 30, Pill = true };
     private readonly Action<Action<int, string>, Func<bool>> _work;
     private volatile bool _cancelled;
@@ -58,17 +57,15 @@ internal sealed class CopyProgressDialog : Form
     public CopyProgressDialog(string heading, int total, Action<Action<int, string>, Func<bool>> work)
     {
         _work = work;
-        Text = "Mixtape";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        ControlBox = false; // force Cancel / completion; no stray X mid-copy
+        Text = heading;      // the card's title strip carries it (it used to be a label in the body)
+        ShowClose = false;   // force Cancel / completion; no stray X mid-copy
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(440, 150);
+        ClientSize = new Size(440, 124);
         BackColor = Theme.Bg;
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
 
         _bar.Maximum = Math.Max(1, total);
-        _heading = new Label { Text = heading, Dock = DockStyle.Top, Height = 26, Font = Theme.UiFont(11f, FontStyle.Bold), ForeColor = Theme.TextCol };
         _status.Text = Loc.T("Preparing…");
         _cancel.Location = new Point(ClientSize.Width - 96 - 20, ClientSize.Height - 30 - 18);
         _cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
@@ -79,11 +76,11 @@ internal sealed class CopyProgressDialog : Form
         host.Controls.Add(_bar);
         host.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 10, BackColor = Theme.Bg });
         host.Controls.Add(_status);
-        host.Controls.Add(_heading);
-        // Dock z-order: last added sits on top, so heading→status→spacer→bar top-to-bottom.
+        // Dock z-order: last added sits on top, so status→spacer→bar top-to-bottom.
         Controls.Add(host);
         Controls.Add(_cancel);
         _cancel.BringToFront(); // host is Dock=Fill and opaque; without this it covers the Cancel button (invisible + unclickable)
+        AdoptCard();
 
         Shown += (_, _) => Start();
     }

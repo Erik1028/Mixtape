@@ -13,7 +13,7 @@ internal sealed class BrowseGridView : Panel
     public event Action<string>? ItemActivated; // carries the card Key
     public event Action? Scrolled;               // so the host can refresh the frosted-bar backdrop
 
-    private sealed class Card { public string Key = ""; public string Title = ""; public string Subtitle = ""; public Bitmap? Cover; public int Seed;
+    private sealed class Card { public string Key = ""; public string Title = ""; public string Subtitle = ""; public Bitmap? Cover; public int Seed; public string? Initials;
         public float Fade = 1f; public Bitmap? Prev; public Tween? Tween; }   // Prev/Cover are cache-borrowed (never disposed); cross-dissolve state
     private readonly List<Card> _cards = new();
     private readonly List<(Rectangle Rect, Card Card)> _hit = new();
@@ -25,9 +25,9 @@ internal sealed class BrowseGridView : Panel
     private int _barDragStartY, _barDragStartScroll;
     private const int BarZone = 16;
     // Cached fonts — the title/subtitle fonts were allocated PER CARD (and undisposed) every repaint.
-    private readonly Font _fTitle = Theme.UiFont(9.5f, FontStyle.Bold), _fSub = Theme.UiFont(8.25f), _fEmpty = Theme.UiFont(11f);
+    private readonly Font _fTitle = Theme.UiFont(9.5f, FontStyle.Bold), _fSub = Theme.UiFont(Theme.SzCaption), _fEmpty = Theme.UiFont(Theme.SzBody);
 
-    private const int Pad = 30, Gap = 16, TextH = 42; // Pad 30 = the song list's text gutter (22 host + 8 cell)
+    private const int Pad = 22, Gap = 16, TextH = 42; // 22 = the one frame every page keeps to the card edge
     private const int TargetCover = 132;              // desired cover edge — the actual edge flexes to fill the width
     private int TileH => CoverW + TextH;
 
@@ -59,7 +59,7 @@ internal sealed class BrowseGridView : Panel
         foreach (var c in _cards) c.Tween?.Cancel();
         _cards.Clear();
         foreach (var (key, title, sub) in items)
-            _cards.Add(new Card { Key = key, Title = title, Subtitle = sub, Seed = Theme.StableHash(title + sub) });
+            _cards.Add(new Card { Key = key, Title = title, Subtitle = sub, Seed = Theme.StableHash(title + sub), Initials = Theme.Initials(title, sub) });
         _empty = emptyText;
         _scroll = 0;
         Invalidate();
@@ -78,7 +78,7 @@ internal sealed class BrowseGridView : Panel
             if (ReferenceEquals(c.Cover, cover)) return;
             c.Tween?.Cancel(); c.Tween = null;
             if (!animate || !Anim.MotionEnabled) { c.Cover = cover; c.Prev = null; c.Fade = 1f; InvalidateCardAt(i); return; }
-            c.Prev = c.Cover ?? Theme.MakeArt(CoverW, c.Seed);   // outgoing (cache-owned) — dissolve from it
+            c.Prev = c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials);   // outgoing (cache-owned) — dissolve from it
             c.Cover = cover;
             c.Fade = 0f;
             int idx = i;   // repaint ONLY this tile each frame, not the whole grid (many covers stream in at once)
@@ -159,7 +159,7 @@ internal sealed class BrowseGridView : Panel
         _hit.Clear();
         if (_cards.Count == 0)
         {
-            TextRenderer.DrawText(g, _empty, _fEmpty, new Rectangle(0, 0, Width, Height), Theme.Faint, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            Theme.DrawEmptyState(g, ClientRectangle, _empty, null);
             return;
         }
 
@@ -208,9 +208,9 @@ internal sealed class BrowseGridView : Panel
             if (c.Prev is not null && c.Fade < 1f)
             {
                 g.DrawImage(c.Prev, cover);                                                                          // outgoing holds
-                Theme.DrawImageAlpha(g, c.Cover ?? Theme.MakeArt(CoverW, c.Seed), new RectangleF(cover.X, cover.Y, cover.Width, cover.Height), c.Fade); // incoming dissolves in
+                Theme.DrawImageAlpha(g, c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), new RectangleF(cover.X, cover.Y, cover.Width, cover.Height), c.Fade); // incoming dissolves in
             }
-            else g.DrawImage(c.Cover ?? Theme.MakeArt(CoverW, c.Seed), cover);
+            else g.DrawImage(c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), cover);
             g.Clip = clip;
         }
         if (hover) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255)); g.FillPath(hb, hp); }

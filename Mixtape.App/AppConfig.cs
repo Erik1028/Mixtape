@@ -54,6 +54,24 @@ internal static class AppConfig
 
     public static void SaveLanguage(string code) => Merge(o => o["Language"] = code);
 
+    /// <summary>Discord Rich Presence: the on/off toggle and the Application ID. Same keys the WinForms app
+    /// uses in the shared settings.json, so the setting follows the user between the two builds.</summary>
+    public static (bool On, string AppId, bool CoverArt) LoadDiscord()
+    {
+        try
+        {
+            if (File.Exists(FilePath) && JsonNode.Parse(File.ReadAllText(FilePath)) is JsonObject o)
+                return (o["DiscordRichPresence"]?.GetValue<bool>() ?? false,
+                        o["DiscordAppId"]?.GetValue<string>() ?? "",
+                        o["DiscordCoverArt"]?.GetValue<bool>() ?? false);
+        }
+        catch { }
+        return (false, "", false);
+    }
+
+    public static void SaveDiscord(bool on, string appId, bool coverArt) =>
+        Merge(o => { o["DiscordRichPresence"] = on; o["DiscordAppId"] = appId; o["DiscordCoverArt"] = coverArt; });
+
     public static void Save(string accent, string variant) => Merge(o =>
     {
         o["Accent"] = accent;

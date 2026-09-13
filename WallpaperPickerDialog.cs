@@ -4,7 +4,7 @@ namespace iPodCommander;
 
 /// <summary>A modal multi-select picker for the generated <see cref="Wallpaper"/> pack. Returns the chosen
 /// design indices so the host can render them full-size and add them to the iPod's Photos library.</summary>
-internal sealed class WallpaperPickerDialog : Form
+internal sealed class WallpaperPickerDialog : CardDialog
 {
     private readonly WallpaperGrid _grid;
     private readonly ThemedButton _add;
@@ -13,7 +13,6 @@ internal sealed class WallpaperPickerDialog : Form
     public WallpaperPickerDialog()
     {
         Text = Loc.T("Add wallpapers");
-        FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         ClientSize = new Size(596, 396);
@@ -37,6 +36,7 @@ internal sealed class WallpaperPickerDialog : Form
         Controls.Add(cancel);
         AcceptButton = _add; CancelButton = cancel;
         UpdateAdd();
+        AdoptCard();
         if (Anim.MotionEnabled) Opacity = 0;
     }
 
@@ -62,7 +62,7 @@ internal sealed class WallpaperPickerDialog : Form
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int cap = 0x001A1716; DwmSetWindowAttribute(Handle, 35, ref cap, sizeof(int)); } catch { }
+        try { var bg = Theme.Bg; int cap = (bg.B << 16) | (bg.G << 8) | bg.R;   /* the caption in the theme's own surface colour (was a baked Graphite grey) */ DwmSetWindowAttribute(Handle, 35, ref cap, sizeof(int)); } catch { }
     }
 }
 

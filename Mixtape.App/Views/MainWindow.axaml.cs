@@ -384,7 +384,11 @@ public partial class MainWindow : Window
         CoverFlow.SetItems(items, start);
     }
 
-    private void OnSettings(object? sender, RoutedEventArgs e) => new SettingsWindow().ShowDialog(this);
+    private async void OnSettings(object? sender, RoutedEventArgs e)
+    {
+        await new SettingsWindow().ShowDialog(this);
+        _vm.ApplyDiscord();   // the dialog saves as you type; apply the Discord change without a restart
+    }
 
     // Repaint the wallpaper (60° 4-stop gradient + both glows) and the theme-baked gradients
     // (scroll-edge fade, idle now-playing tile) for the current theme.

@@ -19,7 +19,7 @@ internal sealed class DeviceHero : Control
     // Cached once — Theme.UiFont/DisplayFont allocate a fresh GDI Font per call; creating them inline in
     // OnPaint would leak a handle every repaint. Disposed in Dispose().
     private readonly Font _fSub = Theme.UiFont(8f);
-    private readonly Font _fLegend = Theme.UiFont(9f);
+    private readonly Font _fLegend = Theme.UiFont(Theme.SzBody);
     private int _ringR = 0;          // the donut radius the centre font is sized for; rebuild the font only when it changes
     private Font? _fTotalDyn;        // centre "free" number — scales with the (width-driven) ring radius
 
@@ -93,7 +93,9 @@ internal sealed class DeviceHero : Control
         using (var hole = new SolidBrush(Parent?.BackColor ?? Theme.Bg)) g.FillEllipse(hole, cx - ri, cy - ri, ri * 2, ri * 2);
 
         long shownFree = _sweep >= 1f ? _free : (long)(_free * _sweep);
-        TextRenderer.DrawText(g, CapacityBar.Human(shownFree), _fTotalDyn!, new Rectangle(cx - r, cy - 19, r * 2, 22), Theme.TextCol,
+        string freeTxt = CapacityBar.Human(shownFree);
+        var fsz = TextRenderer.MeasureText(g, freeTxt, _fTotalDyn!);
+        TextRenderer.DrawText(g, freeTxt, _fTotalDyn!, new Rectangle(cx - r, cy - 4 - fsz.Height, r * 2, fsz.Height), Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix);
         TextRenderer.DrawText(g, Loc.T("free of {0}", CapacityBar.Human(_total)), _fSub, new Rectangle(cx - r, cy + 4, r * 2, 16), Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
