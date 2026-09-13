@@ -375,7 +375,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     private static int MeasureRowHeight(string subtitle, Control? control)
     {
         const int labelLeft = 18, gap = 16, rightPad = 18;
-        int ctrlLeft = control is not null ? CardW - rightPad - control.Width : CardW - rightPad;
+        int inset = control is IEdgeInset ei ? ei.RightInset : 0;   // mirrors CardPanel.AddRow
+        int ctrlLeft = control is not null ? CardW - rightPad - control.Width + inset : CardW - rightPad;
         int labelW = Math.Max(80, ctrlLeft - gap - labelLeft);
         using var f = Theme.UiFont(9f);
         int descH = TextRenderer.MeasureText(subtitle, f, new Size(labelW, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;

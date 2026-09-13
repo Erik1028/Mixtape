@@ -281,7 +281,13 @@ internal sealed class HomeView : Panel
         int tx = art.Right + 14, tw = card.Right - 12 - btnW - tx;
         TextRenderer.DrawText(g, r.Title, _fCardTitle, new Rectangle(tx, card.Y + 13, tw, 20), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
         int timesW = r.Times.Length > 0 ? TextRenderer.MeasureText(r.Times, _fSub, new Size(200, 18), TextFormatFlags.NoPrefix).Width + 4 : 0;   // the position never gets cut: it has its own slot
-        TextRenderer.DrawText(g, r.Sub, _fSub, new Rectangle(tx, card.Y + 37, Math.Max(0, tw - timesW - 12), 18), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+        int subW = Math.Max(0, tw - timesW - 12);
+        // "Artist  •  Album" with no room for the album read as "Tom Petty  •  ..." — the album is DROPPED
+        // instead of being cut to an ellipsis, the way the deck's card does it.
+        string sub = r.Sub;
+        if (TextRenderer.MeasureText(sub, _fSub, new Size(int.MaxValue, 18), TextFormatFlags.NoPrefix).Width > subW
+            && sub.IndexOf("  •  ", StringComparison.Ordinal) is int sep && sep > 0) sub = sub[..sep];
+        TextRenderer.DrawText(g, sub, _fSub, new Rectangle(tx, card.Y + 37, subW, 18), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
         if (timesW > 0) TextRenderer.DrawText(g, r.Times, _fSub, new Rectangle(tx + tw - timesW, card.Y + 37, timesW, 18), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
         _resumeBtn.Visible = true;
         _resumeBtn.SetBounds(card.Right - 12 - btnW, card.Y + (CardH - 30) / 2, btnW, 30);
