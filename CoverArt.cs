@@ -22,6 +22,24 @@ internal static class CoverArt
 
     public static Bitmap Generate(int id, int size) => GenerateTitled(id, size, null);
 
+    /// <summary>A full-bleed variant (no rounded clip, no frame) for surfaces that shape the tile themselves - Cover
+    /// Flow rounds and frames its covers analytically inside the perspective warp.</summary>
+    public static Bitmap GenerateSquare(int id, int size)
+    {
+        id = ((id % Count) + Count) % Count;
+        var key = (id + 1000, size);   // its own cache slot next to the rounded tiles
+        if (Cache.TryGetValue(key, out var hit)) return hit;
+        var bmp = new Bitmap(size, size);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            Paint(g, id % Styles, id * (360.0 / Count), size);
+        }
+        Cache[key] = bmp;
+        return bmp;
+    }
+
     /// <summary>Like <see cref="Generate"/>, but the cassette style (<see cref="CassetteId"/>) prints
     /// <paramref name="title"/> on its label. Non-cassette ids ignore the title.</summary>
     public static Bitmap GenerateTitled(int id, int size, string? title)
@@ -190,7 +208,77 @@ internal static class CoverArt
         double h = string.IsNullOrEmpty(title) ? 168 : (Theme.StableHash(title) % 360 + 360) % 360;
         var full = new Rectangle(0, 0, s, s);
         using (var b = new LinearGradientBrush(full, Theme.HsvToColor(h, 0.52, 0.44), Theme.HsvToColor(h + 16, 0.66, 0.22), Theme.ArtAngle)) g.FillRectangle(b, full);
+        CassetteBody(g, s, h, title);
+    }
 
+    private static Bitmap? _iconSrc;   // the shipped app icon's 32 px frame, read once
+    private const double IconTileHue = 141;   // the tile's median hue in the shipped icon (measured); the cassette's label band is blue (230-270)
+
+    /// <summary>The window's corner mark: the app icon's OWN cassette artwork on its tile, with only the tile's green
+    /// re-hued to the accent - the cassette's greys and its blue label band are left exactly as drawn - so "if the
+    /// theme is blue, the little icon is blue too" without replacing the artwork. Falls back to a drawn cassette
+    /// when the icon cannot be read. A fresh bitmap each call (the caller owns it).</summary>
+    public static Bitmap AppLogo()
+    {
+        if (_iconSrc is null)
+            try { if (Environment.ProcessPath is string exe) _iconSrc = System.Drawing.Icon.ExtractAssociatedIcon(exe)?.ToBitmap(); } catch { _iconSrc = null; }
+        if (_iconSrc is null) return DrawnLogo(32);
+        double target = Theme.AccentHue();
+        var bmp = new Bitmap(_iconSrc.Width, _iconSrc.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        for (int y = 0; y < bmp.Height; y++)
+            for (int x = 0; x < bmp.Width; x++)
+            {
+                Color c = _iconSrc.GetPixel(x, y);
+                if (c.A == 0) continue;
+                double r = c.R / 255.0, g = c.G / 255.0, b = c.B / 255.0;
+                double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min;
+                double s = max <= 0 ? 0 : d / max, v = max;
+                double h = d < 1e-6 ? 0 : max == r ? ((g - b) / d % 6) * 60 : max == g ? ((b - r) / d + 2) * 60 : ((r - g) / d + 4) * 60;
+                if (h < 0) h += 360;
+                if (s > 0.30 && h >= 70 && h <= 185)   // the tile (green through teal); everything else is the cassette
+                {
+                    var nc = Theme.HsvToColor(target + (h - IconTileHue) * 0.6, s, v);   // keep a hint of the tile's own hue gradient
+                    c = Color.FromArgb(c.A, nc.R, nc.G, nc.B);
+                }
+                bmp.SetPixel(x, y, c);
+            }
+        return bmp;
+    }
+
+    /// <summary>A drawn stand-in for the corner mark (only when the app icon cannot be read): the cassette on a
+    /// rounded tile in the accent's hue, rendered at 2x and downsampled.</summary>
+    private static Bitmap DrawnLogo(int size)
+    {
+        int s = Math.Max(8, size * 2);
+        double h = Theme.AccentHue();
+        using var hi = new Bitmap(s, s);
+        using (var g = Graphics.FromImage(hi))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            float r = s * 0.20f;
+            using (var tile = Theme.RoundedRect(new RectangleF(0, 0, s, s), r))
+            using (var b = new LinearGradientBrush(new Rectangle(0, 0, s, s), Theme.HsvToColor(h, 0.48, 0.72), Theme.HsvToColor(h + 10, 0.70, 0.42), 90f))
+                g.FillPath(b, tile);   // a filled path, not a clip: the corners stay anti-aliased
+            CassetteBody(g, s, h, "");
+            using var ip = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, s - 2, s - 2), r);
+            using var pen = new Pen(Color.FromArgb(40, 255, 255, 255));
+            g.DrawPath(pen, ip);
+        }
+        var bmp = new Bitmap(size, size);
+        using (var g2 = Graphics.FromImage(bmp))
+        {
+            g2.InterpolationMode = InterpolationMode.HighQualityBicubic; g2.PixelOffsetMode = PixelOffsetMode.HighQuality; g2.CompositingQuality = CompositingQuality.HighQuality;
+            g2.DrawImage(hi, new Rectangle(0, 0, size, size));
+        }
+        return bmp;
+    }
+
+    /// <summary>The cassette itself (shell, label, tape window, reels, screws) in hue <paramref name="h"/>, drawn
+    /// over whatever background the caller painted.</summary>
+    private static void CassetteBody(Graphics g, int s, double h, string title)
+    {
         float bw = s * 0.80f, bh = s * 0.54f, bx = (s - bw) / 2f, by = (s - bh) / 2f;
         var body = new RectangleF(bx, by, bw, bh);
         Color shell = Theme.HsvToColor(h, 0.10, 0.93);

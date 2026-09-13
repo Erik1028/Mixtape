@@ -5,7 +5,7 @@ namespace iPodCommander;
 /// <summary>A modal picker showing the <see cref="CoverArt"/> gallery (plus a "Default / automatic"
 /// tile) so the user can choose a cover for a playlist or the library. Returns the chosen art id,
 /// or -1 for "default" (revert to the song-derived/auto cover).</summary>
-internal sealed class CoverPickerDialog : Form
+internal sealed class CoverPickerDialog : CardDialog
 {
     private readonly CoverGrid _grid;
     public int SelectedCoverId => _grid.SelectedCoverId;
@@ -13,7 +13,6 @@ internal sealed class CoverPickerDialog : Form
     public CoverPickerDialog(string title, int currentId, string? sampleName = null)
     {
         Text = title;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         ClientSize = new Size(596, 540);
@@ -31,6 +30,7 @@ internal sealed class CoverPickerDialog : Form
         Controls.Add(cancel);
         AcceptButton = ok;
         CancelButton = cancel;
+        AdoptCard();
         if (Anim.MotionEnabled) Opacity = 0;   // fade up in OnShown, matching the Settings / Library Doctor dialogs
     }
 
@@ -50,7 +50,7 @@ internal sealed class CoverPickerDialog : Form
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int cap = 0x001A1716; DwmSetWindowAttribute(Handle, 35, ref cap, sizeof(int)); } catch { }
+        try { var bg = Theme.Bg; int cap = (bg.B << 16) | (bg.G << 8) | bg.R;   /* the caption in the theme's own surface colour (was a baked Graphite grey) */ DwmSetWindowAttribute(Handle, 35, ref cap, sizeof(int)); } catch { }
     }
 }
 

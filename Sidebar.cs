@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace iPodCommander;
 
-internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist, SmartPlaylist }
+internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist, SmartPlaylist, LocalAlbums, LocalArtists, Home }
 
 /// <summary>
 /// Apple-Music-style left rail: a "Mixtape" wordmark, then sections (DEVICE / LIBRARY /
@@ -32,6 +32,9 @@ internal sealed class Sidebar : Panel
         public SidebarRowKind AddKind;   // what the "+" creates (Playlist = iPod, LocalPlaylist = on-PC)
         public Color Tile;
         public Bitmap? Icon;   // real mini cover art, when available
+        public int Height = ItemH;   // the device row is drawn at the 40 px scale (56 tall); everything else at ItemH
+        public string? Count;        // right-aligned figure: how many songs / albums / items live behind the row
+        public string? Sub;          // the device row's second line ("20,6 GB free")
     }
 
     private readonly List<Row> _rows = new();
@@ -47,10 +50,11 @@ internal sealed class Sidebar : Panel
     private Bitmap? _logo;
     // Cached fonts — Theme.UiFont/DisplayFont allocate a fresh GDI Font per call; the rail repaints on every
     // hover/scroll and the row font was allocated PER ROW. Reuse instead.
-    private readonly Font _fWordmark = Theme.DisplayFont(13f, FontStyle.Bold);
+    private readonly Font _fWordmark = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
+    private readonly Font _fSub = Theme.UiFont(Theme.SzCaption);
     private readonly Font _fHint = Theme.UiFont(8.5f, FontStyle.Italic);
-    private readonly Font _fSection = Theme.UiFont(8f, FontStyle.Bold);
-    private readonly Font _fRow = Theme.UiFont(9.5f), _fRowBold = Theme.UiFont(9.5f, FontStyle.Bold);
+    private readonly Font _fSection = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);
+    private readonly Font _fRow = Theme.UiFont(Theme.SzTitle), _fRowBold = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
 
     private readonly ThemedButton _refresh = new() { Text = Loc.T("Refresh"), Pill = true, Height = 30 };
     private readonly ThemedButton _openFolder = new() { Text = Loc.T("Open folder"), Pill = true, Height = 30 };
@@ -58,7 +62,12 @@ internal sealed class Sidebar : Panel
     private readonly ThinScrollBar _scrollbar = new() { SidebarTrack = true };   // same thin scrollbar + eased wheel as the song list
     private readonly ToolTip _tip = new();
 
-    private const int HeaderH = 60, SectionH = 30, ItemH = 34, FooterH = 56, Pad = 12;
+    // No wordmark header any more — the window has ONE, in the caption strip. The rail's header is now the
+    // app's single search box, which is where a search that filters the LIBRARY belongs.
+    private const int HeaderH = 54, SectionH = 30, ItemH = 34, FooterH = 56, Pad = 12;
+
+    /// <summary>The app-wide search box, hosted at the top of the rail (set once by the host).</summary>
+    public Control? Search { get; set; }
 
     public Sidebar()
     {
@@ -71,11 +80,11 @@ internal sealed class Sidebar : Panel
             v => { if (v != _scroll) { _scroll = v; Invalidate(); } });
         Controls.Add(_refresh);
         Controls.Add(_openFolder);
-        Controls.Add(_settings);
+        _settings.Visible = false;   // the gear moved to the window's caption strip
         _refresh.Click += (_, _) => RefreshClicked?.Invoke();
         _openFolder.Click += (_, _) => OpenFolderClicked?.Invoke();
         _settings.Click += (_, _) => SettingsClicked?.Invoke();
-        _tip.SetToolTip(_settings, "Settings");
+        _tip.SetToolTip(_settings, Loc.T("Settings"));
 
         try { if (Environment.ProcessPath is string p) _logo = System.Drawing.Icon.ExtractAssociatedIcon(p)?.ToBitmap(); } catch { }
 
@@ -125,6 +134,14 @@ internal sealed class Sidebar : Panel
         }
     }
 
+    /// <summary>Activate the first row of a given kind — the host uses this to answer a search typed on a
+    /// page that has nothing to search.</summary>
+    public void ActivateKind(SidebarRowKind kind)
+    {
+        foreach (var r in _rows)
+            if (r.Kind == kind && !r.Hint) { RowActivated?.Invoke(r.Kind, r.Tag); return; }
+    }
+
     /// <summary>Clamp the scroll offset to [0, content − visible] so the list can't scroll past its end into empty space.</summary>
     private void ClampScroll(int value)
     {
@@ -138,8 +155,9 @@ internal sealed class Sidebar : Panel
     // ---- content building ----
     public void Begin() => _rows.Clear();
     public void AddSection(string text, bool showAdd = false, SidebarRowKind addKind = SidebarRowKind.Playlist) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text, ShowAdd = showAdd, AddKind = addKind });
-    public void AddItem(SidebarRowKind kind, string text, object? tag, bool active) =>
-        _rows.Add(new Row { Kind = kind, Text = text, Tag = tag, Active = active, Tile = TileColor(kind, text) });
+    public void AddItem(SidebarRowKind kind, string text, object? tag, bool active, string? count = null, string? sub = null) =>
+        _rows.Add(new Row { Kind = kind, Text = text, Tag = tag, Active = active, Tile = TileColor(kind, text),
+                            Count = count, Sub = sub, Height = kind == SidebarRowKind.Device ? 56 : ItemH });
     public void AddHint(string text) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text, Hint = true });
     // PRESERVE the scroll across rebuilds — a nav rebuild (Begin/AddItem/End on every view switch) must NOT yank the rail
     // back to the top; just re-measure + re-clamp to the (possibly new) content height. (Was `_scroll = 0` → the scroll-reset bug.)
@@ -154,7 +172,7 @@ internal sealed class Sidebar : Panel
         {
             if (row.Hint) { h += ItemH; any = true; }
             else if (row.Kind == SidebarRowKind.Section) { if (any) h += 10; h += SectionH; any = true; }
-            else { h += ItemH; any = true; }
+            else { h += row.Height; any = true; }
         }
         return h;
     }
@@ -177,8 +195,9 @@ internal sealed class Sidebar : Panel
 
     private static Color TileColor(SidebarRowKind kind, string text) => kind switch
     {
-        SidebarRowKind.Device or SidebarRowKind.AllSongs or SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.Videos or SidebarRowKind.Photos => Theme.Accent,
-        _ => Theme.HsvToColor(150 + Theme.StableHash(text) % 150, 0.55, 0.70),
+        SidebarRowKind.Home or SidebarRowKind.Device or SidebarRowKind.AllSongs or SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.Videos or SidebarRowKind.Photos => Theme.Accent,
+        // Neutral: a hue per playlist encoded nothing and competed with the covers the user actually chose.
+        _ => Theme.PanelBg,
     };
 
     /// <summary>Draws a crisp, centred vector icon for the row kind (replaces fuzzy Unicode glyphs).</summary>
@@ -237,12 +256,14 @@ internal sealed class Sidebar : Panel
                 break;
             }
             case SidebarRowKind.Albums: // vinyl disc
+            case SidebarRowKind.LocalAlbums:
             {
                 g.DrawEllipse(pen, x + s * 0.20f, y + s * 0.20f, s * 0.60f, s * 0.60f);
                 g.FillEllipse(br, x + s * 0.44f, y + s * 0.44f, s * 0.12f, s * 0.12f);
                 break;
             }
             case SidebarRowKind.Artists: // person silhouette
+            case SidebarRowKind.LocalArtists:
             {
                 g.FillEllipse(br, x + s * 0.37f, y + s * 0.20f, s * 0.26f, s * 0.26f);
                 var sh = new[] { new PointF(x + s * 0.26f, y + s * 0.82f), new PointF(x + s * 0.34f, y + s * 0.54f), new PointF(x + s * 0.66f, y + s * 0.54f), new PointF(x + s * 0.74f, y + s * 0.82f) };
@@ -258,6 +279,17 @@ internal sealed class Sidebar : Panel
                 float wd = s * 0.30f, wx = x + (s - wd) / 2f, wy = y + s * 0.50f;
                 g.DrawEllipse(pen, wx, wy, wd, wd);                      // click wheel
                 g.FillEllipse(br, wx + wd * 0.36f, wy + wd * 0.36f, wd * 0.28f, wd * 0.28f); // centre button
+                break;
+            }
+            case SidebarRowKind.Home: // a house: roof over walls, a door cut out
+            {
+                g.FillPolygon(br, new[] { new PointF(x + s * 0.50f, y + s * 0.16f), new PointF(x + s * 0.14f, y + s * 0.50f), new PointF(x + s * 0.86f, y + s * 0.50f) });
+                g.FillPolygon(br, new[]
+                {
+                    new PointF(x + s * 0.26f, y + s * 0.47f), new PointF(x + s * 0.74f, y + s * 0.47f), new PointF(x + s * 0.74f, y + s * 0.84f),
+                    new PointF(x + s * 0.58f, y + s * 0.84f), new PointF(x + s * 0.58f, y + s * 0.64f), new PointF(x + s * 0.42f, y + s * 0.64f),
+                    new PointF(x + s * 0.42f, y + s * 0.84f), new PointF(x + s * 0.26f, y + s * 0.84f),
+                });
                 break;
             }
             case SidebarRowKind.LocalMusic: // laptop (music on this PC)
@@ -289,12 +321,16 @@ internal sealed class Sidebar : Panel
         base.OnResize(e);
         // Two equal-width pill buttons side by side, filling the rail with a small gap, centred in the footer.
         const int gap = 8;
-        int bw = Math.Max(40, (Width - Pad * 2 - gap) / 2);
+        int avail = Math.Max(80, Width - Pad * 2 - gap);
+        int needR = Math.Max(40, _refresh.NeededWidth), needO = Math.Max(40, _openFolder.NeededWidth);
+        int extra = avail - needR - needO;
+        int wR = extra >= 0 ? needR + extra / 2 : needR;   // share the slack; labels wider than the rail keep their width...
+        int wO = extra >= 0 ? avail - wR : needO;
+        int x0 = extra >= 0 ? Pad : (Width - (wR + gap + wO)) / 2;   // ...and then the pair overflows EVENLY, staying centred
         int by = Height - FooterH + (FooterH - _refresh.Height) / 2;
-        _refresh.Width = _openFolder.Width = bw;
-        _refresh.Location = new Point(Pad, by);
-        _openFolder.Location = new Point(Pad + bw + gap, by);
-        _settings.Location = new Point(Width - Pad - _settings.Width, 12);
+        _refresh.SetBounds(x0, by, wR, _refresh.Height);
+        _openFolder.SetBounds(x0 + wR + gap, by, wO, _openFolder.Height);
+        Search?.SetBounds(Pad, 10, Math.Max(60, Width - Pad * 2), 34);
         _contentH = MeasureContent();
         LayoutScrollbar();
         ClampScroll(_scroll); // a shorter window mustn't leave the list stranded past its new bottom
@@ -337,12 +373,6 @@ internal sealed class Sidebar : Panel
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.SidebarBg);
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-
-        // --- wordmark header ---
-        if (_logo != null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(_logo, new Rectangle(Pad, 15, 28, 28)); }
-        TextRenderer.DrawText(g, "Mixtape", _fWordmark,
-            new Rectangle(Pad + 34, 14, Width - Pad - 40, 30), Theme.TextCol,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
         // --- rows (scrollable region) ---
         _hit.Clear();
@@ -390,11 +420,12 @@ internal sealed class Sidebar : Panel
                 continue;
             }
 
-            var rowRect = new Rectangle(0, y, Width, ItemH);
+            int rh = row.Height;
+            var rowRect = new Rectangle(0, y, Width, rh);
             _hit.Add((rowRect, row));
-            if (y >= clip.Top && y + ItemH <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
+            if (y >= clip.Top && y + rh <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
             {
-                var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, ItemH - 4);
+                var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, rh - 4);
                 bool hover = ReferenceEquals(row, _hover);
                 if (row.Active || hover)
                 {
@@ -425,9 +456,17 @@ internal sealed class Sidebar : Panel
                 }
 
                 // icon: real mini cover when available, else a coloured tile with a white glyph
-                int ts = 18;
-                var tile = new Rectangle(pill.X + 10, y + (ItemH - ts) / 2, ts, ts);
-                if (row.Icon != null)
+                bool isDevice = row.Kind == SidebarRowKind.Device;
+                int ts = isDevice ? 40 : 18;
+                var tile = new Rectangle(pill.X + (isDevice ? 8 : 10), y + (rh - ts) / 2, ts, ts);
+                if (isDevice && row.Icon != null)
+                {
+                    // The iPod's own picture, on its transparent ground — no clip, no edge.
+                    var prevI = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(row.Icon, tile);
+                    g.InterpolationMode = prevI;
+                }
+                else if (row.Icon != null)
                 {
                     // Round-clip + high-quality downscale so a real/chosen cover matches the rounded tiles
                     // instead of showing as a harsh, muddy square.
@@ -451,7 +490,14 @@ internal sealed class Sidebar : Panel
                     using (var tb = new SolidBrush(row.Tile))
                     using (var tp = Theme.RoundedRect(tile, Theme.RadTileSmall))
                         g.FillPath(tb, tp);
-                    DrawRowGlyph(g, tile, row.Kind, Theme.OnColor(row.Tile));   // contrast with the tile (white vanishes on a light accent)
+                    if (row.Kind is SidebarRowKind.Playlist or SidebarRowKind.SmartPlaylist or SidebarRowKind.LocalPlaylist)
+                    {
+                        // A playlist with no chosen cover shows its own first letter — its name IS its identity.
+                        string first = row.Text.Length > 0 ? row.Text[..1].ToUpperInvariant() : "•";
+                        TextRenderer.DrawText(g, first, _fRowBold, tile, Theme.Faint,
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                    }
+                    else DrawRowGlyph(g, tile, row.Kind, Theme.OnColor(row.Tile));   // contrast with the tile (white vanishes on a light accent)
                 }
 
                 // A device row gets an ⏏ eject button on the right (iTunes-style); reserve space for it.
@@ -459,22 +505,42 @@ internal sealed class Sidebar : Panel
                 if (row.Kind == SidebarRowKind.Device)
                 {
                     const int ew = 30;
-                    var ejectRect = new Rectangle(pill.Right - ew, y, ew, ItemH);
+                    var ejectRect = new Rectangle(pill.Right - ew, y, ew, rh);
                     _ejectHit.Add((ejectRect, row));
                     Color ec = ReferenceEquals(row, _ejectHover) ? Theme.AccentBright : (row.Active ? Color.FromArgb(220, 255, 255, 255) : Theme.Faint);
-                    float ex = ejectRect.X + ejectRect.Width / 2f, ey = y + ItemH / 2f;
+                    float ex = ejectRect.X + ejectRect.Width / 2f, ey = y + rh / 2f;
                     using var eb = new SolidBrush(ec);
                     g.FillPolygon(eb, new[] { new PointF(ex - 5, ey - 1), new PointF(ex + 5, ey - 1), new PointF(ex, ey - 7) }); // ▲
                     g.FillRectangle(eb, ex - 5, ey + 2.5f, 10, 2.2f);                                                            // ▁
                     rightInset = ew + 6;
                 }
 
-                var textRect = new Rectangle(tile.Right + 10, y, pill.Right - tile.Right - rightInset, ItemH);
                 Color tc = row.Active ? Color.White : Theme.TextCol;
-                TextRenderer.DrawText(g, row.Text, row.Active ? _fRowBold : _fRow,
-                    textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                int textRight = pill.Right - rightInset;
+                // A count sits at the right edge, in the caption size; the label gives way to it and ellipsises first.
+                if (row.Count is { Length: > 0 } cnt)
+                {
+                    int cw = TextRenderer.MeasureText(g, cnt, _fSub).Width + 4;
+                    TextRenderer.DrawText(g, cnt, _fSub, new Rectangle(textRight - cw - 2, y, cw, rh), Theme.Faint,
+                        TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                    textRight -= cw + 8;
+                }
+                if (isDevice && row.Sub is { Length: > 0 } sub)
+                {
+                    // The device row at the 40 px scale: the model on line one, the free space beneath it.
+                    var l1 = new Rectangle(tile.Right + 10, y + 9, textRight - tile.Right - 10, 20);
+                    var l2 = new Rectangle(tile.Right + 10, y + 29, textRight - tile.Right - 10, 18);
+                    TextRenderer.DrawText(g, row.Text, _fRowBold, l1, tc, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                    TextRenderer.DrawText(g, sub, _fSub, l2, row.Active ? Color.FromArgb(200, 255, 255, 255) : Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                }
+                else
+                {
+                    var textRect = new Rectangle(tile.Right + 10, y, textRight - tile.Right - 10, rh);
+                    TextRenderer.DrawText(g, row.Text, row.Active ? _fRowBold : _fRow,
+                        textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
             }
-            y += ItemH;
+            y += rh;
             anyDrawn = true;
         }
         _contentH = y + _scroll - HeaderH; // absolute height of all rows, independent of the current scroll

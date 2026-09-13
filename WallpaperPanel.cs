@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+
 namespace iPodCommander;
 
 /// <summary>
@@ -14,6 +16,8 @@ namespace iPodCommander;
 internal sealed class WallpaperPanel : Panel
 {
     public int CaptionHeight = 36;
+    /// <summary>Paint the logo + wordmark in the caption strip (off when the deck bar paints its own).</summary>
+    public bool ShowWordmark = true;
     public int ResizeBorder = 6;
     private Bitmap? _wall;
 
@@ -41,19 +45,38 @@ internal sealed class WallpaperPanel : Panel
         Theme.PaintWallpaper(g, new Rectangle(0, 0, w, h));
         // Bake the cards' drop-shadows in, so the corner-carving samples wallpaper+shadow as one image.
         foreach (Control c in Controls)
-            if (c.Visible && c is not WindowButton) Theme.PaintCardShadow(g, c.Bounds, Theme.RadShell);
+            if (c.Visible && c is not WindowButton && c is not ThemedButton && c is not NowPlayingBar) Theme.PaintCardShadow(g, c.Bounds, Theme.RadShell);   // only the cards cast shadows — not the strip's buttons, not the deck
     }
+
+    /// <summary>The app icon, for the title strip's wordmark.</summary>
+    public Bitmap? Logo { get; set; }
+    private readonly Font _fWordmark = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
         EnsureWall();
-        if (_wall is not null) e.Graphics.DrawImageUnscaled(_wall, 0, 0);
-        else Theme.PaintWallpaper(e.Graphics, ClientRectangle);
+        var g = e.Graphics;
+        if (_wall is not null) g.DrawImageUnscaled(_wall, 0, 0);
+        else Theme.PaintWallpaper(g, ClientRectangle);
+
+        // The wordmark lives in the caption strip, on the wallpaper — one identity for the window instead of
+        // one inside the nav rail. Its x matches the sidebar rows' text column, so the whole left edge lines up.
+        if (!ShowWordmark || CaptionHeight <= Theme.TitleStripH) return;
+        int top = CaptionHeight - Theme.TitleStripH;
+        if (Logo is not null)
+        {
+            var im = g.InterpolationMode;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(Logo, new Rectangle(24, top + 5, 20, 20));
+            g.InterpolationMode = im;
+        }
+        TextRenderer.DrawText(g, "Mixtape", _fWordmark, new Rectangle(52, top, 240, Theme.TitleStripH),
+            Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
     protected override void OnResize(EventArgs e) { _wall?.Dispose(); _wall = null; base.OnResize(e); }
 
-    protected override void Dispose(bool disposing) { if (disposing) _wall?.Dispose(); base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { _wall?.Dispose(); _fWordmark.Dispose(); Logo?.Dispose(); } base.Dispose(disposing); }
 
     protected override void WndProc(ref Message m)
     {

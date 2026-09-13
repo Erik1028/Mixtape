@@ -370,12 +370,23 @@ internal abstract class FlyoutForm : Form, IGlassHost
 
     /// <summary>Show anchored to a button's screen rectangle — drops UP from a bottom-bar control, right-aligned,
     /// clamped to the working area (flips below if there's no room above).</summary>
-    public void ShowAnchored(Rectangle anchorScreen)
+    /// <param name="below">Prefer opening UNDER the anchor (a button in the window's top deck) — above is the
+    /// default for the bottom bar. Either way it flips when the preferred side has no room.</param>
+    public void ShowAnchored(Rectangle anchorScreen, bool below = false)
     {
         var wa = Screen.FromRectangle(anchorScreen).WorkingArea;
         int x = Math.Clamp(anchorScreen.Right - Width, wa.Left + 4, Math.Max(wa.Left + 4, wa.Right - Width - 4));
-        int y = anchorScreen.Top - Height - 6;
-        if (y < wa.Top + 4) y = Math.Min(anchorScreen.Bottom + 6, wa.Bottom - Height - 4);
+        int y;
+        if (below)
+        {
+            y = anchorScreen.Bottom + 6;
+            if (y + Height > wa.Bottom - 4) y = Math.Max(wa.Top + 4, anchorScreen.Top - Height - 6);
+        }
+        else
+        {
+            y = anchorScreen.Top - Height - 6;
+            if (y < wa.Top + 4) y = Math.Min(anchorScreen.Bottom + 6, wa.Bottom - Height - 4);
+        }
         Location = new Point(x, y);
         bool live = GlassEnabled && OpenGlass();   // crisp first frame BEFORE Show (no flash)
         bool motion = Anim.MotionEnabled;

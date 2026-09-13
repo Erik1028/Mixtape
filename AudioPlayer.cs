@@ -55,6 +55,18 @@ internal sealed class AudioPlayer : IDisposable
 
     public TimeSpan Duration => _src is not null ? _src.CurrentTotalTime : (_reader?.TotalTime ?? TimeSpan.Zero);
 
+    /// <summary>How far <see cref="Position"/> runs AHEAD of what the speakers are actually playing.
+    ///
+    /// The published clock is the DECODER's read head: it advances when audio is handed to WaveOut, which
+    /// then holds whole buffers of it before the sound leaves the card. Anything that has to line up with
+    /// what is HEARD — the karaoke highlight, above all — must subtract this. WaveOutEvent's default
+    /// 300 ms of latency is split into two buffers, so the lead swings between one and two of them and
+    /// averages three quarters of the whole. (Playback itself is untouched; only the readers of this
+    /// property correct for it, because a seek bar that lagged the number under the cursor would be worse.)</summary>
+    public TimeSpan OutputLead => _out is null || !IsOpen
+        ? TimeSpan.Zero
+        : TimeSpan.FromMilliseconds(_out.DesiredLatency * 0.75);
+
     public TimeSpan Position
     {
         get => _src is not null ? _src.CurrentTime : (_reader?.CurrentTime ?? TimeSpan.Zero);

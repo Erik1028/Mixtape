@@ -174,8 +174,8 @@ internal sealed class SettingsNav : Panel
     private readonly List<Rectangle> _hit = new();
     private const int RowH = 40, Gap = 4, Pad = 10, TopPad = 14;
     // Cached once — OnPaint runs on every hover/selection change; allocating a Font per paint leaks GDI.
-    private readonly Font _font = Theme.UiFont(9.5f);
-    private readonly Font _fontBold = Theme.UiFont(9.5f, FontStyle.Bold);
+    private readonly Font _font = Theme.UiFont(Theme.SzTitle);
+    private readonly Font _fontBold = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
 
     public SettingsNav(string[] labels)
     {

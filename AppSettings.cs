@@ -33,8 +33,20 @@ internal sealed class AppSettings
     public bool ShowPlays { get; set; } = true;    // Play-count column
     public bool ShowDateAdded { get; set; } = true;// Date-added column
     public bool ShowTime { get; set; } = true;     // Time column
-    public bool FrostedBar { get; set; } = true;   // EXPERIMENT: faint frosted blur of the song list at the top of the player bar
-    public bool GlassPopups { get; set; } = true;   // frosted/liquid-glass backdrop on the Equalizer / Pro / Up Next flyouts (toggle off for plain opaque popups)
+    public bool FrostedBar { get; set; } = true;
+    /// <summary>LAB: the player lives in the window's top deck (transport · now-playing card · utilities), not under the list.</summary>
+    public bool BarOnTop { get; set; } = true;   // EXPERIMENT: faint frosted blur of the song list at the top of the player bar
+    public bool ShowRemaining { get; set; }      // the deck's total-time slot shows "-remaining" instead (clicking it toggles)
+    public bool GlassPopups { get => false; set { } }   // liquid-glass backdrops removed 2026-09-12 (kept so old settings.json files still load)
+
+    // ---- Home page + the side card ----
+    /// <summary>The song that was playing when Mixtape last closed ("db:&lt;dbid&gt;" on the iPod, "file:&lt;path&gt;" on the PC)
+    /// and where it was — the home page's "Continue listening".</summary>
+    public string ResumeTrack { get; set; } = "";
+    public double ResumeSeconds { get; set; }
+    /// <summary>The Up Next / History / Lyrics side card: open, and which tab.</summary>
+    public bool SidePanelOpen { get; set; }
+    public string SidePanelTab { get; set; } = "UpNext";
 
     // ---- Local Music (PC files browsable inside Mixtape) ----
     /// <summary>Folders on the PC scanned for the "Local Music" library view.</summary>
@@ -65,8 +77,32 @@ internal sealed class AppSettings
     public double CrossfadeSeconds { get; set; } = 6.0;
     /// <summary>Even out loudness across tracks (RMS-based normalization gain).</summary>
     public bool NormalizeVolume { get; set; }
+    /// <summary>The player's volume slider, 0..1, as it was when the app last closed (0 = it was muted).</summary>
+    public double Volume { get; set; } = 1.0;
     /// <summary>Downmix playback to mono (single channel through both speakers).</summary>
     public bool MonoOutput { get; set; }
+
+    // ---- Lyrics ----
+    /// <summary>Fetch time-synced lyrics from LRCLIB when the song has none locally. Only ever asked while
+    /// the lyrics panel is open, and only the artist + title + length are sent. A .lrc file next to the
+    /// audio, or lyrics embedded in its tags, are always preferred and need no network at all.</summary>
+    public bool OnlineLyrics { get; set; } = true;
+    /// <summary>Fetch a cover from the internet for albums whose files carry none (artist + album are sent).</summary>
+    public bool OnlineCovers { get; set; } = true;
+    /// <summary>Also write a downloaded cover into the PC file's own tag (never an iPod file).</summary>
+    public bool EmbedDownloadedCovers { get; set; }
+
+    // ---- Discord Rich Presence ----
+    /// <summary>Show the song Mixtape is playing on your Discord profile (off by default — nothing leaves
+    /// the machine until you switch it on; it talks only to the local Discord client).</summary>
+    public bool DiscordRichPresence { get; set; }
+    /// <summary>Discord Application ID from the Developer Portal. Public by design (it only names the app
+    /// shown in Discord and carries no secret); empty = the feature stays off.</summary>
+    public string DiscordAppId { get; set; } = "";
+    /// <summary>Show the real album cover on the Discord card. Discord can only display images it can fetch
+    /// itself, so this looks the cover up by artist+album on Apple's public search API — the one part of the
+    /// feature that uses the network. Off by default; results are cached so each album is asked once.</summary>
+    public bool DiscordCoverArt { get; set; }
 
     // ---- Video / transcoding ----
     /// <summary>Transcode target: "Safe" (320x240, plays on 5G + Classic) or "High" (640x480, Classic/late).</summary>
@@ -98,6 +134,23 @@ internal sealed class AppSettings
         Save();
     }
 
+    // ---- Lyrics ----
+    /// <summary>The listener's own sync nudge per song, in milliseconds (+ = the words are sung LATER than
+    /// the sheet says). Community sheets are timed against one particular copy of a recording, so a shift of
+    /// a second or two is normal and no lookup can correct it. Keyed by <c>LyricsLookup.SongKey</c>, which
+    /// ignores the track length on purpose, so the adjustment survives a re-fetch or a re-encode.</summary>
+    public Dictionary<string, int> LyricSync { get; set; } = new();
+
+    // A hand-edited (or older) settings.json can carry an explicit null, which deserializes over the
+    // initializer — the same guard the rest of this file uses for its other collections.
+    public int GetLyricSync(string key) => (LyricSync ??= new()).TryGetValue(key, out int v) ? v : 0;
+    public void SetLyricSync(string key, int ms)
+    {
+        LyricSync ??= new();
+        if (ms == 0) LyricSync.Remove(key); else LyricSync[key] = ms;
+        Save();
+    }
+
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Mixtape", "settings.json");
 
@@ -108,8 +161,13 @@ internal sealed class AppSettings
         return new AppSettings();
     }
 
+    /// <summary>Set by the render harness: the previews must never write the user's real settings.json (opening
+    /// the side card, a bookmark tick, a volume push all call Save).</summary>
+    public static bool Frozen;
+
     public void Save()
     {
+        if (Frozen) return;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
@@ -140,7 +198,7 @@ internal sealed class AppSettings
         catch { /* settings are best-effort */ }
     }
 
-    public int RowHeight => Compact ? 28 : 52;
+    public int RowHeight => Compact ? 28 : 56;   // comfortable = a 40 px row with real air (was 52)
 
     /// <summary>Whether the song list shows the artwork column. Compact mode is text-only (iTunes-style),
     /// so the cover column is dropped there regardless of <see cref="ShowArtwork"/> — that art is also what

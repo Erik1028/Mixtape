@@ -15,6 +15,7 @@ internal sealed class DoctorReport
     public List<(string Path, long Size)> OrphanFiles = new();// media files on the drive no track points at
     public List<List<Track>> DuplicateGroups = new();        // each group sorted best-keeper-first
     public List<List<Photo>> DuplicatePhotoGroups = new();   // photos with identical thumbnails; each group keeper-first
+    public List<(Track T, long OnDisk)> DamagedFiles = new();// DB rows whose file is SHORTER than the DB says (truncated copy)
     public int IncompleteTags;                               // songs missing title/artist/album
     public int AlbumGaps;                                    // albums with a track-number gap (report only)
     public long OrphanBytes;
@@ -23,7 +24,7 @@ internal sealed class DoctorReport
 
     public bool Clean => MissingFiles.Count == 0 && OrphanFiles.Count == 0
                          && DuplicateExtras == 0 && DuplicatePhotoExtras == 0
-                         && IncompleteTags == 0 && AlbumGaps == 0;
+                         && DamagedFiles.Count == 0 && IncompleteTags == 0 && AlbumGaps == 0;
 }
 
 /// <summary>The user's chosen fixes. Ids reference Track.UniqueId; files are absolute OS paths.</summary>
@@ -61,7 +62,19 @@ internal static class LibraryDoctor
             string? p = t.ResolveFilePath(dev.MountRoot);
             if (string.IsNullOrEmpty(p)) continue;
             try { referenced.Add(Path.GetFullPath(p)); } catch { /* unparseable path → can't dedupe it, skip */ }
-            if (!File.Exists(p)) rep.MissingFiles.Add(t);
+            if (!File.Exists(p)) { rep.MissingFiles.Add(t); continue; }
+            // A file that EXISTS can still be truncated (an interrupted copy on a FAT volume): the song then
+            // plays as noise or cuts off, yet every existence check calls it healthy. Report only — a short
+            // file is never auto-deleted, since the DB size can legitimately be stale on hand-copied files.
+            if (t.FileSize > 0 && t.FileSize != uint.MaxValue)
+            {
+                try
+                {
+                    long onDisk = new FileInfo(p).Length;
+                    if (onDisk < t.FileSize) rep.DamagedFiles.Add((t, onDisk));
+                }
+                catch { /* unreadable size → not evidence of damage */ }
+            }
         }
 
         // 2) Orphan media files: anything under the Music dir that no track references (wasted space).

@@ -286,11 +286,37 @@ internal static class Theme
     // ---- corner-radius scale (one language across the whole UI) ----
     public const int RadControl = 8;       // non-pill buttons, selection/hover pills, segmented outer track, hover chips
     public const int RadChipInset = 6;     // pills nested inside the segmented track only (= RadControl - 2)
-    public const int RadCard = 14;         // inner content cards (CardPanel: Settings + device ABOUT/BACKUPS/OPTIONS)
+    public const int RadCard = 10;         // inner content cards (CardPanel: Settings + device ABOUT/BACKUPS/OPTIONS)
+    // ---- the type ramp ------------------------------------------------------------------------------
+    // Five sizes, each with one job. Before this the app used thirteen (7, 8, 8.25, 8.5, 8.75, 9, 9.5, 9.75,
+    // 10, 11, 11.5, 12.5, 13, 21), so no two surfaces agreed on what a "label" or a "value" looked like and
+    // the same information sat at a different size on every page.
+    public const float SzDisplay = 15f;    // semibold — the one big thing on a page: view title, wordmark
+    public const float SzTitle = 10f;      // semibold — row title, rail row, button, card label
+    public const float SzBody = 9.25f;     // values, menu items, card values
+    public const float SzCaption = 8.75f;  // second lines: counts, meta, hints
+    public const float SzLabel = 8f;       // semibold UPPERCASE — section + column captions only
+
+    // ---- shell metrics ------------------------------------------------------------------------------
+    public const int TitleStripH = 30;   // the one caption strip, on the wallpaper, above both cards
+    public const int TitleBtnW = 38, TitleBtnH = 26;
+    public const int BarH = 56;          // the content card's working bar — a row at the 40 px scale
+    public const int SidebarW = 220;
+
     public const int RadShell = 10;        // top-level floating sidebar/content shells — kept close to the OS window's ~8px corner so the inner cards don't look rounder than the window framing them
     public const float TileFrac = 0.12f;   // cover-tile radius as a fraction of size (round(TileFrac*size))
     public const int RadTileSmall = 4;     // the tiny 18px sidebar mini-cover only
     public const float ArtAngle = 60f;     // single light direction for all diagonally-lit generated art
+
+    /// <summary>Copy <paramref name="src"/>'s pixels at <paramref name="srcRect"/> to (0,0) 1:1 — GDI+'s default
+    /// half-pixel sampling would otherwise blend the top row / left column with their neighbours (a faint frame).</summary>
+    public static void BlitExact(Graphics g, Image src, Rectangle srcRect)
+    {
+        var po = g.PixelOffsetMode; var im = g.InterpolationMode;
+        g.PixelOffsetMode = PixelOffsetMode.Half; g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.DrawImage(src, new Rectangle(0, 0, srcRect.Width, srcRect.Height), srcRect, GraphicsUnit.Pixel);
+        g.PixelOffsetMode = po; g.InterpolationMode = im;
+    }
 
     public static Color Blend(Color a, Color b, double f) => Color.FromArgb(
         (int)(a.R + (b.R - a.R) * f), (int)(a.G + (b.G - a.G) * f), (int)(a.B + (b.B - a.B) * f));
@@ -388,7 +414,7 @@ internal static class Theme
         g.Clip = saved;
     }
 
-    private static double AccentHue()
+    internal static double AccentHue()
     {
         var c = Accent;
         double max = Math.Max(c.R, Math.Max(c.G, c.B)) / 255.0, min = Math.Min(c.R, Math.Min(c.G, c.B)) / 255.0, dl = max - min;
@@ -473,14 +499,38 @@ internal static class Theme
         g.FillPath(brush, p);
     }
 
-    private static readonly Dictionary<(int, int), Bitmap> ArtCache = new();
-    private static readonly Queue<(int, int)> ArtOrder = new();   // insertion order for FIFO eviction
+    private static readonly Dictionary<(int, int, string), Bitmap> ArtCache = new();
+    private static readonly Queue<(int, int, string)> ArtOrder = new();   // insertion order for FIFO eviction
     private const int ArtCacheCap = 256;                          // bound the generated-tile cache (one tile per distinct album/title seed)
+    /// <summary>Diagnostics: generated tiles held and their pixel bytes.</summary>
+    public static (int Count, long Bytes) ArtCacheStats() { lock (ArtCache) { long b = 0; foreach (var v in ArtCache.Values) b += (long)v.Width * v.Height * 4; return (ArtCache.Count, b); } }
 
     /// <summary>Generated square artwork: a rounded teal-family gradient keyed by seed, a faint ♪, and a hairline inner frame.</summary>
-    public static Bitmap MakeArt(int size, int seed)
+    public static Bitmap MakeArt(int size, int seed) => MakeArt(size, seed, null);
+
+    /// <summary>The letters a generated cover shows: the initials of up to two words of the title (the
+    /// artist when there is no title). Null when nothing usable is there — the tile then keeps the note.</summary>
+    public static string? Initials(string? title, string? sub)
     {
-        var key = (size, seed);
+        string src = !string.IsNullOrWhiteSpace(title) ? title! : (sub ?? "");
+        var words = src.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => char.IsLetterOrDigit(w[0])).ToList();
+        if (words.Count == 0) return null;
+        // A lone number keeps two digits ("21", "55", "1989"→"19"): its first digit alone says nothing.
+        if (words.Count == 1 && words[0].All(char.IsDigit)) return words[0].Length >= 2 ? words[0][..2] : words[0];
+        var sb = new System.Text.StringBuilder(2);
+        foreach (string w in words) { sb.Append(char.ToUpperInvariant(w[0])); if (sb.Length == 2) break; }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A generated cover tile. All tiles share ONE hue band, 120° wide around the accent, at low
+    /// saturation — a wall of them reads as one calm family instead of a random rainbow, and any REAL cover
+    /// (which is full-colour) pops out of it. With <paramref name="initials"/> the tile is typographic:
+    /// "AH", "BB", "21" — readable from across the room, which 135 identical music notes never were.
+    /// </summary>
+    public static Bitmap MakeArt(int size, int seed, string? initials)
+    {
+        var key = (size, seed, initials ?? "");
         if (ArtCache.TryGetValue(key, out var cached)) return cached;
 
         var bmp = new Bitmap(size, size);
@@ -490,9 +540,9 @@ internal static class Theme
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            double h = 150 + (seed % 360) / 360.0 * 130; // teal→blue→violet family
-            Color c1 = HsvToColor(h, 0.50, 0.56);
-            Color c2 = HsvToColor(h + 24, 0.60, 0.34);
+            double h = AccentHue() - 60 + (Math.Abs(seed) % 120);   // one band, 120° wide, around the accent
+            Color c1 = HsvToColor((h + 360) % 360, 0.40, 0.44);
+            Color c2 = HsvToColor((h + 18 + 360) % 360, 0.46, 0.30);
             float radius = Math.Max(3, size * Theme.TileFrac);
             using var path = RoundedRect(new RectangleF(0, 0, size - 1, size - 1), radius);
             using (var br = new LinearGradientBrush(new Rectangle(0, 0, size, size), c1, c2, Theme.ArtAngle))
@@ -501,7 +551,15 @@ internal static class Theme
                 g.FillRectangle(br, 0, 0, size, size);
                 g.ResetClip();
             }
-            if (size >= 44)
+            if (initials is not null && size >= 32)
+            {
+                using var f = DisplayFont(size * 0.315f, FontStyle.Bold);
+                using var b = new SolidBrush(Color.FromArgb(140, OnColor(c1)));
+                using var fmt = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                g.DrawString(initials, f, b, new RectangleF(0, 0, size, size), fmt);
+            }
+            else if (size >= 32)   // the 40 px working-bar tile drew as an empty square above this line
                 DrawNote(g, new RectangleF(0, 0, size, size), Color.FromArgb(64, 255, 255, 255));
             using (var ip = RoundedRect(new RectangleF(0.5f, 0.5f, size - 2, size - 2), radius))
             using (var pen = new Pen(Color.FromArgb(30, 255, 255, 255)))
@@ -519,6 +577,25 @@ internal static class Theme
         return bmp;
     }
 
+    /// <summary>The app's one empty state: a quiet glyph, a line that says what is (not) here, and a hint
+    /// that says what to do about it. Every list, grid and page draws the same thing.</summary>
+    public static void DrawEmptyState(Graphics g, Rectangle area, string title, string? hint)
+    {
+        if (area.Width < 40 || area.Height < 40) return;
+        int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
+        var prev = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+        DrawNote(g, new RectangleF(cx - 28, cy - 74, 56, 56), Color.FromArgb(77, Subtle));
+        g.SmoothingMode = prev;
+        using var ft = UiFont(SzBody);
+        using var fh = UiFont(SzCaption);
+        int w = Math.Min(area.Width - 24, 320);
+        TextRenderer.DrawText(g, title, ft, new Rectangle(cx - w / 2, cy - 8, w, 44), TextCol,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        if (!string.IsNullOrEmpty(hint))
+            TextRenderer.DrawText(g, hint, fh, new Rectangle(cx - w / 2, cy + 40, w, 40), Subtle,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+    }
+
     public static void StyleGrid(DataGridView g)
     {
         g.EnableHeadersVisualStyles = false;
@@ -526,13 +603,13 @@ internal static class Theme
         g.GridColor = Bg;
         g.BorderStyle = BorderStyle.None;
         g.CellBorderStyle = DataGridViewCellBorderStyle.None;
-        g.Font = UiFont(10f);
+        g.Font = UiFont(SzTitle);
         g.RowHeadersVisible = false;
         g.ColumnHeadersHeight = 34;
         g.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
         g.ColumnHeadersDefaultCellStyle.BackColor = Bg;
         g.ColumnHeadersDefaultCellStyle.ForeColor = Faint;   // recede headers into the tertiary tier (was Subtle)
-        g.ColumnHeadersDefaultCellStyle.Font = UiFont(8.5f, FontStyle.Bold);
+        g.ColumnHeadersDefaultCellStyle.Font = UiFont(SzLabel, FontStyle.Bold);
         g.ColumnHeadersDefaultCellStyle.SelectionBackColor = Bg;
         g.ColumnHeadersDefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
 
@@ -542,10 +619,10 @@ internal static class Theme
         g.DefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.12);   // whisper-tint; the accent bar carries selection
         g.DefaultCellStyle.SelectionForeColor = Color.White;
         g.DefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
-        g.AlternatingRowsDefaultCellStyle.BackColor = Bg;
-        g.AlternatingRowsDefaultCellStyle.ForeColor = TextCol;
-        g.AlternatingRowsDefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.12);
-        g.AlternatingRowsDefaultCellStyle.SelectionForeColor = Color.White;
+        // NO AlternatingRowsDefaultCellStyle. It resolves BEFORE the column's own style, so setting ForeColor
+        // here overrode the deliberate Theme.Subtle that ARTIST/ALBUM/PLAYS/ADDED/TIME declare — but only on
+        // every SECOND row, which is why the artist column visibly flickered bright/dim down the list. The
+        // values it set were the defaults anyway; DefaultCellStyle above already carries them.
         g.RowTemplate.Height = 52;
         g.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
     }
@@ -592,6 +669,10 @@ internal sealed class ThemedButton : Button
     /// <summary>Raised when a soft-disabled (BlockedReason) button is clicked. Argument is the reason.</summary>
     public event Action<string>? BlockedClicked;
     private bool IsBlocked => _blockedReason != null;
+    private Color? _surface;
+    /// <summary>What lies behind the slab when the button sits on a PAINTED card rather than on its parent's flat
+    /// BackColor: the pixels outside the rounded corners are cleared to this. Null = the parent's BackColor.</summary>
+    public Color? Surface { get => _surface; set { if (_surface == value) return; _surface = value; Invalidate(); } }
 
     public ThemedButton()
     {
@@ -601,7 +682,7 @@ internal sealed class ThemedButton : Button
         BackColor = Color.Transparent;
         ForeColor = Theme.TextCol;
         Cursor = Cursors.Hand;
-        Font = Theme.UiFont(9.5f, FontStyle.Bold);
+        Font = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
         Height = 34;
         MouseEnter += (_, _) => { if (Enabled && !IsBlocked) AnimHover(1f); };
         MouseLeave += (_, _) => { AnimHover(0f); AnimPress(0f); };
@@ -615,6 +696,31 @@ internal sealed class ThemedButton : Button
         // A soft-disabled button swallows the normal Click and explains itself instead.
         if (IsBlocked) { BlockedClicked?.Invoke(_blockedReason!); return; }
         base.OnClick(e);
+    }
+
+    /// <summary>
+    /// Never narrower than the label it has to draw. Call sites size these buttons in ENGLISH pixels
+    /// (Width = 130, 150…), and a Hungarian translation is routinely a third longer — which the paint then
+    /// silently clipped to "Beállítások megny…". Enforcing the minimum here fixes every button in the app
+    /// at once instead of hand-tuning dozens of literals, and a caller that asked for MORE room keeps it.
+    /// </summary>
+    /// <summary>The narrowest this button can be and still draw its whole label. Layout code that packs
+    /// several buttons must ASK, not assume — the widths in those tables are English sizes.</summary>
+    public int NeededWidth
+    {
+        get
+        {
+            if (CompactIcon || string.IsNullOrEmpty(Text)) return 0;
+            string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
+            return TextRenderer.MeasureText(label, Font).Width + 22;   // the flat slab needs less air than the old pill
+        }
+    }
+
+    protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+    {
+        int need = NeededWidth;
+        if (width < need) width = need;
+        base.SetBoundsCore(x, y, width, height, specified);
     }
 
     private void AnimHover(float to)
@@ -639,19 +745,17 @@ internal sealed class ThemedButton : Button
         _painted = true;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.Bg);
+        if (!Glass.PaintBackground(g, this, Glass.SurfaceTint))
+        {
+            if (Parent is WallpaperPanel wp && wp.Wallpaper is { } wall) Theme.BlitExact(g, wall, Bounds);   // on the caption strip: the wallpaper, not a flat chip
+            else g.Clear(_surface ?? Parent?.BackColor ?? Theme.Bg);
+        }
 
         float h = Math.Clamp(_hoverT, 0f, 1f);
-        float inset = 3f * Math.Clamp(_pressT, 0f, 1f);   // shrink toward centre while pressed
-        // A pill rounds to a full semicircle at each end, so its curve reaches the very edges of the
-        // control on all four sides; with only a half-pixel inset the bottom (and left/right) of that
-        // antialiased arc spills past the control boundary and clips flat. Give pills ~1.5px of room —
-        // still on a .5 boundary so the straight top/bottom borders stay a crisp 1px. Plain buttons have
-        // a small corner radius whose arc sits well inside, so they keep the tight 0.5px inset.
-        float pad = (Pill ? 1.5f : 0.5f) + inset;
-        var r = new RectangleF(pad, pad, Width - 2 * pad, Height - 2 * pad);
-        float radius = Pill ? r.Height / 2f : Theme.RadControl;
-        using var path = Theme.RoundedRect(r, radius);
+        float press = Math.Clamp(_pressT, 0f, 1f);
+        float inset = 0.5f + 2f * press;                         // a tap scales the slab down a touch
+        var r = new RectangleF(inset, inset, Width - 2 * inset, Height - 2 * inset);
+        using var path = Theme.RoundedRect(r, Theme.RadControl);   // ONE radius for every control - the glossy pill is gone
         var textRect = Rectangle.Round(r);
 
         bool disabled = !Enabled || IsBlocked;
@@ -666,30 +770,34 @@ internal sealed class ThemedButton : Button
             return;
         }
 
-        Color fill, text, border;
-        if (disabled) { fill = Theme.RowBg; text = Theme.Faint; border = Theme.Border; }
-        else if (Primary) { fill = Theme.Blend(Theme.Accent, Color.White, 0.14 * h); text = Theme.OnAccent; border = fill; }
-        else if (Danger) { fill = Theme.Blend(Theme.RowBg, Theme.ErrorCol, 0.14 * h); text = Theme.ErrorCol; border = Theme.Blend(Theme.Border, Theme.ErrorCol, 0.55); }
-        else { fill = Theme.Blend(Theme.RowBg, Theme.RowHover, h); text = Theme.TextCol; border = Theme.Border; }
-
-        // Floating-glass tile: a soft drop shadow lifts it off the surface; the fill carries a subtle top→bottom
-        // sheen (glass depth); a bright top highlight reads as light catching the glass; a faint light edge frames it.
-        if (!disabled)
-            using (var shp = Theme.RoundedRect(new RectangleF(r.X, r.Y + 1.6f, r.Width, r.Height), radius))
-            using (var sh = new SolidBrush(Color.FromArgb(48, 0, 0, 0)))
-                g.FillPath(sh, shp);
-        using (var b = new LinearGradientBrush(new RectangleF(r.X, r.Y - 1, r.Width, r.Height + 2),
-                   Theme.Blend(fill, Color.White, 0.13), Theme.Blend(fill, Color.Black, 0.06), 90f))
-            g.FillPath(b, path);
+        // Flat slabs, in the language of the cards and the deck's now-playing card: a translucent wash over
+        // whatever surface hosts the button, a hairline, no gradient, no sheen, no shadow. The kinds differ
+        // only in tint - default: white wash + text; primary: accent wash + accent text (the rail's active-row
+        // look, so "the main action" and "the current place" speak the same colour); danger: white wash + red
+        // text and a red-tinted hairline; disabled/blocked: a fainter wash + faint text.
+        static int A(double v) => Math.Clamp((int)Math.Round(v), 0, 255);
+        Color fill, line, text;
+        if (disabled) { fill = Color.FromArgb(12, 255, 255, 255); line = Color.FromArgb(18, 255, 255, 255); text = Theme.Faint; }
+        else if (Primary)
         {
-            using var saveClip = g.Clip; g.SetClip(path);
-            float sheenH = r.Height * 0.52f;
-            using (var sheen = new LinearGradientBrush(new RectangleF(r.X, r.Y - 1, r.Width, sheenH + 1),
-                       Color.FromArgb(disabled ? 0 : (Primary ? 48 : 30), 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
-                g.FillRectangle(sheen, r.X, r.Y, r.Width, sheenH);
-            g.Clip = saveClip;
+            fill = Color.FromArgb(A(46 + 28 * h - 14 * press), Theme.Accent);
+            line = Color.FromArgb(A(84 + 44 * h), Theme.Accent);
+            text = Theme.Blend(Theme.AccentBright, Color.White, 0.16 * h);
         }
-        using (var p = new Pen(Theme.Blend(border, Color.White, 0.12))) g.DrawPath(p, path);
+        else if (Danger)
+        {
+            fill = Color.FromArgb(A(22 + 16 * h - 8 * press), 255, 255, 255);
+            line = Color.FromArgb(A(66 + 44 * h), Theme.ErrorCol);
+            text = Theme.Blend(Theme.ErrorCol, Color.White, 0.18 * h);
+        }
+        else
+        {
+            fill = Color.FromArgb(A(22 + 18 * h - 8 * press), 255, 255, 255);
+            line = Color.FromArgb(A(30 + 20 * h), 255, 255, 255);
+            text = Theme.TextCol;
+        }
+        using (var b = new SolidBrush(fill)) g.FillPath(b, path);
+        using (var p = new Pen(line)) g.DrawPath(p, path);
 
         if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, text); return; }   // narrow header: icon only, no label
 

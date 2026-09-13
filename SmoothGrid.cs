@@ -17,6 +17,10 @@ namespace iPodCommander;
 /// </summary>
 internal sealed class SmoothGrid : DataGridView
 {
+    /// <summary>Never the dotted focus rectangle on the current cell: the selection bar already says which row is
+    /// current, and after any keyboard navigation WinForms would otherwise draw the dots around the song cell.</summary>
+    protected override bool ShowFocusCues => false;
+
     public SmoothGrid()
     {
         DoubleBuffered = true;

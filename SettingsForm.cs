@@ -28,7 +28,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     private const int ContentLeft = SideMargin;         // card column left edge
     private const int PageHeight = 540; // every category uses this one height; dense pages (Library) scroll via the themed ThinScrollBar instead of growing the window (taller so it's not "flat")
 
-    private static readonly string[] Categories = { "Appearance", "Library", "Video", "Photos", "Safety", "This iPod", "About" };
+    private static readonly string[] Categories = { "Appearance", "Library", "Video", "Photos", "Safety", "Discord", "This iPod", "About" };
 
     public SettingsForm(AppSettings settings, IPodDevice? device, Action applyChanged, Action reloadDevice)
     {
@@ -118,7 +118,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             case 2: BuildVideo(); break;
             case 3: BuildPhotos(); break;
             case 4: BuildSafety(); break;
-            case 5: BuildDevice(); break;
+            case 5: BuildDiscord(); break;
+            case 6: BuildDevice(); break;
             default: BuildAbout(); break;
         }
 
@@ -209,13 +210,17 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Row(Loc.T("Row density"), Loc.T("How tall the song rows are."), density);
 
         Row(Loc.T("Show artwork"), Loc.T("Show album/photo covers in lists."), Toggle(_s.ShowArtwork, v => { _s.ShowArtwork = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Player at the top"), Loc.T("The transport and the playing song live in the window's top strip instead of under the list. Takes effect after a restart."),
+            Toggle(_s.BarOnTop, v => { _s.BarOnTop = v; _s.Save(); PromptRestart(Loc.T("The player moves after a restart. Restart Mixtape now?")); }));
     }
 
     /// <summary>Offer to relaunch so the new language takes effect. "Restart now" starts a fresh instance with
     /// <c>--relaunch</c> (which waits for this one's single-instance lock to release) and exits this one.</summary>
-    private void PromptLanguageRestart()
+    private void PromptLanguageRestart() => PromptRestart(Loc.T("The language changes after a restart. Restart Mixtape now?"));
+
+    private void PromptRestart(string question)
     {
-        if (MessageDialog.Show(this, Loc.T("The language changes after a restart. Restart Mixtape now?"),
+        if (MessageDialog.Show(this, question,
                 Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         try
         {
@@ -243,7 +248,12 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Row(Loc.T("Play count column"), Loc.T("Show how many times each song has been played."), Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Date added column"), Loc.T("Show when each song was added to the iPod."), Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Time column"), Loc.T("Show the Time column in the song list."), Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
-        Row(Loc.T("Frosted glass"), Loc.T("Liquid-glass effect on the player bar AND the Equalizer / Pro / Up Next popups (experimental). Turn off for a plain look."), Toggle(_s.GlassPopups, v => { _s.GlassPopups = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Online lyrics"), Loc.T("When a song has no lyrics of its own, look up time-synced lyrics from the public LRCLIB database. Only the artist, title and length are sent, and only while the lyrics panel is open."),
+            Toggle(_s.OnlineLyrics, v => { _s.OnlineLyrics = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Missing covers from the internet"), Loc.T("When a file has no cover of its own, look one up by artist and album in Apple's public music search and the MusicBrainz Cover Art Archive. Only the artist and the album are sent, and a cover is used only when it clearly matches."),
+            Toggle(_s.OnlineCovers, v => { _s.OnlineCovers = v; _s.Save(); _applyChanged(); }));
+        Row(Loc.T("Write covers into local files"), Loc.T("Save a downloaded cover into the music file itself on this PC, so other players see it too. Files on the iPod are never changed."),
+            Toggle(_s.EmbedDownloadedCovers, v => { _s.EmbedDownloadedCovers = v; _s.Save(); _applyChanged(); }));
     }
 
     private void BuildVideo()
@@ -267,6 +277,34 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     {
         Row(Loc.T("Store full-screen image"), Loc.T("Also write the 320×240 image so photos look sharp on the iPod (uses more space)."),
             Toggle(_s.PhotoStoreFullResolution, v => { _s.PhotoStoreFullResolution = v; _s.Save(); }));
+    }
+
+    /// <summary>Discord Rich Presence: show what Mixtape is playing on the user's Discord profile. Off by
+    /// default and inert without an Application ID — nothing is published until BOTH are set.</summary>
+    private void BuildDiscord()
+    {
+        Row(Loc.T("Show on Discord"), Loc.T("Put the song you're playing on your Discord profile, with a live progress bar. Talks only to the Discord app on this PC."),
+            Toggle(_s.DiscordRichPresence, v => { _s.DiscordRichPresence = v; _s.Save(); _applyChanged(); }));
+
+        // Freeform string: Settings has no text-entry row type, so mirror the ffmpeg row (a button that
+        // opens a prompt, then Rebuild() so the subtitle shows the new value).
+        var idBtn = new ThemedButton { Text = Loc.T(_s.DiscordAppId.Length > 0 ? "Change…" : "Set…"), Pill = true, Width = 96, Height = 30 };
+        idBtn.Click += (_, _) =>
+        {
+            string? v = PromptDialog.Show(this, Loc.T("Discord Application ID"), Loc.T("Paste the Application ID from the Discord Developer Portal:"), _s.DiscordAppId);
+            if (v is null) return;
+            _s.DiscordAppId = new string(v.Where(char.IsDigit).ToArray());   // the portal shows a numeric id
+            _s.Save(); _applyChanged(); Rebuild();
+        };
+        Row(Loc.T("Application ID"),
+            _s.DiscordAppId.Length > 0 ? _s.DiscordAppId
+                                       : Loc.T("Create a free app at discord.com/developers, then paste its Application ID here. It isn't a secret — it only names the app Discord shows."),
+            idBtn);
+
+        Row(Loc.T("Album cover"), Loc.T("Show the real cover instead of the Mixtape logo. Looks it up by artist and album on Apple's public music search — the only part of this feature that uses the internet. A cover is only used when it clearly matches."),
+            Toggle(_s.DiscordCoverArt, v => { _s.DiscordCoverArt = v; _s.Save(); _applyChanged(); }));
+
+        Row(Loc.T("What it shows"), Loc.T("The song, the artist and how far along it is — only while Mixtape itself is playing, never what the iPod plays on its own."), null);
     }
 
     private void BuildSafety()
@@ -302,9 +340,14 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             Row(Loc.T("Why read-only"), p.WriteBlockReason, null);
     }
 
+    /// <summary>The build's own version, read from the assembly — a literal here went stale for a whole
+    /// release once, and About is the one place a wrong number is visible.</summary>
+    private static string AppVersion =>
+        System.Reflection.Assembly.GetExecutingAssembly().GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "";
+
     private void BuildAbout()
     {
-        Row("Mixtape", Loc.T("Version {0}", "0.17.0"), null);
+        Row("Mixtape", Loc.T("Version {0}", AppVersion), null);
         Row(Loc.T("A friendly manager for classic iPods"), Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes."), null);
     }
 
@@ -389,7 +432,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int caption = 0x001A1716; DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
+        try { var bg = Theme.Bg; int caption = (bg.B << 16) | (bg.G << 8) | bg.R;   /* the caption in the theme's own surface colour (was a baked Graphite grey) */ DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
         // Dark scrollbar instead of the bright native one, for the rare case the pane still scrolls
         // (a screen too short to fit a dense page).
         try { SetWindowTheme(_pane.Handle, "DarkMode_Explorer", null); } catch { }

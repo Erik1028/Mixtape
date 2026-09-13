@@ -42,6 +42,13 @@ internal static partial class LocHu
         ["Manage…"] = "Kezelés…",
         ["Search songs, artists, albums…"] = "Dalok, előadók, albumok keresése…",
         ["{0} songs"] = "{0} dal",
+        // ---- Discord Rich Presence ----
+        ["DISCORD"] = "DISCORD",
+        ["Show on Discord"] = "Megjelenítés a Discordon",
+        ["Application ID"] = "Alkalmazás-azonosító",
+        ["Album cover"] = "Albumborító",
+        ["Create a free app at discord.com/developers and paste its Application ID. Shows the song, the artist and how far along it is."] =
+            "Hozz létre egy ingyenes alkalmazást a discord.com/developers oldalon, és illeszd be az azonosítóját. A dalt, az előadót és a hallgatás állását mutatja.",
         ["1 song"] = "1 dal",   // drag-to-playlist badge (single-song grab)
         ["{0} albums"] = "{0} album",
         ["{0} artists"] = "{0} előadó",

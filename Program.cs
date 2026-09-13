@@ -147,6 +147,75 @@ internal static class Program
         // (multi-artist tag drift, Unicode NFC/NFD accents, same song twice in one batch). → ipod-duptest.txt
         if (args.Contains("--duptest")) { RunDupGuardTest(); return; }
 
+        // Lyrics probe: what the Lyrics panel would show for a song, and from which source.
+        // Usage: --lyricstest "<artist>" "<title>" [durationSeconds] -> console
+        if (args.Length >= 3 && args[0] == "--lyricstest")
+        {
+            var dur = args.Length > 3 && double.TryParse(args[3], out double sec) ? TimeSpan.FromSeconds(sec) : TimeSpan.Zero;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var lines = LyricsLookup.Find(args[1], args[2], dur, null, online: true, out bool synced);
+            Console.WriteLine($"{args[1]} - {args[2]}  ({(int)dur.TotalSeconds}s)");
+            Console.WriteLine(lines.Count == 0
+                ? $"  -> NO LYRICS ({sw.ElapsedMilliseconds} ms)"
+                : $"  -> {lines.Count} lines, {(synced ? "SYNCED" : "plain")} ({sw.ElapsedMilliseconds} ms)");
+            foreach (var l in lines.Take(3)) Console.WriteLine($"     [{l.At.Minutes:00}:{l.At.Seconds:00}.{l.At.Milliseconds/10:00}] {l.Text}");
+            return;
+        }
+
+        // LRC parser regression: every timestamp dialect and offset rule, with no network. -> console
+        if (args.Length >= 1 && args[0] == "--lrctest") { RunLrcTest(); return; }
+
+        // Local-folder scan cost: how long the tag read takes per file (the Local Music view re-reads every file on
+        // every rescan). Usage: --scanbench <folder> -> console
+        if (args.Length >= 2 && args[0] == "--scanbench")
+        {
+            var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".opus", ".wma", ".aif", ".aiff", ".alac" };
+            var files = Directory.EnumerateFiles(args[1], "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
+                .Where(f => exts.Contains(Path.GetExtension(f))).ToList();
+            var swAll = System.Diagnostics.Stopwatch.StartNew();
+            var per = new List<(string f, double ms)>();
+            foreach (var f in files)
+            {
+                var sw1 = System.Diagnostics.Stopwatch.StartNew();
+                try { MetadataExtractor.Read(f, isVideo: false); } catch { }
+                per.Add((f, sw1.Elapsed.TotalMilliseconds));
+            }
+            swAll.Stop();
+            Console.WriteLine($"{files.Count} files, {swAll.ElapsedMilliseconds} ms total, {(files.Count > 0 ? swAll.Elapsed.TotalMilliseconds / files.Count : 0):F1} ms/file");
+            foreach (var (f, ms) in per.OrderByDescending(p => p.ms).Take(5)) Console.WriteLine($"  {ms,7:F1} ms  {Path.GetFileName(f)}");
+            var swWalk = System.Diagnostics.Stopwatch.StartNew();
+            int n = 0; foreach (var f in files) { try { var fi = new FileInfo(f); n += fi.Length > 0 ? 1 : 0; _ = fi.LastWriteTimeUtc; } catch { } }
+            Console.WriteLine($"stat-only walk of the same {n} files: {swWalk.Elapsed.TotalMilliseconds:F0} ms (what a tag cache would cost on a rescan)");
+            return;
+        }
+
+        // What the "other lyrics" list would offer for a song. Usage: --lyricsversions "<artist>" "<title>" [seconds]
+        if (args.Length >= 3 && args[0] == "--lyricsversions")
+        {
+            var d = args.Length > 3 && double.TryParse(args[3], System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out double sc)
+                    ? TimeSpan.FromSeconds(sc) : TimeSpan.Zero;
+            var sw2 = System.Diagnostics.Stopwatch.StartNew();
+            var cands = LyricsLookup.Search(args[1], args[2], d);
+            Console.WriteLine($"{args[1]} - {args[2]}  ({(int)d.TotalSeconds}s)  -> {cands.Count} versions ({sw2.ElapsedMilliseconds} ms)");
+            foreach (var c in cands)
+                Console.WriteLine($"   {(int)c.Duration.TotalMinutes}:{c.Duration.Seconds:00}  {(c.Synced ? c.Lines + " timed lines" : "words only")}   {c.Album}");
+            return;
+        }
+
+        // Cover-art lookup probe: exactly what Discord Rich Presence resolves for a song, and from where.
+        // Usage: --covertest "<artist>" "<album>" ["<title>"]  -> console
+        if (args.Length >= 3 && args[0] == "--covertest")
+        {
+            string art = args[1], alb = args[2], ttl = args.Length > 3 ? args[3] : "";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            string? found = CoverArtLookup.Find(art, alb, ttl);
+            Console.WriteLine($"artist={art}  album={alb}  title={ttl}");
+            Console.WriteLine(found is null ? $"  -> NO COVER  ({sw.ElapsedMilliseconds} ms)"
+                                            : $"  -> {found}  ({sw.ElapsedMilliseconds} ms)");
+            return;
+        }
+
         // READ-ONLY diagnostic: report duplicate songs (by tags / by file) + playlist-level duplicates
         // in an iTunesDB, with enough detail to tell WHY each duplicate exists. → console + ipod-dupescan.txt
         if (args.Length >= 2 && args[0] == "--dupescan") { RunDupeScan(args[1]); return; }
@@ -187,6 +256,145 @@ internal static class Program
     private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private static readonly string[] TestImageExt = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp" };
+
+    /// <summary>Regression for the LRC parser and the sheet clock — the part of live lyrics that decides
+    /// WHEN a line lights up. Pure string work, so it needs no iPod, no network and no window.</summary>
+    private static void RunLrcTest()
+    {
+        int pass = 0, fail = 0;
+        void Check(string what, bool ok, string got)
+        {
+            if (ok) { pass++; Console.WriteLine($"  ok   {what}"); }
+            else { fail++; Console.WriteLine($"  FAIL {what}   -> {got}"); }
+        }
+        void Near(string what, double actual, double want)
+            => Check(what, Math.Abs(actual - want) < 0.005, actual.ToString("0.000") + " (want " + want.ToString("0.000") + ")");
+
+        Console.WriteLine("LRC parser");
+
+        // 1) the ordinary form
+        var a = LyricsLookup.Parse("[00:12.34]Hello", out bool syncedA);
+        Check("plain [mm:ss.xx] is synced", syncedA && a.Count == 1, $"{a.Count}/{syncedA}");
+        Near("[00:12.34]", a[0].At.TotalSeconds, 12.34);
+
+        // 2) the LEGACY colon form: [mm:ss:xx]. Read as hh:mm:ss this was 770 s.
+        var b = LyricsLookup.Parse("[00:12:50]Hello", out _);
+        Near("[00:12:50] is 12.50 s, not 770 s", b[0].At.TotalSeconds, 12.50);
+        var b3 = LyricsLookup.Parse("[01:02:03.50]Hello", out _);
+        Near("[01:02:03.50] stays hh:mm:ss.xx", b3[0].At.TotalSeconds, 3723.50);
+
+        // 3) [offset:] — the LRC format says a POSITIVE offset makes the lyrics appear SOONER.
+        var c = LyricsLookup.Parse("[offset:+500]\n[00:10.00]Hello", out _);
+        Near("[offset:+500] pulls the line EARLIER", c[0].At.TotalSeconds, 9.5);
+        var d = LyricsLookup.Parse("[offset:-500]\n[00:10.00]Hello", out _);
+        Near("[offset:-500] pushes the line LATER", d[0].At.TotalSeconds, 10.5);
+
+        // 4) compressed repeats, with and without a space between the tags
+        var e = LyricsLookup.Parse("[00:30.00][01:45.00]Chorus", out _);
+        Check("compressed repeat gives two lines", e.Count == 2, e.Count.ToString());
+        var f = LyricsLookup.Parse("[00:30.00] [01:45.00]Chorus", out _);
+        Check("...even with a space between the tags", f.Count == 2 && f[1].Text == "Chorus",
+              f.Count + "/" + (f.Count > 1 ? f[1].Text : "-"));
+
+        // 5) an indented line is still a line
+        var g = LyricsLookup.Parse("   [00:05.00]Hello", out bool syncedG);
+        Check("indented timed line survives", syncedG && g.Count == 1 && g[0].Text == "Hello", $"{g.Count}/{syncedG}");
+
+        // 6) enhanced LRC: word stamps, re-based for each repeat of the line
+        var h = LyricsLookup.Parse("[00:10.00][01:00.00]<00:10.00>One <00:10.50>two", out _);
+        Check("enhanced repeat gives two lines", h.Count == 2, h.Count.ToString());
+        Check("first copy keeps its word stamps",
+              h[0].Words is { Count: 2 } && Math.Abs(h[0].Words[0].At.TotalSeconds - 10.0) < 0.005, "-");
+        Check("the REPEAT gets its own, re-based word stamps",
+              h[1].Words is { Count: 2 } && Math.Abs(h[1].Words[0].At.TotalSeconds - 60.0) < 0.005
+                                        && Math.Abs(h[1].Words[1].At.TotalSeconds - 60.5) < 0.005,
+              h[1].Words is null ? "null" : h[1].Words[0].At.TotalSeconds.ToString("0.00"));
+        Check("the word text is kept clean of stamps", h[0].Text == "One two", h[0].Text);
+
+        // 7) tolerated oddities
+        var i = LyricsLookup.Parse("[00:75.20]Hello", out _);
+        Near("[00:75.20] (seconds over 59 in the 2-part form)", i[0].At.TotalSeconds, 75.20);
+        var j = LyricsLookup.Parse("[ar:Somebody]\n[ti:Song]\n[00:01.00]Hello", out _);
+        Check("metadata tags are not lyrics", j.Count == 1 && j[0].Text == "Hello", j.Count.ToString());
+
+        // 8) an interlude beat: a stamp with no words, kept so the highlight travels through it
+        var k = LyricsLookup.Parse("[00:01.00]Hello\n[00:04.00]\n[00:09.00]World", out _);
+        Check("a blank timed line is kept as a beat", k.Count == 3 && k[1].Text.Length == 0, k.Count.ToString());
+
+        // 9) plain text stays plain
+        var l = LyricsLookup.Parse("Just some words\nAnd more", out bool syncedL);
+        Check("untimed text parses as UNsynced", !syncedL && l.Count == 2, $"{l.Count}/{syncedL}");
+
+        // 10) IndexAt, at and around the boundaries
+        var m = LyricsLookup.Parse("[00:01.00]A\n[00:02.00]B\n[00:03.00]C", out _);
+        Check("before the first line", LyricsLookup.IndexAt(m, TimeSpan.FromSeconds(0.5)) == -1, "-");
+        Check("exactly on a stamp picks that line", LyricsLookup.IndexAt(m, TimeSpan.FromSeconds(2.0)) == 1, "-");
+        Check("just before a stamp keeps the previous", LyricsLookup.IndexAt(m, TimeSpan.FromSeconds(1.999)) == 0, "-");
+        Check("after the last line", LyricsLookup.IndexAt(m, TimeSpan.FromSeconds(99)) == 2, "-");
+
+        // 11) out-of-order input is sorted
+        var n = LyricsLookup.Parse("[00:09.00]Late\n[00:01.00]Early", out _);
+        Check("lines come back in time order", n.Count == 2 && n[0].Text == "Early", "-");
+
+        // 12) a stable per-song key for the user's own sync nudge (length must NOT matter)
+        Check("SongKey ignores the track length",
+              LyricsLookup.SongKey("A", "B") == LyricsLookup.SongKey(" a ", "B"), "-");
+        Check("SongKey separates different songs",
+              LyricsLookup.SongKey("A", "B") != LyricsLookup.SongKey("A", "C"), "-");
+
+        // 13) STABLE ordering. List.Sort is an introsort: with more than ~16 items it permutes ties, and a
+        //     sheet with several lines on one timestamp came back close to reversed.
+        var tie = new System.Text.StringBuilder();
+        for (int t = 0; t < 30; t++) tie.Append("[00:10.00]L").Append(t.ToString("00")).Append('\n');
+        var o = LyricsLookup.Parse(tie.ToString(), out _);
+        bool ordered = o.Count == 30;
+        for (int t = 0; t < o.Count && ordered; t++) ordered = o[t].Text == "L" + t.ToString("00");
+        Check("30 lines on ONE timestamp keep file order", ordered,
+              o.Count + ": " + string.Join(",", o.Take(4).Select(x => x.Text)));
+
+        // 14) a bracket that is not a tag is LYRICS, not a tag to swallow
+        var br = LyricsLookup.Parse("[00:12.00] [Chorus]", out _);
+        Check("[00:12.00] [Chorus] keeps its text", br.Count == 1 && br[0].Text == "[Chorus]",
+              br.Count > 0 ? "'" + br[0].Text + "'" : "-");
+        var br2 = LyricsLookup.Parse("[00:14.00] [chuckles] real words", out _);
+        Check("...and text after it", br2.Count == 1 && br2[0].Text == "[chuckles] real words",
+              br2.Count > 0 ? "'" + br2[0].Text + "'" : "-");
+
+        // 15) a timestamp written with the machine's decimal comma
+        var cm = LyricsLookup.Parse("[00:12,50]Hello", out bool syncedCm);
+        Check("[00:12,50] (comma decimal) is still a timestamp", syncedCm && cm.Count == 1, $"{cm.Count}/{syncedCm}");
+        if (cm.Count > 0) Near("[00:12,50]", cm[0].At.TotalSeconds, 12.50);
+
+        // 16) CR-only line endings (an old tagger, or an ID3 lyrics frame)
+        var cr = LyricsLookup.Parse("[00:01.00]A\r[00:02.00]B\r[00:03.00]C", out _);
+        Check("CR-only line endings split into lines", cr.Count == 3, cr.Count.ToString());
+
+        // 17) the two spellings of a fraction must agree
+        var f1 = LyricsLookup.Parse("[00:12:5]Hello", out _);
+        var f2 = LyricsLookup.Parse("[00:12.5]Hello", out _);
+        Near("[00:12:5] means tenths, like [00:12.5]", f1[0].At.TotalSeconds, f2[0].At.TotalSeconds);
+        Near("...and both are 12.5 s", f1[0].At.TotalSeconds, 12.5);
+
+        // 18) a compressed repeat written OUT of order: word stamps belong to the first tag in FILE order
+        var desc = LyricsLookup.Parse("[01:00.00][00:10.00]<01:00.00>One <01:00.50>two", out _);
+        Check("descending repeat: both copies get their own word times",
+              desc.Count == 2
+              && desc[0].Words is { Count: 2 } && Math.Abs(desc[0].Words[0].At.TotalSeconds - 10.0) < 0.005
+              && desc[1].Words is { Count: 2 } && Math.Abs(desc[1].Words[0].At.TotalSeconds - 60.0) < 0.005,
+              desc.Count > 0 && desc[0].Words is { Count: > 0 } ? desc[0].Words[0].At.TotalSeconds.ToString("0.00") : "-");
+
+        // 19) hh:mm:ss is unreachable for a song, but must win on an hour-long file
+        string hms = "[00:00:10]A\n[00:30:00]B\n[00:59:00]C";
+        var asSong = LyricsLookup.Parse(hms, out _);
+        Near("a song reads [00:30:00] as 30.00 s", asSong[1].At.TotalSeconds, 30.0);
+        var asBook = LyricsLookup.Parse(hms, TimeSpan.FromHours(1), out _);
+        Near("an hour-long file reads it as 30 minutes", asBook[1].At.TotalSeconds, 1800.0);
+        var song = LyricsLookup.Parse("[00:12:50]Hello\n[02:50:40]Bye", TimeSpan.FromSeconds(180), out _);
+        Near("...and a 3-minute song is left alone", song[1].At.TotalSeconds, 170.40);
+
+        Console.WriteLine($"\n{pass} passed, {fail} failed");
+        if (fail > 0) Environment.ExitCode = 1;
+    }
 
     private static void RunReorderTest(string path)
     {
@@ -1036,6 +1244,12 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Loc.Lang = Loc.Resolve(Environment.GetEnvironmentVariable("MIX_LANG"));   // render harness: MIX_LANG=hu to preview Hungarian
+        AppSettings.Frozen = true;   // a preview never writes the user's settings.json
+        var rset = AppSettings.Load();                  // dialogs rendered on their own also deserve the live palette
+        Theme.SetThemeVariant(rset.ThemeVariant);
+        Theme.SetAccent(rset.Accent);
+        MainForm.TracePath = Environment.GetEnvironmentVariable("MIX_TRACE");   // MIX_TRACE=<file>: step log for stall hunting
+        if (Environment.GetEnvironmentVariable("MIX_STAGE_STYLE") is { Length: > 0 } wss && Enum.TryParse<LyricsStage.WashStyle>(wss, true, out var wst)) LyricsStage.Style = wst;   // poster|tint|glow
 
         IPodDevice? device;
         if (Directory.Exists(dbPath))
@@ -1101,11 +1315,14 @@ internal static class Program
                 rep.DuplicatePhotoExtras = 3;
                 rep.IncompleteTags = 9; rep.AlbumGaps = 2;
             }
-            using var dlg = new LibraryDoctorDialog(rep) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
-            dlg.Show();
+            bool dlgLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow: shows the DWM caption as it really is
+            using var dlg = new LibraryDoctorDialog(rep) { StartPosition = FormStartPosition.Manual, Location = dlgLive ? new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 700 : 40, 40) : new Point(-2600, -2600) };
+            if (dlgLive) { dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var dbmp = new Bitmap(dlg.Width, dlg.Height);
-            dlg.DrawToBitmap(dbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
+            if (dlgLive) { using var lg = Graphics.FromImage(dbmp); IntPtr hdc = lg.GetHdc(); PrintWindow(dlg.Handle, hdc, 2); lg.ReleaseHdc(hdc); }
+            else dlg.DrawToBitmap(dbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
             dbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
             dlg.Close();
             return;
@@ -1132,6 +1349,80 @@ internal static class Program
             return;
         }
 
+        // The full-window lyrics view: a synthetic cover for the wash, the real Rakpart sheet for the words.
+        if (view == "lyricsstage")
+        {
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600),
+                                     FormBorderStyle = FormBorderStyle.None, BackColor = Theme.Bg,
+                                     Size = new Size(int.TryParse(Environment.GetEnvironmentVariable("MIX_STAGE_W"), out int sw0) ? sw0 : 1000,
+                                                     int.TryParse(Environment.GetEnvironmentVariable("MIX_STAGE_H"), out int sh0) ? sh0 : 620) };
+            var stage = new LyricsStage { Dock = DockStyle.Fill };
+            f.Controls.Add(stage);
+            f.Show();
+            string sArt = Environment.GetEnvironmentVariable("MIX_LYRICS_ARTIST") ?? "Wellhello";
+            string sTtl = Environment.GetEnvironmentVariable("MIX_LYRICS_TITLE") ?? "Rakpart";
+            int coverId = int.TryParse(Environment.GetEnvironmentVariable("MIX_COVER_ID"), out int cid) ? cid : 3;
+            stage.SetTrack(sTtl, sArt, CoverArt.Generate(coverId, 640));
+            var sl = LyricsLookup.Find(sArt, sTtl, TimeSpan.FromSeconds(201), null, online: true, out bool ssync);
+            stage.SetLyrics(sl, ssync, sl.Count == 0 ? Loc.T("No lyrics found for this song.") : "");
+            double sat = double.TryParse(Environment.GetEnvironmentVariable("MIX_LYRICS_AT"),
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sv) ? sv : 37.6;
+            stage.SetPosition(TimeSpan.FromSeconds(sat), TimeSpan.FromSeconds(201), playing: true);
+            // Let the line hand-off (320 ms) finish, so the render shows the sung line at rest, not mid-fade.
+            for (int i = 0; i < 24; i++) { Application.DoEvents(); Thread.Sleep(20); }
+            stage.SetPosition(TimeSpan.FromSeconds(sat), TimeSpan.FromSeconds(201), playing: true);
+            Application.DoEvents();
+            using var sbmp = new Bitmap(stage.Width, stage.Height);
+            stage.DrawToBitmap(sbmp, new Rectangle(0, 0, stage.Width, stage.Height));
+            sbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            f.Close();
+            return;
+        }
+
+        // The lyrics sheet, rendered with a real fetched song so the layout is honest.
+        if (view == "lyrics")
+        {
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600),
+                                     FormBorderStyle = FormBorderStyle.None, Size = new Size(380, 460), BackColor = Theme.PanelBg };
+            var panel = new LyricsPanel { Dock = DockStyle.Fill };
+            f.Controls.Add(panel);
+            f.Show();
+            // MIX_LYRICS_ARTIST / _TITLE point the sheet at any song; MIX_LYRICS_PLAIN renders whatever
+            // came back as an UNTIMED sheet, which is the one state a real fetch cannot be asked for.
+            string rArt = Environment.GetEnvironmentVariable("MIX_LYRICS_ARTIST") ?? "Wellhello";
+            string rTtl = Environment.GetEnvironmentVariable("MIX_LYRICS_TITLE") ?? "Rakpart";
+            var lines = LyricsLookup.Find(rArt, rTtl, TimeSpan.FromSeconds(201), null, online: true, out bool synced);
+            if (Environment.GetEnvironmentVariable("MIX_LYRICS_PLAIN") == "1") synced = false;
+            panel.SetLyrics(rTtl + "  —  " + rArt, lines, synced,
+                            lines.Count == 0 ? Loc.T("No lyrics found for this song.") : "");
+            // MIX_LYRICS_SYNC (milliseconds) previews the sheet with a saved sync nudge applied.
+            if (int.TryParse(Environment.GetEnvironmentVariable("MIX_LYRICS_SYNC"),
+                             System.Globalization.NumberStyles.Integer,
+                             System.Globalization.CultureInfo.InvariantCulture, out int syncMs))
+                panel.SetOffsetMs(syncMs);
+            // MIX_LYRICS_AT lets a design review freeze the sheet mid-line to inspect the karaoke fill.
+            // InvariantCulture on purpose: on a machine whose decimal separator is a comma, a plain
+            // TryParse of "37.24" fails and silently falls back — every render then looks identical.
+            double at = double.TryParse(Environment.GetEnvironmentVariable("MIX_LYRICS_AT"),
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : 38.5;
+            // MIX_LYRICS_PICK=1 renders the "other lyrics" list instead of the sheet.
+            if (Environment.GetEnvironmentVariable("MIX_LYRICS_PICK") == "1")
+            {
+                panel.SetSongLength(TimeSpan.FromSeconds(201));
+                panel.ToggleVersions();
+                panel.SetCandidates(LyricsLookup.Search(rArt, rTtl, TimeSpan.FromSeconds(201)));
+            }
+            panel.SetPosition(TimeSpan.FromSeconds(at), playing: true);
+            // Short on purpose: the sheet LANDS on the sung line and its fade is anchored to SetLyrics, so
+            // there is nothing left to settle — and every millisecond spent here is a millisecond the
+            // panel's interpolated clock runs past the moment the render was asked for.
+            for (int i = 0; i < 5; i++) { Application.DoEvents(); Thread.Sleep(20); }
+            using var bmp = new Bitmap(panel.Width, panel.Height);
+            panel.DrawToBitmap(bmp, new Rectangle(0, 0, panel.Width, panel.Height));
+            bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            return;
+        }
+
         // The Up Next queue panel renders on its own with synthetic tracks.
         if (view == "upnext")
         {
@@ -1152,6 +1443,53 @@ internal static class Program
             return;
         }
 
+
+        // The themed tooltip chip on its own (it is a separate, never-activated window).
+        if (view == "tip")
+        {
+            using var host = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), Size = new Size(10, 10), FormBorderStyle = FormBorderStyle.None };
+            host.Show();
+            var tip = Tip.PreviewShow(new Rectangle(Screen.PrimaryScreen!.Bounds.Width / 2, 80, 32, 32), Environment.GetEnvironmentVariable("MIX_TIP") ?? Loc.T("Up Next"));
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using (var tbmp = new Bitmap(tip.Width, tip.Height))
+            {
+                using (var tg = Graphics.FromImage(tbmp)) { IntPtr thdc = tg.GetHdc(); PrintWindow(tip.Handle, thdc, 2); tg.ReleaseHdc(thdc); }
+                tbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            Tip.Disarm();
+            return;
+        }
+
+        // The small modal windows that now wear the app's own card chrome (title strip + round close).
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress")
+        {
+            Form dlg = view switch
+            {
+                "prompt" => PromptDialog.Build(Loc.T("New playlist"), Loc.T("Playlist name:"), Loc.T("New Playlist"), out _),
+                "wallpaperpicker" => new WallpaperPickerDialog(),
+                "smartplaylist" => new SmartPlaylistDialog(new List<Track>
+                {
+                    new() { Title = "Higher Ground", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, Rating = 80 },
+                    new() { Title = "Rakpart", Artist = "Azahriah", Album = "memento", Genre = "Pop", Year = 2023, Rating = 100 },
+                }, null),
+                _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }),
+            };
+            bool cardLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow = the real window
+            dlg.StartPosition = FormStartPosition.Manual;
+            dlg.Location = cardLive ? new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 700 : 60, 60) : new Point(-2600, -2600);
+            if (cardLive) { dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            else dlg.Show();
+            for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            using (var pbmp = new Bitmap(dlg.Width, dlg.Height))
+            {
+                if (cardLive) { using var pg = Graphics.FromImage(pbmp); IntPtr phdc = pg.GetHdc(); PrintWindow(dlg.Handle, phdc, 2); pg.ReleaseHdc(phdc); }
+                else dlg.DrawToBitmap(pbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
+                pbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            dlg.Hide();
+            dlg.Dispose();
+            return;
+        }
 
         // The cover picker renders on its own.
         if (view == "coverpicker")
@@ -1186,7 +1524,7 @@ internal static class Program
             if (tail == "all")
             {
                 string stem = Path.Combine(Path.GetDirectoryName(outPng) ?? ".", Path.GetFileNameWithoutExtension(outPng));
-                for (int cat = 0; cat < 7; cat++)
+                for (int cat = 0; cat < 8; cat++)   // keep in step with SettingsForm.Categories
                 {
                     using var sf = new SettingsForm(settings, device, () => { }, () => { })
                     { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
@@ -1250,13 +1588,14 @@ internal static class Program
             return;
         }
 
-        // The detached mini player renders on its own with a synthetic track + cover ("miniplayer" =
-        // normal, "miniplayercompact" = the small control UI).
-        if (view == "miniplayer" || view == "miniplayercompact" || view == "miniplayeridle")
+        // The detached mini player renders on its own with a synthetic track + cover: "miniplayer" = the strip at
+        // its minimum width, "miniplayerwide" = at its maximum (the volume slider shown, the card at its widest),
+        // "miniplayeridle" = nothing loaded. MIX_MINI_HOVER = seek|cover|play|vol|more|close shows that hover state.
+        if (view == "miniplayer" || view == "miniplayerwide" || view == "miniplayeridle")
         {
             using var mp = new MiniPlayerForm { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            if (view == "miniplayerwide") mp.Width = MiniPlayerForm.MaxW;
             mp.Show();
-            if (view == "miniplayercompact") { mp.SetCompact(true); mp.Location = new Point(-2600, -2600); }
             bool idle = view == "miniplayeridle";
             var t = new Track { Title = "A Moment Apart", Artist = "ODESZA", Album = "A Moment Apart", MediaType = 1, LengthMs = 234000 };
             // Prefer a real embedded cover (more honest preview); fall back to synthetic art.
@@ -1265,12 +1604,7 @@ internal static class Program
             try { if (File.Exists(sample) && MetadataExtractor.ReadArt(sample) is { Length: > 0 } b) using (var ms = new MemoryStream(b)) cover = new Bitmap(Image.FromStream(ms)); } catch { cover = null; }
             if (!idle) mp.SetTrack(t, cover ?? CoverArt.Generate(45, 300));
             mp.SetProgress(playing: !idle, posSec: idle ? 0 : 78, durSec: idle ? 0 : 234, volume: 0.72, muted: false, shuffle: !idle, repeat: NowPlayingBar.RepeatMode.All);
-            if (!idle)   // no live audio in a render → inject a representative spectrum so the bars are visible
-            {
-                var demo = new float[28];
-                for (int i = 0; i < demo.Length; i++) demo[i] = (float)(0.30 + 0.55 * Math.Abs(Math.Sin(i * 0.7)) * (1.0 - i / 40.0));
-                mp.DebugSpectrum(demo);
-            }
+            mp.DebugState(idle ? Array.Empty<float>() : new[] { 0.55f, 0.85f, 0.4f, 0.7f }, Environment.GetEnvironmentVariable("MIX_MINI_HOVER"));   // no live audio in a render → representative bars
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var mbmp = new Bitmap(mp.ClientSize.Width, mp.ClientSize.Height);
             mp.DrawToBitmap(mbmp, new Rectangle(0, 0, mp.ClientSize.Width, mp.ClientSize.Height));
@@ -1334,23 +1668,88 @@ internal static class Program
         }
 
         // Cover Flow renders on its own with synthetic album covers.
+        // LIVE bench: a visible window, synthetic covers, a scripted wheel sequence. Per-frame CSV next to the png
+        // (tick,pos,fast,paintMs,flat,nearest,queue,sprites) + PrintWindow captures stitched into the png.
+        if (view == "cfbench")
+        {
+            int bw = 1600, bh = 900;
+            if (sizeArg is { } sa && sa.Contains('x') && int.TryParse(sa.Split('x')[0], out int w0) && int.TryParse(sa.Split('x')[1], out int h0)) { bw = w0; bh = h0; }
+            bool offscreen = Environment.GetEnvironmentVariable("MIX_CFBENCH_OFFSCREEN") == "1";   // keep the bench window off the desktop
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = offscreen ? new Point(-2600, -2600) : new Point(40, 40), FormBorderStyle = FormBorderStyle.None, Size = new Size(bw, bh), BackColor = Theme.Bg, TopMost = !offscreen };
+            var cf = new CoverFlowView { Dock = DockStyle.Fill };
+            f.Controls.Add(cf);
+            var log = new System.Text.StringBuilder("tick,pos,fast,paintMs,live,nearest,queue,sprites\n");
+            CoverFlowView.Trace = s => log.Append(s).Append('\n');
+            f.Show();
+            var items = new List<CoverFlowView.Item>();
+            for (int i = 0; i < 40; i++) items.Add(new CoverFlowView.Item(CoverArt.GenerateSquare(i * 7 + 3, CoverFlowView.SourcePx), $"Album {i}", $"Artist {i % 7}", i));
+            cf.SetItems(items, 20);
+            int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
+            var frames = new List<Bitmap>();
+            long t0 = Environment.TickCount64;
+            // Off the desktop Windows sends no WM_PAINT, so the offscreen bench paints each pumped frame itself (WM_PRINT runs the same OnPaint).
+            using var offBmp = offscreen ? new Bitmap(bw, bh) : null;
+            void Pump(int ms) { long end = Environment.TickCount64 + ms; while (Environment.TickCount64 < end) { Application.DoEvents(); if (offBmp is not null) cf.DrawToBitmap(offBmp, cf.ClientRectangle); else Thread.Sleep(2); } }
+            bool noSnap = Environment.GetEnvironmentVariable("MIX_CFBENCH_NOSNAP") == "1";
+            void Snap()
+            {
+                if (noSnap) return;
+                var bmp = new Bitmap(f.Width, f.Height);
+                using (var gg = Graphics.FromImage(bmp)) { IntPtr hdc = gg.GetHdc(); PrintWindow(f.Handle, hdc, 2); gg.ReleaseHdc(hdc); }
+                frames.Add(bmp);
+            }
+            Pump(900);                                   // settle + idle prebuffer
+            // 1) a fast flick: 6 notches 90 ms apart, snapshots through the coast
+            for (int n = 0; n < 6; n++) { cf.Move(1); Pump(90); Snap(); }
+            for (int n = 0; n < 8; n++) { Pump(80); Snap(); }
+            Pump(900);
+            // 2) a single slow step, snapshots through its tail (the stepping should show here if it exists)
+            cf.Move(1); for (int n = 0; n < 10; n++) { Pump(45); Snap(); }
+            Pump(700);
+            // 3) three deliberate notches
+            for (int n = 0; n < 3; n++) { cf.Move(1); Pump(220); Snap(); }
+            Pump(900);
+            log.Append($"# gc0={GC.CollectionCount(0) - g0} gc1={GC.CollectionCount(1) - g1} gc2={GC.CollectionCount(2) - g2} ms={Environment.TickCount64 - t0} bakes={cf.BakeCount} bakeMs={cf.BakeMs:F0}\n");
+            CoverFlowView.Trace = null;
+            File.WriteAllText(Path.ChangeExtension(outPng, ".csv"), log.ToString());
+            // contact sheet: 4 columns of half-size frames
+            if (frames.Count == 0) return;
+            int cols = 4, tw = bw / 2, th = bh / 2, rows = (frames.Count + cols - 1) / cols;
+            using (var sheet = new Bitmap(cols * tw, Math.Max(1, rows) * th))
+            {
+                using (var sg = Graphics.FromImage(sheet))
+                {
+                    sg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+                    for (int i = 0; i < frames.Count; i++) sg.DrawImage(frames[i], new Rectangle((i % cols) * tw, (i / cols) * th, tw, th));
+                }
+                sheet.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            foreach (var b in frames) b.Dispose();
+            return;
+        }
+
         if (view == "coverflow")
         {
-            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(960, 600), BackColor = Theme.Bg };
+            int cw = 960, chh = 600;   // optional 5th arg WxH: render at a real window size
+            if (sizeArg is { } csa && csa.Contains('x') && int.TryParse(csa.Split('x')[0], out int cw0) && int.TryParse(csa.Split('x')[1], out int ch0)) { cw = cw0; chh = ch0; }
+            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(cw, chh), BackColor = Theme.Bg };
             var cf = new CoverFlowView { Dock = DockStyle.Fill };
             f.Controls.Add(cf);
             f.Show();
             var items = new List<CoverFlowView.Item>();
             string[] titles = { "A Moment Apart", "Starboy", "SOUR", "Brightest Lights", "Settle", "Discovery", "Currents", "In Return", "Wasteland", "Random Access", "Nectar", "Voyage" };
             string[] artists = { "ODESZA", "The Weeknd", "Olivia Rodrigo", "Lane 8", "Disclosure", "Daft Punk", "Tame Impala", "ODESZA", "Brent Faiyaz", "Daft Punk", "Joji", "ABBA" };
-            for (int i = 0; i < titles.Length; i++)
-                items.Add(new CoverFlowView.Item(CoverArt.Generate(i * 7 + 3, 300), titles[i], artists[i], i));
-            cf.SetItems(items, titles.Length / 2);
-            cf.PlayingTag = items[titles.Length / 2].Tag; // so the "Now Playing" chip shows in the preview
+            for (int i = 0; i < titles.Length * 2; i++)   // two rounds: enough to fill a wide deck on both sides
+                items.Add(new CoverFlowView.Item(CoverArt.GenerateSquare(i * 7 + 3, CoverFlowView.SourcePx), titles[i % titles.Length], artists[i % artists.Length], i));
+            cf.SetItems(items, titles.Length);
+            cf.PlayingTag = items[titles.Length].Tag; // so the "Now Playing" chip shows in the preview
+            if (float.TryParse(Environment.GetEnvironmentVariable("MIX_CF_POS"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float cfPos))
+                cf.PreviewPos(cfPos);   // MIX_CF_POS=<float>: a frame mid-crossing (the live warp) instead of the settled deck
             for (int i = 0; i < 8; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var cbmp2 = new Bitmap(f.Width, f.Height);
             f.DrawToBitmap(cbmp2, new Rectangle(0, 0, f.Width, f.Height));
             cbmp2.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            if (Environment.GetEnvironmentVariable("MIX_MEMLOG") == "1") File.WriteAllText(outPng + ".mem.txt", MemProbe.Report(cf));   // what the browser holds after the covers streamed in
             return;
         }
 
@@ -1397,22 +1796,127 @@ internal static class Program
         }
 
         int winW = 1080; if (sizeArg is not null && int.TryParse(sizeArg, out int swArg)) winW = swArg;   // optional width override, to eyeball the grid flex
+        // MIX_LIVE=1: the window sits ON the desktop (near-invisible at 2% opacity) so it gets real WM_PAINTs with
+        // partial clips, and the capture is a PrintWindow of what is actually on screen - the live paint path that an
+        // offscreen DrawToBitmap can never reproduce (it tiles every row and cell in one pass).
+        bool live = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";
         var form = new MainForm(autoDetect: false)
         {
             StartPosition = FormStartPosition.Manual,
-            Location = new Point(-2600, -2600),
-            Size = new Size(winW, view == "device" ? 1180 : 700), // device page is tall — show it all for review
+            // (placed on the half of the screen the mouse is NOT on, so the real cursor cannot hover anything in the capture)
+            Location = live ? new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Math.Max(40, Screen.PrimaryScreen.Bounds.Width - winW - 40) : 40, 40) : new Point(-2600, -2600),
+            Opacity = live ? 0.02 : 1.0,
+            ShowInTaskbar = !live,
+            NoActivate = live,
+            Size = new Size(winW, int.TryParse(Environment.GetEnvironmentVariable("MIX_WIN_H"), out int wh) ? wh : view == "device" ? 1180 : 700), // device page is tall — show it all for review; MIX_WIN_H overrides
+            // The running app is frameless (the native caption is removed in WndProc). Without this the
+            // offscreen render composites a native title bar OVER the app's own title strip, so every design
+            // review of the top 30 px was looking at Windows chrome instead of the app.
+            FormBorderStyle = FormBorderStyle.None,
         };
         form.Show();
         Application.DoEvents();
-        if (device is not null) form.PreviewDevice(device);
-        if (view is "videos" or "photos" or "device" or "albums" or "artists" or "local") form.PreviewSelectView(view);
-        // Pump the message loop so background cover-art loads land before we capture.
-        for (int i = 0; i < 45; i++) { Application.DoEvents(); Thread.Sleep(100); }
-
-        using (var bmp = new Bitmap(form.Width, form.Height))
+        if (Environment.GetEnvironmentVariable("MIX_NODEVICE") == "1") form.PreviewNoDevice();   // the empty content card
+        else if (device is not null) form.PreviewDevice(device);
+        if (view != "home" && device is not null) { Application.DoEvents(); form.PreviewSelectView("songs"); }   // the library lands on the home page now; the song list is what MIX_NP_ROW indexes
+        // MIX_NP=1 shows a song as playing (row MIX_NP_ROW of the song list, at MIX_NP_AT seconds, cover
+        // MIX_COVER_ID) — no audio. Done while the song list is still up, so browse pages show it too.
+        if (Environment.GetEnvironmentVariable("MIX_NP") is { } npOn && npOn != "0")
         {
-            form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+            Application.DoEvents();
+            form.PreviewNowPlaying(int.TryParse(Environment.GetEnvironmentVariable("MIX_NP_ROW"), out int npRow) ? npRow : 0,
+                double.TryParse(Environment.GetEnvironmentVariable("MIX_NP_AT"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double npAt) ? npAt : 83,
+                int.TryParse(Environment.GetEnvironmentVariable("MIX_COVER_ID"), out int npCover) ? npCover : -1);
+        }
+        if (view is "songs" or "videos" or "photos" or "device" or "albums" or "artists" or "local" or "localalbums" or "localartists" or "home") form.PreviewSelectView(view);   // "songs" explicitly: the library now lands on the home page
+        if (Environment.GetEnvironmentVariable("MIX_NP_LOCAL") is { Length: > 0 } npl)   // a PC-library song as playing (title part or index), real path
+        {
+            for (int i = 0; i < 100 && form.PreviewLocalCount == 0; i++) { Application.DoEvents(); Thread.Sleep(50); }   // the folder scan is async
+            Application.DoEvents();
+            MainForm.Trace("np-local: " + (form.PreviewNowPlayingLocal(npl, double.TryParse(Environment.GetEnvironmentVariable("MIX_NP_AT"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double npa) ? npa : 30) ? "ok" : "NOT FOUND"));
+        }
+        if (Environment.GetEnvironmentVariable("MIX_PLAY_LOCAL") is { Length: > 0 } ppl)   // really play a PC-library song (muted) through the engine
+        {
+            for (int i = 0; i < 100 && form.PreviewLocalCount == 0; i++) { Application.DoEvents(); Thread.Sleep(50); }
+            Application.DoEvents();
+            MainForm.Trace("play-local: " + (form.PreviewPlayLocal(ppl) ? "ok" : "NOT FOUND"));
+            for (int i = 0; i < 12; i++) { Application.DoEvents(); Thread.Sleep(60); }
+        }
+        if (Environment.GetEnvironmentVariable("MIX_SIDE") is { Length: > 0 } sideTab) { Application.DoEvents(); form.PreviewSidePanel(sideTab); }   // the docked side card (UpNext|History|Lyrics); needs a wide window
+        if (Environment.GetEnvironmentVariable("MIX_COMPACT") is { } cmp) { Application.DoEvents(); form.PreviewRows(cmp != "0"); }   // row density, in memory only
+        if (Environment.GetEnvironmentVariable("MIX_THEME_SWITCH") is { Length: > 0 } tv) { Application.DoEvents(); form.PreviewThemeSwitch(tv); }   // a runtime palette change (baked-colour check)
+        if (Environment.GetEnvironmentVariable("MIX_ACCENT") is { Length: > 0 } acc) { Application.DoEvents(); form.PreviewAccent(acc); }   // a runtime accent change (preset name or #hex)
+        if (Environment.GetEnvironmentVariable("MIX_REMAINING") == "1") form.PreviewRemaining(true);   // the card's total slot counts down
+        if (Environment.GetEnvironmentVariable("MIX_SELECT") is { Length: > 0 } selSpec && selSpec.Split('-') is { Length: 2 } sp2
+            && int.TryParse(sp2[0], out int selA) && int.TryParse(sp2[1], out int selB)) { Application.DoEvents(); form.PreviewSelectRows(selA, selB); }   // rows selected -> the action bar
+        if (Environment.GetEnvironmentVariable("MIX_DECK_HOVER") is { Length: > 0 } dhv) { Application.DoEvents(); form.PreviewDeckHover(dhv); }   // a hovered deck control (prev|play|next|...)
+        if (int.TryParse(Environment.GetEnvironmentVariable("MIX_HOT_ROW"), out int hotRow)) { Application.DoEvents(); form.PreviewRowHover(hotRow, Environment.GetEnvironmentVariable("MIX_ROW_ACTION")); }   // a hovered row (+ play|more)
+        if (Environment.GetEnvironmentVariable("MIX_STAGE") == "1") { Application.DoEvents(); form.PreviewLyricsStage(); }   // the lyrics view open
+        // Pump the message loop so background cover-art loads land before we capture.
+        int settleMs = int.TryParse(Environment.GetEnvironmentVariable("MIX_SETTLE_MS"), out int sm) ? sm : 4500;   // longer when a render must wait for the network
+        for (int i = 0; i < settleMs / 100; i++) { Application.DoEvents(); Thread.Sleep(100); }
+        if (Environment.GetEnvironmentVariable("MIX_MEMLOG") == "1") File.WriteAllText(outPng + ".mem.txt", MemProbe.Report(null));   // where the memory goes, after the view settled
+        if (view == "menu")   // a themed context menu (the Local Music folder menu), first item hovered
+        {
+            var m = ThemedMenu.New();
+            // MIX_MENU_ITEMS = "a|-|b" ("-" = separator); default = the Local Music folder menu
+            string spec = Environment.GetEnvironmentVariable("MIX_MENU_ITEMS") ?? "Add folder...|-|Remove:  E:\\Music\\Flac|-|" + Loc.T("Clear all folders");
+            bool anyCheck = false;
+            foreach (var it in spec.Split('|'))
+            {
+                if (it == "-") { m.Items.Add(new ToolStripSeparator()); continue; }
+                bool on = it.StartsWith("*"); anyCheck |= it.StartsWith("*") || it.StartsWith("_");   // "*x" = checked, "_x" = checkable but off
+                m.Items.Add(new ToolStripMenuItem(it.TrimStart('*', '_')) { Checked = on });
+            }
+            if (anyCheck) MenuStyle.Checkable(m);
+            m.Show(form, new Point(400, 200));
+            for (int i = 0; i < 10; i++) { Application.DoEvents(); Thread.Sleep(30); }
+            m.Items[0].Select();
+            Application.DoEvents();
+            using (var mb = new Bitmap(m.Width, m.Height))
+            {
+                m.DrawToBitmap(mb, new Rectangle(0, 0, m.Width, m.Height));
+                mb.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            m.Close();
+            form.Close();
+            return;
+        }
+
+        // Capture the CLIENT area only. DrawToBitmap composites the native caption over the top of the
+        // client at the same origin, which hid the app's own title strip and made every design review of the
+        // top 30 px a lie. The running app is frameless, so the client IS the window.
+        var appRoot = (Control?)form.PreviewRoot ?? form;
+        if (live)
+        {
+            form.PreviewLivePaint();   // hover / selection / scroll round-trips: the incremental repaints a user causes
+            using var lb = new Bitmap(form.Width, form.Height);
+            using (var lg = Graphics.FromImage(lb)) { IntPtr hdc = lg.GetHdc(); PrintWindow(form.Handle, hdc, 2); lg.ReleaseHdc(hdc); }
+            lb.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            form.Close();
+            return;
+        }
+        using (var bmp = new Bitmap(appRoot.Width, appRoot.Height))
+        {
+            appRoot.DrawToBitmap(bmp, new Rectangle(0, 0, appRoot.Width, appRoot.Height));
+            // DrawToBitmap paints the root's children in COLLECTION order (index 0 first), which is the REVERSE of
+            // the screen z-order (index 0 is the front-most): a BringToFront'd control (window buttons over the deck,
+            // the lyrics stage over the content card) comes out UNDERNEATH. Re-stamp every visible root child
+            // back-to-front so the capture matches the screen.
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;   // pixel-exact stamps (no half-pixel edge blend)
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                for (int ci = appRoot.Controls.Count - 1; ci >= 0; ci--)
+                {
+                    var c = appRoot.Controls[ci];
+                    if (!c.Visible || c.Width <= 0 || c.Height <= 0) continue;
+                    using var cb = new Bitmap(c.Width, c.Height);
+                    c.DrawToBitmap(cb, new Rectangle(0, 0, cb.Width, cb.Height));
+                    g.DrawImage(cb, new Rectangle(c.Left, c.Top, cb.Width, cb.Height), new Rectangle(0, 0, cb.Width, cb.Height), GraphicsUnit.Pixel);
+                }
+            }
             bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
         }
         form.Close();
@@ -1955,6 +2459,8 @@ internal static class Program
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hwnd, int cmd);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hwnd, out RECT rc);
     private struct RECT { public int Left, Top, Right, Bottom; }

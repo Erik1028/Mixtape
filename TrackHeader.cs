@@ -14,6 +14,7 @@ internal sealed class TrackHeader : Control
 {
     private readonly DataGridView _grid;
     public event Action<int>? SortRequested;   // body column index that was clicked
+    public event Action<Point>? MenuRequested;  // right-click (screen point): sort by / columns
 
     private const int Grip = 5, MinCol = 44;
     private int _dragCol = -1;                  // column whose right boundary is being dragged
@@ -149,6 +150,7 @@ internal sealed class TrackHeader : Control
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
+        if (e.Button == MouseButtons.Right) { _didResize = false; MenuRequested?.Invoke(PointToScreen(e.Location)); return; }
         if (e.Button != MouseButtons.Left || _didResize || BoundaryAt(e.X) >= 0) { _didResize = false; return; }
         for (int i = 0; i < _grid.Columns.Count; i++)
         {
@@ -162,7 +164,7 @@ internal sealed class TrackHeader : Control
         var g = e.Graphics;
         g.Clear(Theme.Bg);
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        using var f = Theme.UiFont(8.5f, FontStyle.Bold);
+        using var f = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);
 
         for (int i = 0; i < _grid.Columns.Count; i++)
         {
@@ -173,8 +175,9 @@ internal sealed class TrackHeader : Control
                 using (var hb = new SolidBrush(Theme.Blend(Theme.Bg, Color.White, 0.05)))
                     g.FillRectangle(hb, r.X, 0, r.Width, Height - 1);
             bool right = RightAligned(i);
-            int rp = i == 7 ? 18 : 14;   // TIME's cells sit 14px from the right edge (others 10px) → match the caption
-            var pad = right ? new Rectangle(r.X + 4, 0, r.Width - rp, Height) : new Rectangle(r.X + 8, 0, r.Width - 12, Height);
+            var cp = _grid.Columns[i].DefaultCellStyle.Padding;   // the caption sits where the cells' own text does (SONG keeps a gutter for the play glyph, TIME a slot for "···")
+            int rp = cp.Right + 4, lp = Math.Max(8, cp.Left);
+            var pad = right ? new Rectangle(r.X + 4, 0, r.Width - rp, Height) : new Rectangle(r.X + lp, 0, r.Width - lp - 4, Height);
             var flags = (right ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter
                         | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
             // The sorted column bakes a "  ↑/↓" arrow into HeaderText — split it off so the base name still
@@ -185,7 +188,8 @@ internal sealed class TrackHeader : Control
             TextRenderer.DrawText(g, caption, f, pad, hovered ? Theme.Subtle : Theme.Faint, flags);
         }
 
+        if (_grid.RowCount == 0) return;   // an empty list draws its empty state, not a headerless hairline
         using var pen = new Pen(Theme.Border);
-        g.DrawLine(pen, 0, Height - 1, Width, Height - 1);   // hairline under the header
+        g.DrawLine(pen, 0, Height - 1, Math.Min(Width, _grid.Width) - 1, Height - 1);   // hairline under the header, ending where the rows end (the grid stops short of the scrollbar column; the row dividers do too)
     }
 }

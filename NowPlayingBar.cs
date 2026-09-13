@@ -19,7 +19,58 @@ internal sealed class NowPlayingBar : Panel
     public event Action<Rectangle>? EqualizerRequested;   // arg = the button's screen rect (flyout anchor)
     public event Action<Rectangle>? ProRequested;         // opened the Pro-features hub
     public event Action<Rectangle>? QueueRequested;       // opened the Up Next queue popover (arg = button screen rect)
+    public event Action<Rectangle>? LyricsRequested;      // opened the live-lyrics popover (arg = button screen rect)
     public event Action? ModesChanged;   // user toggled shuffle/repeat — the host persists it
+    public event Action? ArtistClicked, AlbumClicked;   // deck: the card's subtitle links (artist / album)
+    public event Action<bool>? RemainingToggled;        // deck: the total time was clicked - it now counts down (or not)
+    private bool _showRemaining;
+    /// <summary>The card's total-time slot shows "-remaining" instead of the length (a click toggles; the host persists it).</summary>
+    public bool ShowRemaining { get => _showRemaining; set { if (_showRemaining == value) return; _showRemaining = value; Invalidate(); } }
+    private double _hoverFrac = -1;      // where the pointer sits along the seek line (0..1), -1 when it is elsewhere
+    public event Action? CoverClicked;   // deck: the card's cover was clicked → the host reveals the playing row
+    public event Action<Point>? CardMenuRequested;   // deck: right-click on the card (screen point) → the host's menu
+    public event Action<Rectangle>? OverflowRequested;   // deck: the "···" holding what the width could not fit (arg = its screen rect)
+    /// <summary>Deck: which utilities the current width folded into the "···" menu.</summary>
+    public (bool Eq, bool Pro, bool Queue, bool Modes) Folded { get { var l = Layout(); return (!l.ShowEq, !l.ShowPro, !l.ShowQueue, !l.ShowModes); } }
+    /// <summary>Set the repeat mode outright (the "···" menu); raises the same events as the button.</summary>
+    public void SetRepeat(RepeatMode m) { if (_repeat == m) return; _repeat = m; if (m == RepeatMode.One) ClearPending(); ModesChanged?.Invoke(); Invalidate(); Changed?.Invoke(); }
+
+    // ---- the top deck (LAB concept) ----
+    /// <summary>True when the bar is the window's top deck: transport on the left, a now-playing CARD in the
+    /// middle, the utilities on the right, all on the wallpaper. False = the classic bar under the content.</summary>
+    public bool OnTop { get; private set; }
+    private bool _lyricsOpen;   // the full lyrics view is open → its button reads as pressed
+    public void SetLyricsOpen(bool on) { if (_lyricsOpen == on) return; _lyricsOpen = on; Invalidate(); }
+    private bool _queueOpen;    // the Up Next side card is docked open → its button reads as pressed
+    public void SetQueueOpen(bool on) { if (_queueOpen == on) return; _queueOpen = on; Invalidate(); }
+    /// <summary>Deck mode: px at the right edge kept clear for the window buttons + gear (root children over us).</summary>
+    public int RightReserve { get; set; } = 220;
+    public const int TopH = 78;                      // 12 + card 54 + 12
+    internal const int CardH = 54, CardY = 12;
+    private readonly Font _fWordmark = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
+    private readonly Font _fCardTitle = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
+    private int _wordW = -1;                         // measured "Mixtape" width (deck wordmark)
+    private double _previewPos = -1, _previewDur;    // render harness: a fake position/duration with no audio open
+
+    public void UseTopLayout() { OnTop = true; Dock = DockStyle.None; Height = TopH; Invalidate(); }
+
+    /// <summary>Render harness only: show <paramref name="track"/> as playing at <paramref name="atSec"/> with no
+    /// audio. TAKES OWNERSHIP of <paramref name="cover"/>.</summary>
+    public void Preview(Track track, Bitmap? cover, double atSec, double durSec, string? path = null)
+    {
+        _track = track; _path = path;   // a real path lets the lyrics stage load the file's own art (LoadHeroCover)
+        SwapCover(cover);
+        _playing = true; _playMorph = 1f;
+        _previewPos = Math.Max(0, atSec); _previewDur = Math.Max(1, durSec);
+        string? hov = Environment.GetEnvironmentVariable("MIX_NP_HOVER");
+        if (hov is "seek" or "drag") { _hover = Hit.Seek; _seekKnobR = OnTop ? 6f : 8f; }
+        if (hov == "drag") { _drag = Drag.Seek; _scrubFrac = 0.62; }
+        Invalidate();
+    }
+
+    // The clock the paint reads: the engine's, or the harness preview's.
+    private double CurPos => _previewPos >= 0 ? _previewPos : (_engine.IsOpen ? _engine.Position.TotalSeconds : 0);
+    private double CurDur => _previewPos >= 0 ? _previewDur : _engine.Duration.TotalSeconds;
 
     public enum RepeatMode { Off, All, One }
     public bool Shuffle => _shuffle;
@@ -29,7 +80,7 @@ internal sealed class NowPlayingBar : Panel
 
     private Track? _track;
     private Bitmap? _cover;
-    private const int CoverArtPx = 80;   // resolution to decode the bar cover at (drawn ~56px; headroom for DPI scaling)
+    internal const int CoverArtPx = 80;  // resolution to decode the bar cover at (drawn ~56px; headroom for DPI scaling)
     private Bitmap? _coverPrev;          // outgoing cover, held during a track-change cross-dissolve
     private float _coverFade = 1f;       // 0 = cover just changed (show _coverPrev), 1 = settled (show _cover)
     private Tween? _coverTween;
@@ -62,11 +113,17 @@ internal sealed class NowPlayingBar : Panel
     private RepeatMode _repeat = RepeatMode.Off;
     private string? _path;        // last loaded file path, kept so repeat-one can restart the track
     private SmtcController? _smtc; // Windows media flyout + global media keys (created lazily once the window exists)
+    private DiscordPresence? _discord;   // optional "now playing" card on the user's Discord profile
+    private bool _discordOn;             // the Settings toggle (off by default)
+    private string _discordAppId = "";   // Discord Application ID the user pasted in Settings
+    private bool _discordCovers;         // look real album covers up online (opt-in)
     private double _eqPhase;       // animated "now playing" equaliser bars overlaid on the cover
     private Tween? _eqAnim;
     private int _eqTick;
     private readonly float[] _coverViz = new float[4], _coverTmp = new float[4];   // real-audio cover bars
-    private static readonly Rectangle CoverRect = new(16, (H - 56) / 2, 56, 56);
+    private readonly EqBarsPainter _eqBars = new();
+    private static readonly Rectangle BottomCoverRect = new(16, (H - 56) / 2, 56, 56);
+    private Rectangle CoverRect => OnTop ? Layout().Card : BottomCoverRect;   // what a cover change repaints: on the deck the whole card (its text fades with the art)
 
     private enum Drag { None, Seek, Volume }
     private Drag _drag = Drag.None;
@@ -90,7 +147,7 @@ internal sealed class NowPlayingBar : Panel
         _engine.Failed += msg =>
         {
             if (_track is null) return; // a late failure delivered after StopAndHide (e.g. an iPod switch) — ignore
-            _playing = false; Invalidate();
+            _playing = false; _smtc?.Paused(); PushDiscord(false); Invalidate();
             if (!Application.MessageLoop) return;        // never block a headless/automation run
             var form = FindForm();
             if (form is null || !form.Visible) return;    // offscreen render form — don't pop an invisible modal
@@ -100,7 +157,7 @@ internal sealed class NowPlayingBar : Panel
         MouseDown += OnDown;
         MouseMove += OnMove;
         MouseUp += OnUp;
-        MouseLeave += (_, _) => { _hover = Hit.None; RetargetKnobs(); Invalidate(); };
+        MouseLeave += (_, _) => { _hover = Hit.None; _hoverFrac = -1; Tip.Disarm(); RetargetKnobs(); Invalidate(); };
     }
 
     public bool IsActive => _track is not null;
@@ -124,6 +181,10 @@ internal sealed class NowPlayingBar : Panel
     public bool Muted => _muted;
     public double VolumeLevel => _muted ? 0 : _volume;
     public double PositionSeconds => _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
+
+    /// <summary>How far <see cref="PositionSeconds"/> leads the sound coming out of the speakers
+    /// (see <see cref="AudioPlayer.OutputLead"/>). Subtract it wherever the UI must match what is HEARD.</summary>
+    public TimeSpan OutputLead => _engine.OutputLead;
     public double DurationSeconds { get { double d = _engine.Duration.TotalSeconds; return double.IsNaN(d) || d < 0 ? 0 : d; } }
     /// <summary>A private copy of the current cover (caller owns it), or null.</summary>
     public Bitmap? CloneCover() => _cover is null ? null : new Bitmap(_cover);
@@ -149,9 +210,14 @@ internal sealed class NowPlayingBar : Panel
     public void CycleRepeat() { _repeat = (RepeatMode)(((int)_repeat + 1) % 3); if (_repeat == RepeatMode.One) ClearPending(); ModesChanged?.Invoke(); Invalidate(); Changed?.Invoke(); }
 
     /// <summary>Seek to a 0..1 fraction of the track (mini-player seek bar).</summary>
+    /// <summary>Re-publish the timeline after a jump (seek / scrub). The Discord card keeps the same text,
+    /// so only the moved start time tells the client to redraw the bar — which <see cref="DiscordPresence"/>
+    /// now detects.</summary>
+    private void DiscordSeeked() { if (_discord is not null && _track is not null) PushDiscord(_playing); }
+
     public void SeekFraction(double f)
     {
-        if (_engine.IsOpen) { _engine.Position = TimeSpan.FromSeconds(Math.Clamp(f, 0, 1) * _engine.Duration.TotalSeconds); InvalidatePrefetch(); }
+        if (_engine.IsOpen) { _engine.Position = TimeSpan.FromSeconds(Math.Clamp(f, 0, 1) * _engine.Duration.TotalSeconds); InvalidatePrefetch(); DiscordSeeked(); }
         Invalidate(); Changed?.Invoke();
     }
 
@@ -180,6 +246,17 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Apply Pro-playback settings: gapless, crossfade (+ length), volume normalization, mono.
     /// Crossfade length + normalization + mono apply live; turning gapless/crossfade on or off takes effect on
     /// the next track.</summary>
+    /// <summary>Apply the Discord Rich Presence setting live: turning it off (or changing the Application
+    /// ID) drops the connection immediately, which is what removes the card from the user's profile.</summary>
+    public void ApplyDiscord(bool enabled, string? appId, bool coverArt = false)
+    {
+        string id = (appId ?? "").Trim();
+        if (enabled == _discordOn && id == _discordAppId && coverArt == _discordCovers) return;
+        _discordOn = enabled; _discordAppId = id; _discordCovers = coverArt;
+        _discord?.Dispose(); _discord = null;                 // rebuilt by EnsureDiscord on the next push
+        if (_discordOn && _track is not null) PushDiscord(_playing);
+    }
+
     public void ApplyPro(bool gapless, double crossSecs, bool crossOn, bool normalize, bool mono)
     {
         _gaplessOn = gapless; _crossSecs = crossSecs; _crossOn = crossOn; _normalizeOn = normalize; _monoOn = mono;
@@ -231,7 +308,7 @@ internal sealed class NowPlayingBar : Panel
     {
         _sleepFade = null;
         _sleepMin = 0;
-        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); }
+        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); PushDiscord(false); StopEq(); }
         _engine.SetSleepGain(1f);                 // restore for the next play
         _proOn = _gaplessOn || _crossOn || _normalizeOn || _monoOn;
         Invalidate(); Changed?.Invoke();
@@ -251,10 +328,10 @@ internal sealed class NowPlayingBar : Panel
     }
 
     /// <summary>Pause playback (e.g. when a video preview opens) without clearing the bar. Returns true if it was playing.</summary>
-    public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); Invalidate(); Changed?.Invoke(); return true; }
+    public bool Pause() { if (!_playing) return false; _engine.Pause(); _playing = false; _smtc?.Paused(); PushDiscord(false); StopEq(); Invalidate(); Changed?.Invoke(); return true; }
 
     /// <summary>Resume after an external pause (e.g. when the video preview closes).</summary>
-    public void Resume() { if (_track is not null && !_playing) { _engine.Play(); _playing = true; _smtc?.Playing(); StartEq(); Invalidate(); Changed?.Invoke(); } }
+    public void Resume() { if (_track is not null && !_playing) { _engine.Play(); _playing = true; _smtc?.Playing(); PushDiscord(true); StartEq(); Invalidate(); Changed?.Invoke(); } }
 
     /// <summary>Load and play a track's file. <paramref name="cover"/> may be null (a gradient is used).</summary>
     public void Play(Track track, string filePath, Bitmap? cover)
@@ -280,6 +357,7 @@ internal sealed class NowPlayingBar : Panel
         EnsureSmtc();
         _smtc?.SetMetadata(track.DisplayTitle, track.Artist, track.Album, _cover);
         _smtc?.Playing();
+        PushDiscord(true);
         StartEq();
         Invalidate();
         Changed?.Invoke();
@@ -294,7 +372,20 @@ internal sealed class NowPlayingBar : Panel
     {
         if (!string.IsNullOrEmpty(filePath) && ArtworkService.Load(ArtworkService.KeyFor(track), filePath, CoverArtPx) is { } art)
             return new Bitmap(art);   // ArtworkService returns a shared cached bitmap → clone so our Dispose() can't free it
+        CoverDownloads.Request(track, filePath);   // no cover anywhere: ask the internet (no-op while that is off)
         return supplied is null ? null : new Bitmap(supplied);
+    }
+
+    /// <summary>A downloaded cover landed for <paramref name="baseKey"/>: if that is the playing album, take it.</summary>
+    public void RefreshCover(string baseKey)
+    {
+        if (_track is null || _cover is not null || CoverDownloads.BaseKey(ArtworkService.KeyFor(_track)) != baseKey) return;
+        if (!string.IsNullOrEmpty(_path) && ArtworkService.Load(ArtworkService.KeyFor(_track), _path, CoverArtPx) is { } art)
+        {
+            SwapCover(new Bitmap(art));
+            _smtc?.SetMetadata(_track.DisplayTitle, _track.Artist, _track.Album, _cover);
+            Changed?.Invoke();
+        }
     }
 
     /// <summary>Swap the bar cover, cross-dissolving from the outgoing one (same 220 ms art fade the header uses) so
@@ -324,20 +415,24 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Derive the seek-fill / eq-bar accent tint from the current cover's dominant colour (a 1px downscale sample).
     /// Falls back to the theme Accent for grey/near-black/near-white covers; otherwise blends the sample toward AccentBright
     /// so it stays vivid + on-brand rather than muddy. Cheap, one-shot per cover change.</summary>
-    private void ComputeAccentTint()
+    private void ComputeAccentTint() => _accentTint = AccentTintFor(_cover);
+
+    /// <summary>The cover-derived accent (see <see cref="ComputeAccentTint"/>) for any surface that shows a cover —
+    /// the mini player's card too.</summary>
+    internal static Color AccentTintFor(Bitmap? cover)
     {
         try
         {
-            if (_cover is null) { _accentTint = Theme.Accent; return; }
+            if (cover is null) return Theme.Accent;
             using var tiny = new Bitmap(1, 1);
-            using (var g = Graphics.FromImage(tiny)) { g.InterpolationMode = InterpolationMode.HighQualityBilinear; g.DrawImage(_cover, 0, 0, 1, 1); }
+            using (var g = Graphics.FromImage(tiny)) { g.InterpolationMode = InterpolationMode.HighQualityBilinear; g.DrawImage(cover, 0, 0, 1, 1); }
             Color c = tiny.GetPixel(0, 0);
             float max = Math.Max(c.R, Math.Max(c.G, c.B)) / 255f, min = Math.Min(c.R, Math.Min(c.G, c.B)) / 255f;
             float sat = max <= 0f ? 0f : (max - min) / max;
             float lum = (0.299f * c.R + 0.587f * c.G + 0.114f * c.B) / 255f;
-            _accentTint = (sat < 0.22f || lum < 0.12f || lum > 0.9f) ? Theme.Accent : Theme.Blend(c, Theme.AccentBright, 0.42);
+            return (sat < 0.22f || lum < 0.12f || lum > 0.9f) ? Theme.Accent : Theme.Blend(c, Theme.AccentBright, 0.42);
         }
-        catch { _accentTint = Theme.Accent; }
+        catch { return Theme.Accent; }
     }
 
     /// <summary>Stop playback and return the bar to its idle state (it stays visible).</summary>
@@ -354,6 +449,7 @@ internal sealed class NowPlayingBar : Panel
         _playing = false;
         _scrubFrac = -1;
         _smtc?.Stopped();
+        _discord?.Clear();   // _track is already null here, so clear explicitly rather than via PushDiscord
         StopEq();
         Invalidate();
         Changed?.Invoke();
@@ -371,6 +467,27 @@ internal sealed class NowPlayingBar : Panel
         _smtc.Previous += () => PrevRequested?.Invoke();
     }
 
+    // Same lazy shape as EnsureSmtc, minus the window handle (Discord needs none). Skipped in headless
+    // renders so the --render harness never opens a socket, and while the setting is off / unconfigured.
+    private void EnsureDiscord()
+    {
+        if (_discord is not null || !_discordOn || _discordAppId.Length == 0 || !Application.MessageLoop) return;
+        _discord = new DiscordPresence(_discordAppId, _discordCovers);
+    }
+
+    /// <summary>Publish the current song to Discord. Cheap and non-blocking: the controller de-duplicates by
+    /// what the card shows and does all I/O on its own thread, so calling it from any state change is safe.</summary>
+    private void PushDiscord(bool playing)
+    {
+        EnsureDiscord();
+        if (_discord is null) return;
+        var t = _track;
+        if (t is null) { _discord.Clear(); return; }
+        double dur = DurationSeconds > 0 ? DurationSeconds : t.LengthMs / 1000.0;   // LengthMs when the engine hasn't parsed one
+        _discord.SetTrack(t.DisplayTitle, t.Artist, t.Album,
+                          TimeSpan.FromSeconds(PositionSeconds), TimeSpan.FromSeconds(dur), playing);
+    }
+
     private void OnEnded()
     {
         // Repeat-one: restart the same file (a clean reload — WaveOut can't simply resume past its end).
@@ -383,6 +500,7 @@ internal sealed class NowPlayingBar : Panel
             _engine.Play();
             _playing = true; _scrubFrac = -1;
             _smtc?.Playing();
+            PushDiscord(true);   // same song, but the position jumped back to 0 -> fresh timestamps
             Invalidate();
             Changed?.Invoke();
             return;
@@ -390,6 +508,7 @@ internal sealed class NowPlayingBar : Panel
         // Otherwise advance (the host applies shuffle / repeat-all); if there's no next it rests, paused.
         _playing = false;
         _smtc?.Paused();   // Play() will flip back to Playing if a next track starts
+        PushDiscord(false);
         StopEq();          // (Play() restarts it if a next track begins)
         Invalidate();
         Changed?.Invoke();
@@ -402,8 +521,8 @@ internal sealed class NowPlayingBar : Panel
     private void TogglePlay()
     {
         if (_track is null) return;
-        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); StopEq(); }
-        else { _engine.Play(); _playing = true; _smtc?.Playing(); StartEq(); }
+        if (_playing) { _engine.Pause(); _playing = false; _smtc?.Paused(); PushDiscord(false); StopEq(); }
+        else { _engine.Play(); _playing = true; _smtc?.Playing(); PushDiscord(true); StartEq(); }
         AnimatePlay();
         Changed?.Invoke();
     }
@@ -492,6 +611,7 @@ internal sealed class NowPlayingBar : Panel
         EnsureSmtc();
         _smtc?.SetMetadata(_track.DisplayTitle, _track.Artist, _track.Album, _cover);
         _smtc?.Playing();
+        PushDiscord(true);
         StartEq();
         Invalidate();
         Changed?.Invoke();
@@ -508,12 +628,20 @@ internal sealed class NowPlayingBar : Panel
         public Rectangle Eq; public bool ShowEq;
         public Rectangle Pro; public bool ShowPro;
         public Rectangle Queue; public bool ShowQueue;
+        public Rectangle Lyrics; public bool ShowLyrics;
         public Rectangle Speaker; public bool ShowSpeaker;
         public Rectangle Vol; public bool ShowVol;
+        // deck only
+        public Rectangle Card; public bool ShowCard;
+        public Rectangle Overflow; public bool ShowOverflow;   // the "···" for the folded utilities
+        public Rectangle Times;                       // elapsed over total, right-aligned inside the card
+        public Rectangle Logo, Wordmark; public bool ShowWordmark;
+        public Rectangle ArtistR, AlbumR, TotalR;     // the card's two subtitle links and the total-time toggle
     }
 
     private Lo Layout()
     {
+        if (OnTop) return LayoutTop();
         int w = Width;
         var l = new Lo { Cover = new Rectangle(16, (H - 56) / 2, 56, 56) };
         int leftBound = l.Cover.Right + 8;
@@ -527,6 +655,7 @@ internal sealed class NowPlayingBar : Panel
         l.ShowEq = w >= 520;
         l.ShowPro = w >= 560;
         l.ShowQueue = w >= 600;
+        l.ShowLyrics = w >= 660;   // the widest-window extra: it drops out first when space runs short
         int volY = 26, iconY = l.ShowVol ? 47 : (H - 24) / 2;   // icons drop below the slider; centre them if no slider
 
         // Top row: the volume slider hard against the right pad, with the speaker (mute) icon just to its
@@ -542,6 +671,7 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Eq.Left - 14; }
         if (l.ShowPro) { l.Pro = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Pro.Left - 14; }
         if (l.ShowQueue) { l.Queue = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Queue.Left - 14; }
+        if (l.ShowLyrics) { l.Lyrics = new Rectangle(rc - 24, iconY, 24, 24); rc = l.Lyrics.Left - 14; }
         // Keep the centred transport clear of BOTH rows' left-most widget.
         int topLeft = l.ShowVol ? (l.ShowSpeaker ? l.Speaker.Left : l.Vol.Left) - 12 : int.MaxValue;
         int rightStart = Math.Min(rc, topLeft);
@@ -575,8 +705,320 @@ internal sealed class NowPlayingBar : Panel
         return l;
     }
 
+    /// <summary>The deck: ONE axis (y = TopH/2) carries everything. Left → right: logo + wordmark, the transport
+    /// (shuffle · prev · play · next · repeat), the now-playing card centred in whatever is left, then lyrics ·
+    /// queue · pro · eq · speaker · volume, and (root children, not ours) the gear + window buttons inside
+    /// <see cref="RightReserve"/>. Narrower windows shed, in order: the volume slider, pro, eq, shuffle/repeat,
+    /// the queue, the wordmark text — the card and the core transport stay.</summary>
+    private Lo LayoutTop()
+    {
+        int w = Width, cy = TopH / 2;
+        var l = new Lo();
+        if (_wordW < 0) _wordW = TextRenderer.MeasureText("Mixtape", _fWordmark, new Size(400, 40), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width + 4;
+        // What fits: the CARD comes first. With only the essentials placed (logo, prev/play/next, the card at
+        // its 300 px minimum, lyrics, speaker, the window buttons' reserve) whatever is left is handed out in
+        // order of usefulness: the volume slider, the wordmark, shuffle/repeat, queue, EQ, Pro. (Fixed width
+        // thresholds let the modes and the slider both appear at ~1000 px and squeeze the card to 226 px,
+        // narrower than at the smallest window - the "artist / album" line lost its album.)
+        const int CardMin = 300;
+        int slack0 = (w - RightReserve - 72 - 22) - (44 + 22 + 108 + 22) - CardMin;
+        // Nothing is ever lost: a utility that does not fit folds into a "···" menu (32 px). Allocate once without
+        // it; if a utility got shed, allocate again with the "···" taken off the top.
+        int slack = slack0;
+        bool Take(int cost) { if (slack < cost) return false; slack -= cost; return true; }
+        void Allocate()
+        {
+            l.ShowVol = Take(84 + 10);
+            l.ShowWordmark = Take(8 + _wordW);
+            l.ShowModes = Take(34 + 34);
+            l.ShowQueue = Take(24 + 8);
+            l.ShowEq = Take(24 + 8);
+            l.ShowPro = Take(24 + 8);
+        }
+        Allocate();
+        // Below the width where every utility fits on the axis nothing folds into a "..." menu any more: the strip
+        // is 78 px tall, so the compact deck lays the utilities out in TWO ROWS instead (LayoutTopCompact).
+        if (!(l.ShowModes && l.ShowQueue && l.ShowEq && l.ShowPro)) return LayoutTopCompact(w, cy);
+        l.ShowOverflow = false;
+        l.ShowSpeaker = true; l.ShowLyrics = true;
+        l.Logo = new Rectangle(24, cy - 10, 20, 20);
+        l.Wordmark = new Rectangle(52, cy - 15, _wordW, 30);
+        int leftEdge = (l.ShowWordmark ? l.Wordmark.Right : l.Logo.Right) + 22;
+        int rightEdge = w - RightReserve;
+
+        // Right cluster, right → left.
+        int rc = rightEdge - 8;
+        if (l.ShowVol) { l.Vol = new Rectangle(rc - 84, cy - 2, 84, 4); rc = l.Vol.Left - 10; }
+        if (l.ShowSpeaker) { l.Speaker = new Rectangle(rc - 20, cy - 11, 20, 22); rc = l.Speaker.Left - 12; }
+        if (l.ShowEq) { l.Eq = new Rectangle(rc - 24, cy - 12, 24, 24); rc = l.Eq.Left - 8; }
+        if (l.ShowPro) { l.Pro = new Rectangle(rc - 24, cy - 12, 24, 24); rc = l.Pro.Left - 8; }
+        if (l.ShowQueue) { l.Queue = new Rectangle(rc - 24, cy - 12, 24, 24); rc = l.Queue.Left - 8; }
+        if (l.ShowLyrics) { l.Lyrics = new Rectangle(rc - 24, cy - 12, 24, 24); rc = l.Lyrics.Left - 8; }
+        if (l.ShowOverflow) { l.Overflow = new Rectangle(rc - 24, cy - 12, 24, 24); rc = l.Overflow.Left - 8; }
+        int clusterLeft = rc;
+
+        // Transport, left-aligned after the wordmark.
+        int tx = leftEdge;
+        if (l.ShowModes) { l.Shuffle = new Rectangle(tx, cy - 13, 26, 26); tx = l.Shuffle.Right + 8; }
+        l.Prev = new Rectangle(tx, cy - 15, 30, 30); tx = l.Prev.Right + 6;
+        l.Play = new Rectangle(tx, cy - 18, 36, 36); tx = l.Play.Right + 6;
+        l.Next = new Rectangle(tx, cy - 15, 30, 30); tx = l.Next.Right;
+        if (l.ShowModes) { l.Repeat = new Rectangle(tx + 8, cy - 13, 26, 26); tx = l.Repeat.Right; }
+
+        // The card: centred in the free span, capped so it stays a card and not a banner.
+        int spanL = tx + 22, spanR = clusterLeft - 22;
+        int cardW = Math.Clamp(spanR - spanL, 0, 520);
+        l.ShowCard = cardW >= 150;
+        int cardX = spanL + (spanR - spanL - cardW) / 2;
+        l.Card = new Rectangle(cardX, CardY, cardW, CardH);
+        var cg = LayoutCard(l.Card);
+        l.Cover = cg.Cover; l.TextX = cg.TextX; l.TextW = cg.TextW; l.ShowTimes = cg.ShowTimes; l.Times = cg.Times;
+        l.ShowTitle = l.ShowCard && cg.ShowTitle;
+        l.ShowSeek = l.ShowCard;
+        l.Seek = cg.Seek;
+        if (_track is not null && l.ShowTitle) { var (ar, al) = SubtitleSpans(_track, cg, _fSub); l.ArtistR = ar; l.AlbumR = al; }
+        if (l.ShowCard && cg.ShowTimes) l.TotalR = new Rectangle(cg.Times.X - 4, l.Card.Y + 25, cg.Times.Width + 4, 12);
+        return l;
+    }
+
+    /// <summary>The deck below the width where every utility fits on the axis. Instead of folding into a "..." menu
+    /// it uses the strip's HEIGHT: shuffle and repeat stack beside the transport, and on the right the speaker and
+    /// the volume ride the upper row with lyrics, queue, pro and eq on the lower one - every control stays in
+    /// reach down to the window's minimum width, and the card takes whatever the middle leaves. The wordmark is
+    /// the one extra that still needs spare room.</summary>
+    private Lo LayoutTopCompact(int w, int cy)
+    {
+        var l = new Lo();
+        l.ShowSpeaker = l.ShowLyrics = l.ShowQueue = l.ShowEq = l.ShowPro = l.ShowModes = l.ShowVol = true;
+        l.ShowOverflow = false;
+        int rowA = cy - 13, rowB = cy + 13;   // the two rows' centres, 26 px apart, inside the card's height
+        const int Block = 120;                // the right block: max(speaker 20 + 10 + slider 84, four 24 px glyphs at a 32 px pitch)
+        const int CardMin = 300;
+        int slack = (w - RightReserve - 8 - Block - 22) - (44 + 22 + 108 + 10 + 26 + 22) - CardMin;
+        l.ShowWordmark = slack >= 8 + _wordW;
+        l.Logo = new Rectangle(24, cy - 10, 20, 20);
+        l.Wordmark = new Rectangle(52, cy - 15, _wordW, 30);
+        int leftEdge = (l.ShowWordmark ? l.Wordmark.Right : l.Logo.Right) + 22;
+        int rightEdge = w - RightReserve;
+
+        // Right block: both rows right-aligned to the same edge.
+        int rc = rightEdge - 8;
+        l.Vol = new Rectangle(rc - 84, rowA - 2, 84, 4);
+        l.Speaker = new Rectangle(l.Vol.Left - 10 - 20, rowA - 11, 20, 22);
+        int bx = rc;
+        l.Eq = new Rectangle(bx - 24, rowB - 12, 24, 24); bx = l.Eq.Left - 8;
+        l.Pro = new Rectangle(bx - 24, rowB - 12, 24, 24); bx = l.Pro.Left - 8;
+        l.Queue = new Rectangle(bx - 24, rowB - 12, 24, 24); bx = l.Queue.Left - 8;
+        l.Lyrics = new Rectangle(bx - 24, rowB - 12, 24, 24);
+        int clusterLeft = Math.Min(l.Lyrics.Left, l.Speaker.Left) - 8;
+
+        // Transport, then shuffle over repeat in one column.
+        int tx = leftEdge;
+        l.Prev = new Rectangle(tx, cy - 15, 30, 30); tx = l.Prev.Right + 6;
+        l.Play = new Rectangle(tx, cy - 18, 36, 36); tx = l.Play.Right + 6;
+        l.Next = new Rectangle(tx, cy - 15, 30, 30); tx = l.Next.Right + 10;
+        l.Shuffle = new Rectangle(tx, rowA - 13, 26, 26);
+        l.Repeat = new Rectangle(tx, rowB - 13, 26, 26);
+        tx = l.Repeat.Right;
+
+        // The card: centred in the free span, capped so it stays a card and not a banner.
+        int spanL = tx + 22, spanR = clusterLeft - 22;
+        int cardW = Math.Clamp(spanR - spanL, 0, 520);
+        l.ShowCard = cardW >= 150;
+        int cardX = spanL + (spanR - spanL - cardW) / 2;
+        l.Card = new Rectangle(cardX, CardY, cardW, CardH);
+        var cg = LayoutCard(l.Card);
+        l.Cover = cg.Cover; l.TextX = cg.TextX; l.TextW = cg.TextW; l.ShowTimes = cg.ShowTimes; l.Times = cg.Times;
+        l.ShowTitle = l.ShowCard && cg.ShowTitle;
+        l.ShowSeek = l.ShowCard;
+        l.Seek = cg.Seek;
+        if (_track is not null && l.ShowTitle) { var (ar, al) = SubtitleSpans(_track, cg, _fSub); l.ArtistR = ar; l.AlbumR = al; }
+        if (l.ShowCard && cg.ShowTimes) l.TotalR = new Rectangle(cg.Times.X - 4, l.Card.Y + 25, cg.Times.Width + 4, 12);
+        return l;
+    }
+
+    // ---- the now-playing card, shared with the mini player (which is this card, detached) ----
+
+    /// <summary>The card's inner geometry from its rect: the 40 px cover, the text column, the times column (only
+    /// from 300 px — the subtitle falls back to the artist alone when squeezed) and the seek line under the text.</summary>
+    internal struct CardGeom { public Rectangle Card, Cover, Times, Seek; public int TextX, TextW; public bool ShowTitle, ShowTimes; }
+
+    internal static CardGeom LayoutCard(Rectangle card)
+    {
+        var c = new CardGeom { Card = card, Cover = new Rectangle(card.X + 7, card.Y + 7, 40, 40) };
+        c.TextX = c.Cover.Right + 12;
+        c.ShowTimes = card.Width >= 300;
+        int timesW = c.ShowTimes ? 34 : 0;
+        c.Times = new Rectangle(card.Right - 14 - timesW, card.Y, timesW, card.Height);
+        c.TextW = card.Right - 14 - (c.ShowTimes ? timesW + 8 : 0) - c.TextX;
+        c.ShowTitle = c.TextW >= 60;
+        c.Seek = new Rectangle(c.TextX, card.Bottom - 7, card.Right - 14 - c.TextX, 3);
+        return c;
+    }
+
+    /// <summary>Everything the card draws from: the track + its cover (with the outgoing one mid-dissolve), the
+    /// hover/drag state of its two controls, the clock, and the cover-derived tint.</summary>
+    internal struct CardState
+    {
+        public Track? Track; public Bitmap? Cover, CoverPrev; public float CoverFade;
+        public bool Playing, CoverHover, SeekHot; public double ScrubFrac;   // ScrubFrac >= 0 while the seek line is being dragged
+        public double Pos, Dur; public Color Tint; public float KnobR; public double EqPhase; public float[]? Viz;
+        public double? HoverFrac;                         // set while the pointer hovers the seek line: THAT time reads in the accent
+        public bool Remaining, ArtistHover, AlbumHover;   // the total slot counts down; a subtitle link is hovered
+    }
+
+    private CardState CardStateNow() => new()
+    {
+        Track = _track, Cover = _cover, CoverPrev = _coverPrev, CoverFade = _coverFade, Playing = _playing,
+        CoverHover = _hover == Hit.Cover, SeekHot = _hover == Hit.Seek || _drag == Drag.Seek, ScrubFrac = _scrubFrac,
+        Pos = CurPos, Dur = CurDur, Tint = _accentTint, KnobR = _seekKnobR, EqPhase = _eqPhase, Viz = _coverViz,
+        HoverFrac = _hoverFrac >= 0 ? _hoverFrac : null, Remaining = _showRemaining,
+        ArtistHover = _hover == Hit.Artist, AlbumHover = _hover == Hit.Album,
+    };
+
+    /// <summary>The now-playing card: a translucent slab with a hairline, the 40 px cover (cross-dissolving on a
+    /// track change, live bars while playing, a wash while hovered), two left-aligned lines, elapsed over total on
+    /// the right, and the accent seek line inset under the text (a knob only while hovered; a scrub pill when the
+    /// times column is not there to show the scrubbed time). One drawer for the deck and the mini player.</summary>
+    internal static void DrawCard(Graphics g, in CardGeom c, in CardState s, Font fTitle, Font fSub, Font fTime, EqBarsPainter eq)
+    {
+        bool idle = s.Track is null;
+        var card = c.Card;
+        var cardF = new RectangleF(card.X + 0.5f, card.Y + 0.5f, card.Width - 1, card.Height - 1);
+        using (var fill = new SolidBrush(Color.FromArgb(200, Theme.Blend(Theme.SidebarBg, Color.White, 0.07))))
+        using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.FillPath(fill, cp);
+        using (var line = new Pen(Color.FromArgb(34, 255, 255, 255)))
+        using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.DrawPath(line, cp);
+
+        DrawCoverTile(g, c.Cover, idle, s.Cover, s.CoverPrev, s.CoverFade, idle ? 0 : (int)(s.Track!.Dbid & 0xffff));
+        if (!idle && s.Playing && s.Viz is not null) eq.Draw(g, c.Cover, s.EqPhase, s.Viz, s.Tint);   // animated "now playing" equaliser, bottom-right of the cover
+        if (s.CoverHover && !idle)   // the cover is a button: "show me this song in the list"
+        {
+            using var hv = new SolidBrush(Color.FromArgb(46, 255, 255, 255));
+            using var hp = Theme.RoundedRect(new RectangleF(c.Cover.X + 0.5f, c.Cover.Y + 0.5f, c.Cover.Width - 1, c.Cover.Height - 1), (int)Math.Round(c.Cover.Width * Theme.TileFrac));
+            g.FillPath(hv, hp);
+        }
+
+        if (c.ShowTitle)
+        {
+            string title = idle ? Loc.T("Nothing playing") : s.Track!.DisplayTitle;
+            string sub = idle ? Loc.T("Pick a song to start") : CardSubtitle(s.Track!, c.TextW, fSub);
+            // A track change: the words fade in with the cover (GDI text has no alpha, so the colour walks from
+            // the slab's own tone to the text tone over the same 220 ms the art dissolves).
+            Color slab = Theme.Blend(Theme.SidebarBg, Color.White, 0.07);
+            float tf = idle ? 1f : Math.Clamp(s.CoverFade, 0f, 1f);
+            TextRenderer.DrawText(g, title, fTitle, new Rectangle(c.TextX, card.Y + 8, c.TextW, 17), Theme.Blend(slab, idle ? Theme.Subtle : Theme.TextCol, tf),
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25, c.TextW, 15), Theme.Blend(slab, idle ? Theme.Faint : Theme.Subtle, tf),
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+            if (!idle && (s.ArtistHover || s.AlbumHover))   // the hovered half of the subtitle brightens and underlines, the way a link does
+            {
+                var (ar, al) = SubtitleSpans(s.Track!, c, fSub);
+                var u = s.ArtistHover ? ar : al;
+                int right = Math.Min(u.Right, c.TextX + c.TextW);
+                if (right - u.X > 4)
+                {
+                    // Redraw the SAME line clipped to the hovered half: identical layout, no second measurement.
+                    var save = g.Clip;
+                    g.SetClip(new Rectangle(u.X, card.Y + 24, right - u.X, 17), CombineMode.Intersect);
+                    TextRenderer.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25, c.TextW, 15), Theme.Blend(slab, Theme.TextCol, tf),
+                        TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+                    g.Clip = save;
+                    using var up = new Pen(Theme.Blend(slab, Theme.Subtle, tf));
+                    g.DrawLine(up, u.X + 2, u.Y + 14, right - 2, u.Y + 14);
+                }
+            }
+        }
+
+        double dur = s.Dur, pos = s.Pos;
+        bool scrubbing = s.ScrubFrac >= 0;
+        double frac = scrubbing ? s.ScrubFrac : (dur > 0 ? Math.Clamp(pos / dur, 0, 1) : 0);
+        if (c.ShowTimes && !idle)
+        {
+            double? peek = scrubbing ? null : s.HoverFrac;   // hovering the seek line: the time UNDER THE POINTER, in the accent
+            double shown = scrubbing ? s.ScrubFrac * dur : peek is { } hf ? hf * dur : pos;
+            TextRenderer.DrawText(g, Fmt(shown), fTime, new Rectangle(c.Times.X, card.Y + 8, c.Times.Width, 17), scrubbing ? Theme.TextCol : peek is not null ? Theme.AccentBright : s.Playing ? Theme.Subtle : Theme.Faint,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            string total = s.Remaining && dur > 0 ? "-" + Fmt(Math.Max(0, dur - pos)) : Fmt(dur);   // the length, or (one click away) what is left of it
+            TextRenderer.DrawText(g, total, fTime, new Rectangle(c.Times.X, card.Y + 25, c.Times.Width, 15), Theme.Faint,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
+        DrawSlider(g, c.Seek, idle ? 0 : frac, !idle && s.SeekHot, s.Tint, s.KnobR, s.SeekHot, Color.FromArgb(38, 255, 255, 255), lift: false);
+        if (scrubbing && !idle && !c.ShowTimes)   // scrub readout: the times column shows it when present; else a small pill INSIDE the card (below the deck it was clipped to a dark sliver)
+        {
+            string txt = Fmt(frac * dur);
+            var sz = TextRenderer.MeasureText(txt, fTime);
+            int bw2 = sz.Width + 14, bh2 = 19;
+            var bub = new RectangleF(card.Right - 14 - bw2, card.Y + 6, bw2, bh2);
+            using (var bb = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.Black, 0.28)))
+            using (var bp = Theme.RoundedRect(bub, 5f)) g.FillPath(bb, bp);
+            using (var bpen = new Pen(Color.FromArgb(40, 255, 255, 255)))
+            using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
+            TextRenderer.DrawText(g, txt, fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    /// <summary>The cover tile: soft shadow + rounded, clipped art (cross-dissolving on a track change) or the idle
+    /// placeholder, and a hairline. Shared by the bar, the deck and the mini player. The bitmaps are cache-owned or
+    /// the caller's — never disposed here.</summary>
+    internal static void DrawCoverTile(Graphics g, Rectangle cr, bool idle, Bitmap? cover, Bitmap? prev, float fade, int seed)
+    {
+        int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
+        // Fill + stroke share a half-pixel-inset rect so every corner antialiases identically (no soft bottom-right edge).
+        var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
+        // Soft drop shadow: aligned left/right with the tile and offset only DOWNWARD, so it reads as an even
+        // shadow under the whole tile rather than a darker squared notch poking out of the bottom-right corner.
+        using (var shp = Theme.RoundedRect(new RectangleF(cr.X, cr.Y + 2, cr.Width, cr.Height), cvr))
+        using (var sh = new SolidBrush(Color.FromArgb(50, 0, 0, 0))) g.FillPath(sh, shp);
+        using (var cp = Theme.RoundedRect(crF, cvr))
+        {
+            using var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            if (idle)
+                // a quiet recessed tile (just above the bar's own shade), not a bright grey box
+                using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.SidebarBg, Color.White, 0.09), Theme.Blend(Theme.SidebarBg, Color.Black, 0.06), Theme.ArtAngle)) g.FillRectangle(ph, cr);
+            else
+            {
+                var nv = cover ?? Theme.MakeArt(cr.Width, seed);
+                if (prev is not null && fade < 1f)
+                {
+                    g.DrawImage(prev, cr);                                                            // outgoing holds underneath
+                    Theme.DrawImageAlpha(g, nv, new RectangleF(cr.X, cr.Y, cr.Width, cr.Height), fade); // incoming dissolves in
+                }
+                else g.DrawImage(nv, cr);
+            }
+            g.Clip = saved;
+        }
+        if (idle) Theme.DrawNote(g, cr, Color.FromArgb(120, 255, 255, 255));   // "Nothing playing" placeholder
+        using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(crF, cvr); g.DrawPath(bp, cp2); }
+    }
+
+    /// <summary>Deck: is the point on something we handle? Everything else is the window's caption — the
+    /// hit-test falls through to the wallpaper so the whole strip drags / snaps / double-click-maximizes.</summary>
+    private bool HitsControl(Point p)
+    {
+        var l = Layout();
+        if (l.ShowCard && l.Card.Contains(p)) return true;
+        if (l.Play.Contains(p) || l.Prev.Contains(p) || l.Next.Contains(p)) return true;
+        if (l.ShowModes && (l.Shuffle.Contains(p) || l.Repeat.Contains(p))) return true;
+        if (l.ShowEq && l.Eq.Contains(p) || l.ShowPro && l.Pro.Contains(p) || l.ShowQueue && l.Queue.Contains(p) || l.ShowLyrics && l.Lyrics.Contains(p)) return true;
+        if (l.ShowSpeaker && l.Speaker.Contains(p)) return true;
+        if (l.ShowVol && Inflate(l.Vol, 4, 10).Contains(p)) return true;
+        if (l.ShowOverflow && l.Overflow.Contains(p)) return true;
+        return false;
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_NCHITTEST = 0x0084, HTTRANSPARENT = -1;
+        if (m.Msg == WM_NCHITTEST && OnTop && !HitsControl(PointToClient(Cursor.Position))) { m.Result = (IntPtr)HTTRANSPARENT; return; }
+        base.WndProc(ref m);
+    }
+
     // ---- interaction ----
-    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Shuffle, Repeat, Seek, Vol }
+    private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Lyrics, Shuffle, Repeat, Seek, Vol, Cover, Overflow, Artist, Album, Times }
+    /// <summary>Harness (MIX_DECK_HOVER=prev|play|next|speaker|eq|pro|queue|lyrics|shuffle|repeat|seek|vol|cover): paint that hover state.</summary>
+    internal void PreviewHover(string name) { if (Enum.TryParse<Hit>(name, true, out var h)) { _hover = h; if (h == Hit.Seek) _hoverFrac = 0.62; Invalidate(); } }
     private Hit _hover = Hit.None;
     private float _seekKnobR = 5f, _volKnobR = 5f;   // grab-knob radii — grow on hover/drag (tweened by RetargetKnobs)
     private Tween? _knobTween;
@@ -585,12 +1027,21 @@ internal sealed class NowPlayingBar : Panel
     private void OnDown(object? s, MouseEventArgs e)
     {
         var l = Layout();
+        Tip.Disarm();
+        if (e.Button == MouseButtons.Right)
+        {
+            if (OnTop && _track is not null && l.ShowCard && l.Card.Contains(e.Location)) CardMenuRequested?.Invoke(PointToScreen(e.Location));
+            return;
+        }
+        if (e.Button != MouseButtons.Left) return;
         // Shuffle / repeat / EQ / volume are modes & settings — usable even with nothing loaded.
         if (l.ShowModes && l.Shuffle.Contains(e.Location)) { _shuffle = !_shuffle; ModesChanged?.Invoke(); Invalidate(); return; }
         if (l.ShowModes && l.Repeat.Contains(e.Location)) { _repeat = (RepeatMode)(((int)_repeat + 1) % 3); if (_repeat == RepeatMode.One) ClearPending(); ModesChanged?.Invoke(); Invalidate(); return; }
         if (l.ShowEq && l.Eq.Contains(e.Location)) { EqualizerRequested?.Invoke(RectangleToScreen(l.Eq)); return; }
         if (l.ShowPro && l.Pro.Contains(e.Location)) { ProRequested?.Invoke(RectangleToScreen(l.Pro)); return; }
         if (l.ShowQueue && l.Queue.Contains(e.Location)) { QueueRequested?.Invoke(RectangleToScreen(l.Queue)); return; }
+        if (l.ShowLyrics && l.Lyrics.Contains(e.Location)) { LyricsRequested?.Invoke(RectangleToScreen(l.Lyrics)); return; }
+        if (l.ShowOverflow && l.Overflow.Contains(e.Location)) { OverflowRequested?.Invoke(RectangleToScreen(l.Overflow)); return; }
         if (l.ShowSpeaker && l.Speaker.Contains(e.Location))
         {
             _muted = !_muted;
@@ -601,6 +1052,13 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location)) { _drag = Drag.Volume; RetargetKnobs(); SetVolumeFromX(l.Vol, e.X); return; }
 
         if (_track is null) return; // transport needs a loaded track
+        if (OnTop && l.ShowCard)   // the card's text is live too: the artist, the album, and the total time
+        {
+            if (l.ArtistR.Contains(e.Location)) { ArtistClicked?.Invoke(); return; }
+            if (l.AlbumR.Contains(e.Location)) { AlbumClicked?.Invoke(); return; }
+            if (l.TotalR.Contains(e.Location)) { ShowRemaining = !ShowRemaining; RemainingToggled?.Invoke(ShowRemaining); return; }
+        }
+        if (OnTop && l.ShowCard && l.Cover.Contains(e.Location)) { CoverClicked?.Invoke(); return; }
         if (l.Play.Contains(e.Location)) { TogglePlay(); return; }
         if (l.Prev.Contains(e.Location)) { PrevRequested?.Invoke(); return; }
         if (l.Next.Contains(e.Location)) { NextRequested?.Invoke(); return; }
@@ -616,23 +1074,55 @@ internal sealed class NowPlayingBar : Panel
             : l.ShowEq && l.Eq.Contains(e.Location) ? Hit.Eq
             : l.ShowPro && l.Pro.Contains(e.Location) ? Hit.Pro
             : l.ShowQueue && l.Queue.Contains(e.Location) ? Hit.Queue
+            : l.ShowLyrics && l.Lyrics.Contains(e.Location) ? Hit.Lyrics
+            : l.ShowOverflow && l.Overflow.Contains(e.Location) ? Hit.Overflow
             : l.ShowModes && l.Shuffle.Contains(e.Location) ? Hit.Shuffle
             : l.ShowModes && l.Repeat.Contains(e.Location) ? Hit.Repeat
+            : OnTop && _track is not null && l.ArtistR.Contains(e.Location) ? Hit.Artist
+            : OnTop && _track is not null && l.AlbumR.Contains(e.Location) ? Hit.Album
+            : OnTop && _track is not null && l.TotalR.Contains(e.Location) ? Hit.Times
             : l.ShowSeek && Inflate(l.Seek, 0, 10).Contains(e.Location) ? Hit.Seek
             : l.ShowVol && Inflate(l.Vol, 0, 9).Contains(e.Location) ? Hit.Vol
             : _track is null ? Hit.None
+            : OnTop && l.ShowCard && l.Cover.Contains(e.Location) ? Hit.Cover
             : l.Play.Contains(e.Location) ? Hit.Play
             : l.Prev.Contains(e.Location) ? Hit.Prev
             : l.Next.Contains(e.Location) ? Hit.Next
             : Hit.None;
-        if (h != _hover) { _hover = h; RetargetKnobs(); Invalidate(); }
+        if (h != _hover) { _hover = h; RetargetKnobs(); Cursor = h is Hit.Cover or Hit.Artist or Hit.Album or Hit.Times ? Cursors.Hand : Cursors.Default; UpdateTip(h, l); Invalidate(); }
+        // The time under the pointer while it rides the seek line (the card's elapsed slot reads it in the accent).
+        double hf = h == Hit.Seek && _drag == Drag.None && _track is not null && l.Seek.Width > 0 ? Math.Clamp((e.X - l.Seek.X) / (double)l.Seek.Width, 0, 1) : -1;
+        if (Math.Abs(hf - _hoverFrac) > 0.0015) { _hoverFrac = hf; if (OnTop && l.ShowCard) Invalidate(l.Card); else Invalidate(); }
+    }
+
+    /// <summary>The themed tooltip for whatever is hovered (the sliders and the card's own text carry none).</summary>
+    private void UpdateTip(Hit h, in Lo l)
+    {
+        string t; Rectangle r;
+        switch (h)
+        {
+            case Hit.Prev: t = Loc.T("Previous"); r = l.Prev; break;
+            case Hit.Play: t = _playing ? Loc.T("Pause") : Loc.T("Play"); r = l.Play; break;
+            case Hit.Next: t = Loc.T("Next"); r = l.Next; break;
+            case Hit.Shuffle: t = Loc.T("Shuffle"); r = l.Shuffle; break;
+            case Hit.Repeat: t = Loc.T("Repeat"); r = l.Repeat; break;
+            case Hit.Lyrics: t = Loc.T("Lyrics"); r = l.Lyrics; break;
+            case Hit.Queue: t = Loc.T("Up Next"); r = l.Queue; break;
+            case Hit.Pro: t = Loc.T("Pro features"); r = l.Pro; break;
+            case Hit.Eq: t = Loc.T("Equalizer"); r = l.Eq; break;
+            case Hit.Speaker: t = _muted ? Loc.T("Unmute") : Loc.T("Mute"); r = l.Speaker; break;
+            case Hit.Cover: t = Loc.T("Show in list"); r = l.Cover; break;
+            case Hit.Overflow: t = Loc.T("More"); r = l.Overflow; break;
+            default: Tip.Disarm(); return;
+        }
+        Tip.Arm(RectangleToScreen(r), t);
     }
 
     /// <summary>Smoothly grow/shrink the seek + volume grab-knobs toward their hover/drag target radius (5→8px, 120ms).
     /// One tween drives both. Called whenever hover or drag state changes so the knobs feel like grabbable widgets.</summary>
     private void RetargetKnobs()
     {
-        float seekTo = (_hover == Hit.Seek || _drag == Drag.Seek) ? 8f : 5f;
+        float seekTo = (_hover == Hit.Seek || _drag == Drag.Seek) ? (OnTop ? 6f : 8f) : (OnTop ? 4f : 5f);
         float volTo = (_hover == Hit.Vol || _drag == Drag.Volume) ? 8f : 5f;
         if (Math.Abs(seekTo - _seekKnobR) < 0.1f && Math.Abs(volTo - _volKnobR) < 0.1f) return;
         _knobTween?.Cancel();
@@ -649,6 +1139,7 @@ internal sealed class NowPlayingBar : Panel
         {
             _engine.Position = TimeSpan.FromSeconds(_scrubFrac * _engine.Duration.TotalSeconds);
             InvalidatePrefetch();   // a seek can drop the crossfade's pre-decoded next voice; re-stage it so the next boundary stays seamless
+            DiscordSeeked();        // the card's text is unchanged, so only a moved start time redraws the bar
         }
         _scrubFrac = -1;
         _drag = Drag.None;
@@ -694,6 +1185,7 @@ internal sealed class NowPlayingBar : Panel
 
     public void SetFrost(Bitmap? slice, int displayH = 0, int destX = 0, int destW = 0, bool owned = true)
     {
+        if (OnTop) { if (owned) slice?.Dispose(); return; }   // the deck has no list under it
         int h = Math.Clamp(displayH, 0, H);
         if (slice is null && _frost is null && _frostOld is null && _frostSlide >= 1f) return;   // already a plain bar — nothing to do
         _frostSlideTween?.Cancel(); _frostSlideTween = null;
@@ -710,6 +1202,7 @@ internal sealed class NowPlayingBar : Panel
     /// <paramref name="slice"/> is always an OWNED bitmap (the view-switch allocates a fresh one).</summary>
     public void SlideFrost(Bitmap? slice, int displayH = 0, int destX = 0, int destW = 0)
     {
+        if (OnTop) { slice?.Dispose(); return; }
         int h = Math.Clamp(displayH, 0, H);
         if (!Anim.MotionEnabled || (_frost is null && slice is null)) { SetFrost(slice, h, destX, destW, owned: true); return; }
         _frostSlideTween?.Cancel();
@@ -779,6 +1272,7 @@ internal sealed class NowPlayingBar : Panel
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        if (OnTop) { PaintTop(g); return; }
         EnsureGradients();
         bool sliding = _frostSlide < 1f && (_frostOld is not null || _frost is not null);   // slide even if one side is empty (to/from a no-frost view)
         if (_frost is null && !sliding)
@@ -810,38 +1304,7 @@ internal sealed class NowPlayingBar : Panel
 
         var l = Layout();
         bool idle = _track is null;
-        var cr = l.Cover;
-        int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
-
-        // cover (soft shadow + rounded, clipped art or an idle placeholder). Fill + stroke share a
-        // half-pixel-inset rect so every corner antialiases identically (no soft bottom-right edge).
-        var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
-        // Soft drop shadow: aligned left/right with the tile and offset only DOWNWARD, so it reads as an even
-        // shadow under the whole tile rather than a darker squared notch poking out of the bottom-right corner.
-        using (var shp = Theme.RoundedRect(new RectangleF(cr.X, cr.Y + 2, cr.Width, cr.Height), cvr))
-        using (var sh = new SolidBrush(Color.FromArgb(50, 0, 0, 0))) g.FillPath(sh, shp);
-        using (var cp = Theme.RoundedRect(crF, cvr))
-        {
-            using var saved = g.Clip; g.SetClip(cp, CombineMode.Intersect);
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            if (idle)
-                // a quiet recessed tile (just above the bar's own shade), not a bright grey box
-                using (var ph = new LinearGradientBrush(cr, Theme.Blend(Theme.SidebarBg, Color.White, 0.09), Theme.Blend(Theme.SidebarBg, Color.Black, 0.06), Theme.ArtAngle)) g.FillRectangle(ph, cr);
-            else
-            {
-                var nv = _cover ?? Theme.MakeArt(cr.Width, (int)(_track!.Dbid & 0xffff));
-                if (_coverPrev is not null && _coverFade < 1f)
-                {
-                    g.DrawImage(_coverPrev, cr);                                                            // outgoing holds underneath
-                    Theme.DrawImageAlpha(g, nv, new RectangleF(cr.X, cr.Y, cr.Width, cr.Height), _coverFade); // incoming dissolves in
-                }
-                else g.DrawImage(nv, cr);
-            }
-            g.Clip = saved;
-        }
-        if (idle) Theme.DrawNote(g, cr, Color.FromArgb(120, 255, 255, 255));   // "Nothing playing" placeholder
-        using (var bp = new Pen(Theme.Blend(Theme.SidebarBg, Color.White, 0.10))) { using var cp2 = Theme.RoundedRect(crF, cvr); g.DrawPath(bp, cp2); }
-        if (!idle && _playing) DrawEqBars(g, cr);   // animated "now playing" equaliser, bottom-right of the cover
+        DrawCover(g, l.Cover, idle);
 
         // title / artist (hidden when the window is too narrow)
         if (l.ShowTitle)
@@ -859,6 +1322,20 @@ internal sealed class NowPlayingBar : Panel
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
+        PaintControls(g, l, idle);
+        Theme.CarveCardCorners(g, this, Theme.RadShell, false, false, true, true);   // content card's BOTTOM corners
+    }
+
+    /// <summary>The bottom bar's cover: the shared tile + the live equaliser bars while playing.</summary>
+    private void DrawCover(Graphics g, Rectangle cr, bool idle)
+    {
+        DrawCoverTile(g, cr, idle, _cover, _coverPrev, _coverFade, idle ? 0 : (int)(_track!.Dbid & 0xffff));
+        if (!idle && _playing) _eqBars.Draw(g, cr, _eqPhase, _coverViz, _accentTint);   // animated "now playing" equaliser, bottom-right of the cover
+    }
+
+    /// <summary>The bottom bar's transport, seek and utilities (shared glyph drawers; the deck paints its own set).</summary>
+    private void PaintControls(Graphics g, Lo l, bool idle)
+    {
         // transport (dimmed + inert when idle); shuffle/repeat are modes — always live
         if (l.ShowModes) DrawShuffle(g, l.Shuffle, _shuffle, _hover == Hit.Shuffle);
         DrawCircleGlyph(g, l.Prev, _hover == Hit.Prev, GlyphPrev, idle);
@@ -869,8 +1346,8 @@ internal sealed class NowPlayingBar : Panel
         // seek
         if (l.ShowSeek)
         {
-            double dur = _engine.Duration.TotalSeconds;
-            double pos = _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
+            double dur = CurDur;
+            double pos = CurPos;
             double frac = _scrubFrac >= 0 ? _scrubFrac : (dur > 0 ? Math.Clamp(pos / dur, 0, 1) : 0);
             DrawSlider(g, l.Seek, idle ? 0 : frac, !idle, _accentTint, _seekKnobR, _hover == Hit.Seek || _drag == Drag.Seek);
             if (l.ShowTimes)
@@ -901,25 +1378,101 @@ internal sealed class NowPlayingBar : Panel
 
         // queue + pro features + equalizer + volume (always interactive when shown)
         if (l.ShowQueue) DrawQueueGlyph(g, l.Queue, _hover == Hit.Queue);
+        if (l.ShowLyrics) DrawLyricsGlyph(g, l.Lyrics, _hover == Hit.Lyrics);
         if (l.ShowPro) DrawProGlyph(g, l.Pro, _hover == Hit.Pro);
         if (l.ShowEq) DrawEqGlyph(g, l.Eq, _hover == Hit.Eq);
         if (l.ShowSpeaker) DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
         if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true, Theme.Accent, _volKnobR, _hover == Hit.Vol || _drag == Drag.Volume);   // knob, matching the seek bar (consistency + a grab target)
-
-        Theme.CarveCardCorners(g, this, Theme.RadShell, false, false, true, true);   // content card's BOTTOM corners
     }
 
-    private static string Fmt(double sec)
+    /// <summary>"Artist  •  Album" when it fits the card's text column, else just the artist (a name cut to
+    /// "mem…" says less than no album at all); the ellipsis is the last resort for a lone long artist.</summary>
+    /// <summary>Where the artist and the album sit inside the card's subtitle (bar coordinates) - the deck turns
+    /// them into links. The artist leads the subtitle, the album follows the separator. Empty when unknown.
+    /// The rects stop short of the seek line's grab band so hovering a link never steals the scrub.</summary>
+    private static (Rectangle artist, Rectangle album) SubtitleSpans(Track t, in CardGeom c, Font fSub)
+    {
+        string sub = CardSubtitle(t, c.TextW, fSub);
+        string artist = (t.Artist ?? "").Trim();
+        int y = c.Card.Y + 25, h = 12;
+        if (artist.Length == 0 || !sub.StartsWith(artist, StringComparison.Ordinal)) return (Rectangle.Empty, Rectangle.Empty);
+        var probe = new Size(int.MaxValue, 20);
+        int aw = TextRenderer.MeasureText(artist, fSub, probe, TextFormatFlags.NoPrefix).Width;
+        var ar = new Rectangle(c.TextX + 1, y, Math.Max(0, Math.Min(aw - 2, c.TextW)), h);
+        var al = Rectangle.Empty;
+        int sep = sub.IndexOf("  \u2022  ", StringComparison.Ordinal);
+        if (sep > 0)
+        {
+            int pre = TextRenderer.MeasureText(sub.Substring(0, sep + 5), fSub, probe, TextFormatFlags.NoPrefix).Width;
+            int full = TextRenderer.MeasureText(sub, fSub, probe, TextFormatFlags.NoPrefix).Width;
+            al = new Rectangle(c.TextX + pre - 3, y, Math.Max(0, Math.Min(full, c.TextW) - pre + 2), h);
+        }
+        return (ar, al);
+    }
+
+    private static string CardSubtitle(Track t, int width, Font fSub)
+    {
+        string artist = (t.Artist ?? "").Trim(), album = (t.Album ?? "").Trim();
+        string full = string.Join("  •  ", new[] { artist, album }.Where(x => x.Length > 0));
+        if (album.Length == 0 || artist.Length == 0) return full;
+        int need = TextRenderer.MeasureText(full, fSub, new Size(int.MaxValue, 20), TextFormatFlags.NoPrefix).Width;
+        return need <= width ? full : artist;
+    }
+
+    /// <summary>The deck. Its background is the wallpaper under it (sampled from the root's cached bitmap, so it
+    /// is pixel-identical to the strip around the window buttons); the only surface is the now-playing CARD —
+    /// a translucent slab with a hairline, the 40 px cover, two left-aligned lines, elapsed over total on the
+    /// right, and the accent seek line inset under the text (a knob only while hovered).</summary>
+    private void PaintTop(Graphics g)
+    {
+        var wp = Parent as WallpaperPanel;
+        if (wp?.Wallpaper is { } wall) Theme.BlitExact(g, wall, Bounds);
+        else { var st = g.Save(); g.TranslateTransform(-Left, -Top); Theme.PaintWallpaper(g, Parent?.ClientRectangle ?? ClientRectangle); g.Restore(st); }
+
+        var l = Layout();
+        bool idle = _track is null;
+
+        // identity
+        if (wp?.Logo is { } logo)
+        {
+            var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(logo, l.Logo);
+            g.InterpolationMode = im;
+        }
+        if (l.ShowWordmark)
+            TextRenderer.DrawText(g, "Mixtape", _fWordmark, l.Wordmark, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+        // transport
+        if (l.ShowModes) DrawShuffle(g, l.Shuffle, _shuffle, _hover == Hit.Shuffle);
+        DrawCircleGlyph(g, l.Prev, _hover == Hit.Prev, GlyphPrevL, idle);
+        DrawPlayButton(g, l.Play, _hover == Hit.Play, idle);
+        DrawCircleGlyph(g, l.Next, _hover == Hit.Next, GlyphNextL, idle);
+        if (l.ShowModes) DrawRepeat(g, l.Repeat, _repeat, _hover == Hit.Repeat);
+
+        // the card
+        if (l.ShowCard) DrawCard(g, LayoutCard(l.Card), CardStateNow(), _fCardTitle, _fSub, _fTime, _eqBars);
+
+        // utilities
+        if (l.ShowOverflow) DrawOverflowGlyph(g, l.Overflow, _hover == Hit.Overflow);
+        if (l.ShowLyrics) DrawLyricsGlyph(g, l.Lyrics, _hover == Hit.Lyrics);
+        if (l.ShowQueue) DrawQueueGlyph(g, l.Queue, _hover == Hit.Queue);
+        if (l.ShowPro) DrawProGlyph(g, l.Pro, _hover == Hit.Pro);
+        if (l.ShowEq) DrawEqGlyph(g, l.Eq, _hover == Hit.Eq);
+        if (l.ShowSpeaker) DrawSpeaker(g, l.Speaker, _muted, _hover == Hit.Speaker);
+        if (l.ShowVol) DrawSlider(g, l.Vol, _muted ? 0 : _volume, true, Theme.Accent, _volKnobR, _hover == Hit.Vol || _drag == Drag.Volume, Color.FromArgb(38, 255, 255, 255), lift: false);
+    }
+
+    internal static string Fmt(double sec)
     {
         if (sec < 0 || double.IsNaN(sec)) sec = 0;
         var t = TimeSpan.FromSeconds(sec);
         return t.Hours > 0 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
     }
 
-    private static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob, Color fill, float knobR = 5f, bool knobHot = false)
+    internal static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob, Color fill, float knobR = 5f, bool knobHot = false, Color? trackCol = null, bool lift = true)
     {
         var t = new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1, track.Height - 1);
-        using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1)))
+        using (var tb = new SolidBrush(trackCol ?? Theme.Blend(Theme.PanelBg, Color.Black, 0.1)))
         using (var tp = Theme.RoundedRect(t, t.Height / 2f)) g.FillPath(tb, tp);
         float fw = (float)(t.Width * Math.Clamp(frac, 0, 1));
         if (fw > 0)
@@ -929,7 +1482,7 @@ internal sealed class NowPlayingBar : Panel
         {
             float kx = t.X + fw, ky = t.Y + t.Height / 2f, r = knobR;
             var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-            if (r > 5.4f)   // a soft shadow under the grown (grabbed) knob so it reads as lifted
+            if (lift && r > 5.4f)   // a soft shadow under the grown (grabbed) knob so it reads as lifted (bottom bar only - on the deck's translucent card it read as a dark smudge)
             {
                 using var sh = new SolidBrush(Color.FromArgb(60, 0, 0, 0));
                 g.FillEllipse(sh, kx - r - 0.5f, ky - r + 1f, r * 2 + 1, r * 2 + 1);
@@ -940,42 +1493,23 @@ internal sealed class NowPlayingBar : Panel
         }
     }
 
-    /// <summary>Four little accent equaliser bars bouncing in the cover's bottom-right corner — the
-    /// universally-recognised "this is playing" cue. Driven by <see cref="_eqPhase"/>; a soft scrim keeps
-    /// them legible over any artwork.</summary>
-    private static readonly double[] EqOff = { 0.0, 1.7, 3.3, 5.0 }, EqSpd = { 1.0, 1.35, 0.85, 1.15 };
-    // The eq-viz scrim gradient + cover-clip path are built from the static CoverRect (invariant geometry) and a fixed
-    // black gradient (no theme colour) → cache them ONCE instead of allocating both every eq frame (~16fps playback).
-    private System.Drawing.Drawing2D.LinearGradientBrush? _eqScrim;
-    private System.Drawing.Drawing2D.GraphicsPath? _eqClip;
-    private SolidBrush? _eqBarBrush; private Color _eqBarTint;   // eq-bar brush cached on _accentTint (was new per ~33fps eq frame)
-
-    private void DrawEqBars(Graphics g, Rectangle cover)
+    private void DrawPlayButton(Graphics g, Rectangle r, bool hover, bool dim)
     {
-        const int n = 4, bw = 3, gap = 2, maxH = 16;
-        int totalW = n * bw + (n - 1) * gap;
-        float baseY = cover.Bottom - 7;
-        float x0 = cover.Right - 7 - totalW;
-        // soft scrim so the bars read on light covers (cached — geometry + colours are invariant)
-        _eqScrim ??= new System.Drawing.Drawing2D.LinearGradientBrush(
-            new RectangleF(cover.Left, cover.Bottom - 24, cover.Width, 24), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f);
-        _eqClip ??= Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac);
-        using var save = g.Clip;
-        g.SetClip(_eqClip, CombineMode.Intersect);
-        g.FillRectangle(_eqScrim, cover.Left, cover.Bottom - 24, cover.Width, 24);
-        g.Clip = save;
-        if (_eqBarBrush is null || _eqBarTint != _accentTint) { _eqBarBrush?.Dispose(); _eqBarTint = _accentTint; _eqBarBrush = new SolidBrush(Theme.Blend(_accentTint, Color.White, 0.12)); }   // cover-derived tint, cached (rebuilds only on cover change)
-        var b = _eqBarBrush;
-        for (int i = 0; i < n; i++)
+        if (!dim)
         {
-            double idle = 0.18 + 0.14 * (0.5 + 0.5 * Math.Sin(_eqPhase * EqSpd[i] + EqOff[i]));  // gentle baseline so it stays alive
-            double v = Math.Max(idle, _coverViz[i]);                                          // …but rises with the actual music
-            float bh = (float)(maxH * Math.Clamp(v, 0.12, 1.0));
-            g.FillRectangle(b, x0 + i * (bw + gap), baseY - bh, bw, bh);
+            // Keep the morph honest: snap to the current state when idle between tweens, and if a non-toggle path
+            // (media key, video preview, track switch) flipped _playing mid-tween, abandon the now-stale tween.
+            float want = _playing ? 1f : 0f;
+            if (_playTween is null) _playMorph = want;
+            else if (_playTarget != want) { _playTween.Cancel(); _playTween = null; _playMorph = want; }
         }
+        DrawPlayDisc(g, r, hover, dim, _playMorph);
     }
 
-    private void DrawPlayButton(Graphics g, Rectangle r, bool hover, bool dim)
+    /// <summary>The play disc: accent (brighter on hover), a dim slab with a plain triangle when idle; otherwise the
+    /// glyph cross-fades from the play triangle (<paramref name="morph"/> 0) to the pause bars (1). Shared with the
+    /// mini player.</summary>
+    internal static void DrawPlayDisc(Graphics g, Rectangle r, bool hover, bool dim, float morph)
     {
         Color disc = dim ? Theme.Blend(Theme.SidebarBg, Color.White, 0.12)
                          : hover ? Theme.AccentBright : Theme.Accent;
@@ -989,12 +1523,7 @@ internal sealed class NowPlayingBar : Panel
             g.FillPolygon(p, new[] { new PointF(c.X - s + 1.5f, c.Y - s), new PointF(c.X - s + 1.5f, c.Y + s), new PointF(c.X + s + 1.5f, c.Y) });
             return;
         }
-        // Keep the morph honest: snap to the current state when idle between tweens, and if a non-toggle path
-        // (media key, video preview, track switch) flipped _playing mid-tween, abandon the now-stale tween.
-        float want = _playing ? 1f : 0f;
-        if (_playTween is null) _playMorph = want;
-        else if (_playTarget != want) { _playTween.Cancel(); _playTween = null; _playMorph = want; }
-        float m = _playMorph;                                       // 0 = triangle, 1 = pause bars
+        float m = morph;                                            // 0 = triangle, 1 = pause bars
         if (m < 1f)   // play triangle fading out
         {
             using var p = new SolidBrush(Color.FromArgb(Math.Clamp((int)Math.Round((1f - m) * 255), 0, 255), fg));
@@ -1010,7 +1539,7 @@ internal sealed class NowPlayingBar : Panel
         }
     }
 
-    private static void DrawCircleGlyph(Graphics g, Rectangle r, bool hover, Action<Graphics, Rectangle, Color> glyph, bool dim)
+    internal static void DrawCircleGlyph(Graphics g, Rectangle r, bool hover, Action<Graphics, Rectangle, Color> glyph, bool dim)
     {
         if (hover && !dim) { using var hb = new SolidBrush(Theme.RowHover); g.FillEllipse(hb, r); }
         glyph(g, r, dim ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle);
@@ -1028,13 +1557,13 @@ internal sealed class NowPlayingBar : Panel
 
     private static Color ModeColor(bool active, bool hover) => active ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
 
-    private void DrawShuffle(Graphics g, Rectangle r, bool active, bool hover)
+    internal static void DrawShuffle(Graphics g, Rectangle r, bool active, bool hover)
     {
         if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
         DrawModeGlyph(g, r, "\uE8B1", ModeColor(active, hover));   // Shuffle
     }
 
-    private void DrawRepeat(Graphics g, Rectangle r, RepeatMode mode, bool hover)
+    internal static void DrawRepeat(Graphics g, Rectangle r, RepeatMode mode, bool hover)
     {
         if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
         // RepeatAll glyph (greyed when Off), RepeatOne glyph when One.
@@ -1058,25 +1587,37 @@ internal sealed class NowPlayingBar : Panel
         g.TextRenderingHint = savedHint;
     }
 
-    private static void GlyphPrev(Graphics g, Rectangle r, Color c)
+    private static void GlyphPrev(Graphics g, Rectangle r, Color c) => SkipGlyph(g, r, c, 5f, 2.2f, 0.3f, next: false);
+
+    /// <summary>The |&lt; / &gt;| skip glyph (a triangle and a bar) with its BOUNDING BOX centred in <paramref name="r"/>.
+    /// The old builders pushed each glyph ~3 px outward from the centre, which read fine bare but sat visibly
+    /// off-centre inside the hover disc.</summary>
+    private static void SkipGlyph(Graphics g, Rectangle r, Color c, float s, float bw, float gap, bool next)
     {
         var m = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
         using var b = new SolidBrush(c);
-        float s = 5f;
-        g.FillPolygon(b, new[] { new PointF(m.X + 1, m.Y - s), new PointF(m.X + 1, m.Y + s), new PointF(m.X - s + 1, m.Y) });
-        g.FillRectangle(b, m.X - s - 1.5f, m.Y - s, 2.2f, s * 2);
+        float w = s + gap + bw, x0 = m.X - w / 2f;
+        if (next)
+        {
+            g.FillPolygon(b, new[] { new PointF(x0, m.Y - s), new PointF(x0, m.Y + s), new PointF(x0 + s, m.Y) });
+            g.FillRectangle(b, x0 + s + gap, m.Y - s, bw, s * 2);
+        }
+        else
+        {
+            g.FillRectangle(b, x0, m.Y - s, bw, s * 2);
+            float tx = x0 + bw + gap;
+            g.FillPolygon(b, new[] { new PointF(tx + s, m.Y - s), new PointF(tx + s, m.Y + s), new PointF(tx, m.Y) });
+        }
     }
 
-    private static void GlyphNext(Graphics g, Rectangle r, Color c)
-    {
-        var m = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
-        using var b = new SolidBrush(c);
-        float s = 5f;
-        g.FillPolygon(b, new[] { new PointF(m.X - 1, m.Y - s), new PointF(m.X - 1, m.Y + s), new PointF(m.X + s - 1, m.Y) });
-        g.FillRectangle(b, m.X + s - 0.7f, m.Y - s, 2.2f, s * 2);
-    }
+    // Deck-size prev/next (≈13 px tall) — the bar's 10 px pair sits next to a 36 px play disc up there.
+    internal static void GlyphPrevL(Graphics g, Rectangle r, Color c) => SkipGlyph(g, r, c, 6.5f, 2.6f, 0.4f, next: false);
 
-    private static void DrawSpeaker(Graphics g, Rectangle r, bool muted, bool hover)
+    internal static void GlyphNextL(Graphics g, Rectangle r, Color c) => SkipGlyph(g, r, c, 6.5f, 2.6f, 0.4f, next: true);
+
+    private static void GlyphNext(Graphics g, Rectangle r, Color c) => SkipGlyph(g, r, c, 5f, 2.2f, 0.3f, next: true);
+
+    internal static void DrawSpeaker(Graphics g, Rectangle r, bool muted, bool hover)
     {
         Color c = muted ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle;
         using var b = new SolidBrush(c);
@@ -1097,6 +1638,44 @@ internal sealed class NowPlayingBar : Panel
             g.DrawArc(p, x + 9, cy - 5, 8, 10, -55, 110);
             g.DrawArc(p, x + 9, cy - 8, 12, 16, -50, 100);
         }
+    }
+
+    /// <summary>"···": the utilities the width folded away live under it.</summary>
+    internal static void DrawOverflowGlyph(Graphics g, Rectangle r, bool hover)
+    {
+        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        using var b = new SolidBrush(hover ? Theme.TextCol : Theme.Subtle);
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        for (int k = -1; k <= 1; k++) g.FillEllipse(b, cx + k * 6f - 1.7f, cy - 1.7f, 3.4f, 3.4f);
+    }
+
+    /// <summary>Lyrics: a speech bubble with two lines of "words", the sung one accented. Deliberately NOT
+    /// another stack of plain lines — that is the Up Next glyph sitting right beside it, and at 24 px the two
+    /// would read as the same icon.</summary>
+    private void DrawLyricsGlyph(Graphics g, Rectangle r, bool hover)
+    {
+        if (_lyricsOpen) { using var ob = new SolidBrush(Color.FromArgb(46, Theme.Accent)); using var op = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(ob, op); }   // the words are open: the button reads as pressed
+        else if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        var c = _lyricsOpen ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle;
+        int cx = r.Left + r.Width / 2, cy = r.Top + r.Height / 2;
+
+        var bubble = new Rectangle(cx - 8, cy - 8, 16, 12);
+        using (var pen = new Pen(c, 1.5f))
+        using (var path = Theme.RoundedRect(bubble, 4))
+        {
+            g.DrawPath(pen, path);
+            // the tail, bottom-left, drawn as part of the outline so the bubble reads as speech
+            using var tail = new System.Drawing.Drawing2D.GraphicsPath();
+            tail.AddLines(new[] { new Point(cx - 4, bubble.Bottom - 1), new Point(cx - 5, cy + 7), new Point(cx, bubble.Bottom - 1) });
+            using var fill = new SolidBrush(Theme.PanelBg);
+            g.FillPath(fill, tail);
+            g.DrawLines(pen, new[] { new Point(cx - 4, bubble.Bottom), new Point(cx - 5, cy + 7), new Point(cx, bubble.Bottom) });
+        }
+
+        using (var accent = new Pen(hover ? Theme.Accent : Theme.Blend(c, Theme.Accent, 0.6), 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(accent, cx - 5, cy - 4, cx + 3, cy - 4);   // the line being sung
+        using (var pen = new Pen(c, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(pen, cx - 5, cy - 1, cx + 5, cy - 1);
     }
 
     private void DrawEqGlyph(Graphics g, Rectangle r, bool hover)
@@ -1134,8 +1713,9 @@ internal sealed class NowPlayingBar : Panel
     // Up Next icon: a small "list" (three lines, the last shorter) — accent-tinted when the queue is non-empty.
     private void DrawQueueGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
-        Color c = _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+        if (_queueOpen) { using var ob = new SolidBrush(Color.FromArgb(46, Theme.Accent)); using var op = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(ob, op); }   // the side card is open: pressed
+        else if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        Color c = _queueOpen ? Theme.AccentBright : _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 6, x2 = r.Right - 6;
         g.DrawLine(pen, x, r.Y + 8, x2, r.Y + 8);
@@ -1152,7 +1732,47 @@ internal sealed class NowPlayingBar : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _eqAnim?.Cancel(); _coverTween?.Cancel(); _playTween?.Cancel(); _sleepFade?.Cancel(); _frostSlideTween?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _coverPrev?.Dispose(); _pendingCover?.Dispose(); if (_frostOwned) _frost?.Dispose(); if (_frostOldOwned) _frostOld?.Dispose(); _eqScrim?.Dispose(); _eqClip?.Dispose(); _eqBarBrush?.Dispose(); _gradBg?.Dispose(); _gradGlass?.Dispose(); _gradBase?.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fTime.Dispose(); }
+        if (disposing) { _eqAnim?.Cancel(); _coverTween?.Cancel(); _playTween?.Cancel(); _sleepFade?.Cancel(); _frostSlideTween?.Cancel(); _sleepTimer?.Dispose(); _smtc?.Dispose(); _discord?.Dispose(); _engine.Dispose(); _cover?.Dispose(); _coverPrev?.Dispose(); _pendingCover?.Dispose(); if (_frostOwned) _frost?.Dispose(); if (_frostOldOwned) _frostOld?.Dispose(); _eqBars.Dispose(); _gradBg?.Dispose(); _gradGlass?.Dispose(); _gradBase?.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fTime.Dispose(); _fWordmark.Dispose(); _fCardTitle.Dispose(); }
         base.Dispose(disposing);
     }
+}
+
+/// <summary>Four little accent equaliser bars bouncing in a cover's bottom-right corner — the universally-recognised
+/// "this is playing" cue — over a soft scrim that keeps them legible on any artwork. One per surface (the bar, the
+/// mini player): the scrim gradient + clip path are cached per cover rect and the bar brush per tint, so the ~33 fps
+/// playback repaint allocates nothing.</summary>
+internal sealed class EqBarsPainter : IDisposable
+{
+    private static readonly double[] Off = { 0.0, 1.7, 3.3, 5.0 }, Spd = { 1.0, 1.35, 0.85, 1.15 };
+    private LinearGradientBrush? _scrim;
+    private GraphicsPath? _clip;
+    private Rectangle _rect;         // the cover rect the two caches were built for
+    private SolidBrush? _bar; private Color _barTint;
+
+    /// <param name="phase">the bounce clock (advanced by the owner's playback loop)</param>
+    /// <param name="viz">0..1 per bar from the live audio; the bars never fall below a gentle baseline</param>
+    public void Draw(Graphics g, Rectangle cover, double phase, float[] viz, Color tint)
+    {
+        const int n = 4, bw = 3, gap = 2, maxH = 16;
+        int totalW = n * bw + (n - 1) * gap;
+        float baseY = cover.Bottom - 7;
+        float x0 = cover.Right - 7 - totalW;
+        if (_rect != cover) { _scrim?.Dispose(); _scrim = null; _clip?.Dispose(); _clip = null; _rect = cover; }
+        _scrim ??= new LinearGradientBrush(new RectangleF(cover.Left, cover.Bottom - 24, cover.Width, 24), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f);
+        _clip ??= Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cover.Width * Theme.TileFrac);
+        using var save = g.Clip;
+        g.SetClip(_clip, CombineMode.Intersect);
+        g.FillRectangle(_scrim, cover.Left, cover.Bottom - 24, cover.Width, 24);
+        g.Clip = save;
+        if (_bar is null || _barTint != tint) { _bar?.Dispose(); _barTint = tint; _bar = new SolidBrush(Theme.Blend(tint, Color.White, 0.12)); }
+        for (int i = 0; i < n; i++)
+        {
+            double idle = 0.18 + 0.14 * (0.5 + 0.5 * Math.Sin(phase * Spd[i] + Off[i]));   // gentle baseline so it stays alive
+            double v = Math.Max(idle, i < viz.Length ? viz[i] : 0f);                       // …but rises with the actual music
+            float bh = (float)(maxH * Math.Clamp(v, 0.12, 1.0));
+            g.FillRectangle(_bar, x0 + i * (bw + gap), baseY - bh, bw, bh);
+        }
+    }
+
+    public void Dispose() { _scrim?.Dispose(); _clip?.Dispose(); _bar?.Dispose(); _scrim = null; _clip = null; _bar = null; }
 }

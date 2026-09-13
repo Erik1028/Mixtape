@@ -15,6 +15,40 @@ public partial class SettingsWindow : Window
         BuildAccents();
         BuildVariants();
         BuildLanguages();
+        BuildDiscord();
+    }
+
+    // Discord Rich Presence. Like every other control in this dialog there is no OK/Cancel — each change
+    // saves straight away. Takes effect on the next track (the connection is built with the audio engine).
+    private bool _loadingDiscord;
+
+    private void BuildDiscord()
+    {
+        var (on, appId, covers) = AppConfig.LoadDiscord();
+        // InitializeComponent has already attached the change handlers, so filling these controls raises
+        // them — and a save fired mid-populate would persist HALF-BUILT state (an empty Application ID over
+        // the saved one). Suppress saves until every control holds its stored value.
+        _loadingDiscord = true;
+        try
+        {
+            DiscordAppId.Text = appId;
+            DiscordToggle.IsChecked = on;
+            DiscordCovers.IsChecked = covers;
+        }
+        finally { _loadingDiscord = false; }
+    }
+
+    private void OnDiscordToggled(object? sender, RoutedEventArgs e) => SaveDiscord();
+
+    private void OnDiscordIdChanged(object? sender, RoutedEventArgs e) => SaveDiscord();
+
+    private void SaveDiscord()
+    {
+        if (_loadingDiscord) return;
+        // The portal shows a numeric id; strip anything pasted around it so a stray space can't break it.
+        string id = new string((DiscordAppId.Text ?? "").Where(char.IsDigit).ToArray());
+        if (id != DiscordAppId.Text) DiscordAppId.Text = id;
+        AppConfig.SaveDiscord(DiscordToggle.IsChecked == true, id, DiscordCovers.IsChecked == true);
     }
 
     private void BuildLanguages()

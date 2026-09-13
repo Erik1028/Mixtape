@@ -7,7 +7,7 @@ namespace iPodCommander;
 /// containing ONLY the fields the user actually changed (so untouched mhods are preserved verbatim
 /// when written back). Themed dark dialog.
 /// </summary>
-internal sealed class TrackInfoDialog : Form
+internal sealed class TrackInfoDialog : CardDialog
 {
     private readonly Track _t;
     private readonly IReadOnlyList<Track> _tracks;
@@ -30,7 +30,6 @@ internal sealed class TrackInfoDialog : Form
         _t = tracks[0];
         _multi = tracks.Count > 1;
         Text = _multi ? Loc.T("Edit {0} songs", tracks.Count) : Loc.T("Song info");
-        FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         ClientSize = new Size(440, _multi ? 524 : 624);
@@ -132,6 +131,7 @@ internal sealed class TrackInfoDialog : Form
         Controls.Add(cancel);
         AcceptButton = save;
         CancelButton = cancel;
+        AdoptCard();
         if (_multi) ActiveControl = _artist;   // start on the first editable field, not the disabled Title
     }
 
@@ -148,16 +148,7 @@ internal sealed class TrackInfoDialog : Form
 
     /// <summary>"MPEG audio file · 320 kbps · 44.1 kHz · 8.4 MB" — whichever parts the track has.
     /// InvariantCulture decimals, matching the app's English-invariant number style.</summary>
-    private static string FormatStr(Track t)
-    {
-        var ci = System.Globalization.CultureInfo.InvariantCulture;
-        var parts = new List<string>();
-        if (!string.IsNullOrEmpty(t.FileTypeDescription)) parts.Add(t.FileTypeDescription!);
-        if (t.Bitrate > 0) parts.Add($"{t.Bitrate} kbps");
-        if (t.SampleRate > 0) parts.Add((t.SampleRate / 1000.0).ToString("0.#", ci) + " kHz");
-        if (t.FileSize > 0) parts.Add(t.FileSize >= 1024 * 1024 ? (t.FileSize / (1024.0 * 1024.0)).ToString("0.#", ci) + " MB" : (t.FileSize / 1024.0).ToString("0.#", ci) + " KB");
-        return parts.Count > 0 ? string.Join(" · ", parts) : "—";
-    }
+    private static string FormatStr(Track t) { string s = TrackFormat.Line(t, withSize: true); return s.Length > 0 ? s : "—"; }
 
     private void BuildEdit()
     {
@@ -224,7 +215,7 @@ internal sealed class TrackInfoDialog : Form
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int caption = 0x001A1716; DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
+        try { var bg = Theme.Bg; int caption = (bg.B << 16) | (bg.G << 8) | bg.R;   /* the caption in the theme's own surface colour (was a baked Graphite grey) */ DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
     }
 
     /// <summary>A 0–5 clickable star rating, owner-painted in the theme accent.</summary>

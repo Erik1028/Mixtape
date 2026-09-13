@@ -8,7 +8,7 @@ namespace iPodCommander;
 /// field/operator choosers reuse the app's <see cref="ThemedMenu"/> so the whole dialog stays on-theme. On OK,
 /// <see cref="Result"/> holds the edited definition (its PersistentId/Name are filled in by the caller).
 /// </summary>
-internal sealed class SmartPlaylistDialog : GlassDialog
+internal sealed class SmartPlaylistDialog : CardDialog
 {
     private readonly IReadOnlyList<Track> _audio;
     private readonly TextBox _name;
@@ -30,7 +30,6 @@ internal sealed class SmartPlaylistDialog : GlassDialog
         _sort = initial?.LimitSort ?? "Added";
 
         Text = initial is null ? Loc.T("New Smart Playlist") : Loc.T("Edit Smart Playlist");
-        FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         ClientSize = new Size(560, 540);
@@ -94,6 +93,7 @@ internal sealed class SmartPlaylistDialog : GlassDialog
         else AddRow(new SmartRule());
         _name.TextChanged += (_, _) => Recompute();
         Recompute();
+        AdoptCard();
     }
 
     private void SyncMatch() => _matchBtn.Text = (_matchAll ? Loc.T("all of the following") : Loc.T("any of the following")) + "   ▾";
