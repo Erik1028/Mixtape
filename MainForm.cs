@@ -507,19 +507,23 @@ internal sealed class MainForm : Form, IMessageFilter
         int sideW = Theme.SidebarW;
         int top = _deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH + 8, bottom = h - Gap;
 
-        // Caption strip: the window buttons right-aligned, the gear just left of them (centred on the deck's axis in deck mode).
-        int by = _deck ? (NowPlayingBar.TopH - Theme.TitleBtnH) / 2 : Gap + (Theme.TitleStripH - Theme.TitleBtnH) / 2;
-        int bx = w - Gap - 4 * Theme.TitleBtnW;
-        foreach (var b in new Control[] { _btnMini, _btnMin, _btnMax, _btnClose })
-        { b.SetBounds(bx, by, Theme.TitleBtnW, Theme.TitleBtnH); b.BringToFront(); bx += Theme.TitleBtnW; }
-        _gearBtn.SetBounds(w - Gap - 4 * Theme.TitleBtnW - 38, by, 34, Theme.TitleBtnH);
-        _gearBtn.BringToFront();
+        // The deck goes first: the caption buttons ask it which axis to sit on, and its answer follows its width.
         if (_deck)
         {
             _nowPlaying.RightReserve = Gap + 4 * Theme.TitleBtnW + 38 + 22;   // keep clear of the gear + window buttons (and a visible gap before them)
             _nowPlaying.SetBounds(0, 0, w, NowPlayingBar.TopH);
             _nowPlaying.SendToBack();
         }
+
+        // Caption strip: the window buttons right-aligned, the gear just left of them. In deck mode they share the
+        // deck's own axis - its TOP utility row while the deck is stacked in two rows, so the corner reads as one
+        // line of controls instead of a third row floating between the other two.
+        int by = _deck ? _nowPlaying.CaptionAxis - Theme.TitleBtnH / 2 : Gap + (Theme.TitleStripH - Theme.TitleBtnH) / 2;
+        int bx = w - Gap - 4 * Theme.TitleBtnW;
+        foreach (var b in new Control[] { _btnMini, _btnMin, _btnMax, _btnClose })
+        { b.SetBounds(bx, by, Theme.TitleBtnW, Theme.TitleBtnH); b.BringToFront(); bx += Theme.TitleBtnW; }
+        _gearBtn.SetBounds(w - Gap - 4 * Theme.TitleBtnW - 38, by, 34, Theme.TitleBtnH);
+        _gearBtn.BringToFront();
         _sidebar.Bounds = new Rectangle(Gap, top, sideW, Math.Max(1, bottom - top));
         int cx = Gap + sideW + Gap;
         // The side card docks to the right when it is open AND the window is wide enough; narrower windows fall back

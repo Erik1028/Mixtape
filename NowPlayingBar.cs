@@ -27,6 +27,11 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>The card's total-time slot shows "-remaining" instead of the length (a click toggles; the host persists it).</summary>
     public bool ShowRemaining { get => _showRemaining; set { if (_showRemaining == value) return; _showRemaining = value; Invalidate(); } }
     private double _hoverFrac = -1;      // where the pointer sits along the seek line (0..1), -1 when it is elsewhere
+    /// <summary>The y the host centres the gear and the window buttons on. The deck normally carries everything on
+    /// one axis; when it stacks its utilities in two rows the buttons join the TOP one, so the strip reads as a
+    /// line of controls instead of a third row floating between the other two.</summary>
+    public int CaptionAxis => OnTop && Layout().TwoRow ? TopH / 2 - 13 : TopH / 2;
+
     public event Action? CoverClicked;   // deck: the card's cover was clicked → the host reveals the playing row
     public event Action<Point>? CardMenuRequested;   // deck: right-click on the card (screen point) → the host's menu
     public event Action<Rectangle>? OverflowRequested;   // deck: the "···" holding what the width could not fit (arg = its screen rect)
@@ -637,6 +642,7 @@ internal sealed class NowPlayingBar : Panel
         public Rectangle Times;                       // elapsed over total, right-aligned inside the card
         public Rectangle Logo, Wordmark; public bool ShowWordmark;
         public Rectangle ArtistR, AlbumR, TotalR;     // the card's two subtitle links and the total-time toggle
+        public bool TwoRow;                           // the utilities are stacked in two rows (narrow window)
     }
 
     private Lo Layout()
@@ -791,6 +797,7 @@ internal sealed class NowPlayingBar : Panel
         var l = new Lo();
         l.ShowSpeaker = l.ShowLyrics = l.ShowQueue = l.ShowEq = l.ShowPro = l.ShowModes = l.ShowVol = true;
         l.ShowOverflow = false;
+        l.TwoRow = true;
         int rowA = cy - 13, rowB = cy + 13;   // the two rows' centres, 26 px apart, inside the card's height
         const int Block = 120;                // the right block: max(speaker 20 + 10 + slider 84, four 24 px glyphs at a 32 px pitch)
         const int CardMin = 300;
