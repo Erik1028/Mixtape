@@ -57,7 +57,7 @@ internal sealed class TrackInfoDialog : CardDialog
             Controls.Add(new Label { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
             var tb = new TextBox { Text = value, Location = new Point(122, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
             if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
-            Controls.Add(tb);
+            Controls.Add(ThemedField.Wrap(tb));
             y += 36;
             return tb;
         }
@@ -75,7 +75,7 @@ internal sealed class TrackInfoDialog : CardDialog
         {
             var tb = new TextBox { Text = value, Location = new Point(x, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
             if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
-            Controls.Add(tb);
+            Controls.Add(ThemedField.Wrap(tb));
             return tb;
         }
         void Slash(int x) => Controls.Add(new Label { Text = "/", ForeColor = Theme.Faint, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Location = new Point(x, y), Size = new Size(14, 26) });
@@ -131,6 +131,9 @@ internal sealed class TrackInfoDialog : CardDialog
         Controls.Add(cancel);
         AcceptButton = save;
         CancelButton = cancel;
+        // Height from the content, not a guess: the fixed 524/624 left a 60 px hole under the buttons
+        // while the top margin was 18.
+        ClientSize = new Size(ClientSize.Width, y + save.Height + 18);
         AdoptCard();
         if (_multi) ActiveControl = _artist;   // start on the first editable field, not the disabled Title
     }

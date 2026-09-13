@@ -125,7 +125,9 @@ internal sealed class LibraryDoctorDialog : CardDialog
         {
             _apply = new ThemedButton { Text = Loc.T("Apply fixes"), Pill = true, Primary = true, Width = 130, Height = 32, Enabled = false };
             _apply.Click += OnApply;
-            _apply.Left = close.Left - 10 - _apply.Width; _apply.Top = y;
+            // The primary action sits rightmost, the way every other dialog ends (Cancel · Save, Cancel · OK).
+            _apply.Left = W - Pad - _apply.Width; _apply.Top = y;
+            close.Left = _apply.Left - 10 - close.Width;
             Controls.Add(_apply);
         }
         y += close.Height;

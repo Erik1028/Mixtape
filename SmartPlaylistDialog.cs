@@ -8,6 +8,25 @@ namespace iPodCommander;
 /// field/operator choosers reuse the app's <see cref="ThemedMenu"/> so the whole dialog stays on-theme. On OK,
 /// <see cref="Result"/> holds the edited definition (its PersistentId/Name are filled in by the caller).
 /// </summary>
+/// <summary>A panel that paints its background as a rounded band instead of a hard rectangle.</summary>
+internal sealed class RoundPanel : Panel
+{
+    public RoundPanel()
+    {
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.Clear(Parent?.BackColor ?? Theme.Bg);
+        using var p = Theme.RoundedRect(new RectangleF(0, 0, Width, Height), Theme.RadControl);
+        using var b = new SolidBrush(BackColor);
+        g.FillPath(b, p);
+    }
+}
+
 internal sealed class SmartPlaylistDialog : CardDialog
 {
     private readonly IReadOnlyList<Track> _audio;
@@ -42,7 +61,7 @@ internal sealed class SmartPlaylistDialog : CardDialog
         // Name
         Controls.Add(Lbl(Loc.T("Name"), 16, 18, 64));
         _name = new TextBox { Text = initial?.Name ?? Loc.T("Smart Playlist"), Location = new Point(86, 18), Width = 458, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
-        Controls.Add(_name);
+        Controls.Add(ThemedField.Wrap(_name));
 
         // Match all / any
         Controls.Add(Lbl(Loc.T("Match"), 16, 56, 64));
@@ -74,7 +93,7 @@ internal sealed class SmartPlaylistDialog : CardDialog
         Controls.Add(Lbl(Loc.T("Limit to"), 16, 414, 64));
         _limit = new TextBox { Text = (initial?.Limit ?? 0) > 0 ? initial!.Limit.ToString() : "", Location = new Point(86, 414), Width = 56, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
         _limit.TextChanged += (_, _) => Recompute();
-        Controls.Add(_limit);
+        Controls.Add(ThemedField.Wrap(_limit));
         Controls.Add(Lbl(Loc.T("songs (0 = no limit)"), 150, 414, 200));
 
         // Live count
@@ -168,7 +187,9 @@ internal sealed class SmartPlaylistDialog : CardDialog
         public RuleRow(SmartRule rule)
         {
             _field = rule.Field; _op = rule.Op;
-            Host = new Panel { Size = new Size(500, 32), BackColor = Theme.RowBg };
+            // 506 wide, not 500: ThemedButton widens itself to fit its label, so the remove button really
+            // ends at 500 - the band needs the extra 6 px for its rounded corner to show beside it.
+            Host = new RoundPanel { Size = new Size(506, 32), BackColor = Theme.RowBg };
 
             _fieldBtn = new ThemedButton { Location = new Point(6, 2), Width = 135, Height = 28 };
             _fieldBtn.Click += (_, _) => ShowMenu(_fieldBtn, SmartPlaylist.Fields.Select(f => (Loc.T(f.Label), (Action)(() => SetField(f.Key)))));
@@ -179,12 +200,15 @@ internal sealed class SmartPlaylistDialog : CardDialog
             _value = new TextBox { Text = rule.Value, Location = new Point(281, 4), Width = 138, BackColor = Theme.PanelBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
             _value.TextChanged += (_, _) => Changed?.Invoke();
 
-            _suffix = new Label { ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(423, 2), Size = new Size(40, 28) };
+            _suffix = new Label { ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(423, 2), Size = new Size(34, 28) };
 
-            _remove = new ThemedButton { Text = "✕", Location = new Point(468, 2), Width = 28, Height = 28 };
+            _remove = new ThemedButton { Text = "✕", Location = new Point(6, 2), Width = 28, Height = 28 };
+            // A ThemedButton widens itself to fit its label, so place it from the RIGHT once it has settled:
+            // 6 px in from the band's edge, the same inset the first control has on the left.
+            _remove.Left = Host.Width - 6 - _remove.Width;
             _remove.Click += (_, _) => RemoveRequested?.Invoke();
 
-            Host.Controls.AddRange(new Control[] { _fieldBtn, _opBtn, _value, _suffix, _remove });
+            Host.Controls.AddRange(new Control[] { _fieldBtn, _opBtn, ThemedField.Wrap(_value), _suffix, _remove });
             SyncField(); SyncOp(); SyncSuffix();
         }
 
