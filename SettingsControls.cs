@@ -56,7 +56,11 @@ internal sealed class ToggleSwitch : Control
 }
 
 /// <summary>A row of accent swatches (presets + a custom colour picker), the current one ringed.</summary>
-internal sealed class AccentPicker : Control
+/// <summary>A control whose painted content stops short of its own edge (room for a ring or a shadow),
+/// so a right-aligned layout must push it out by that much for its VISIBLE edge to line up.</summary>
+internal interface IEdgeInset { int RightInset { get; } }
+
+internal sealed class AccentPicker : Control, IEdgeInset
 {
     public event Action<string>? AccentChosen; // preset name or "#RRGGBB"
     private string _current;
@@ -78,6 +82,9 @@ internal sealed class AccentPicker : Control
         MouseMove += (_, e) => { int h = HitAt(e.X); if (h != _hover) { _hover = h; Invalidate(); } };
         MouseLeave += (_, _) => { if (_hover != -1) { _hover = -1; Invalidate(); } };
     }
+
+    /// <summary>The ring room after the last dot: the row lines the DOTS up with the other controls.</summary>
+    public int RightInset => Pad;
 
     private int CountSwatches => Theme.AccentPresets.Length + 1; // + custom
     private int SwatchX(int i) => Pad + i * (D + Gap);
@@ -345,7 +352,8 @@ internal sealed class CardPanel : Panel
         // Size the label column from the control's actual left edge (not a fixed 240px reserve), so a
         // wide control (e.g. a 330px segmented control) never sits under the opaque label rectangle.
         const int labelLeft = 18, gap = 16, rightPad = 18;
-        int ctrlLeft = ctrl is not null ? Width - rightPad - ctrl.Width : Width - rightPad;
+        int inset = ctrl is IEdgeInset ei ? ei.RightInset : 0;   // the swatch row's ring room is not part of the picture
+        int ctrlLeft = ctrl is not null ? Width - rightPad - ctrl.Width + inset : Width - rightPad;
         int labelW = Math.Max(80, ctrlLeft - gap - labelLeft);
 
         Controls.Add(new GlassLabel
