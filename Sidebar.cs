@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace iPodCommander;
 
-internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist, SmartPlaylist, LocalAlbums, LocalArtists, Home }
+internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Videos, Photos, Playlist, LocalMusic, LocalPlaylist, SmartPlaylist, LocalAlbums, LocalArtists, Home, Stats }
 
 /// <summary>
 /// Apple-Music-style left rail: a "Mixtape" wordmark, then sections (DEVICE / LIBRARY /
@@ -195,7 +195,7 @@ internal sealed class Sidebar : Panel
 
     private static Color TileColor(SidebarRowKind kind, string text) => kind switch
     {
-        SidebarRowKind.Home or SidebarRowKind.Device or SidebarRowKind.AllSongs or SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.Videos or SidebarRowKind.Photos => Theme.Accent,
+        SidebarRowKind.Home or SidebarRowKind.Device or SidebarRowKind.AllSongs or SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.Videos or SidebarRowKind.Photos or SidebarRowKind.Stats => Theme.Accent,
         // Neutral: a hue per playlist encoded nothing and competed with the covers the user actually chose.
         _ => Theme.PanelBg,
     };
@@ -253,6 +253,15 @@ internal sealed class Sidebar : Panel
                     new PointF(scx, scy - r1), new PointF(scx + r2, scy - r2), new PointF(scx + r1, scy), new PointF(scx + r2, scy + r2),
                     new PointF(scx, scy + r1), new PointF(scx - r2, scy + r2), new PointF(scx - r1, scy), new PointF(scx - r2, scy - r2),
                 });
+                break;
+            }
+            case SidebarRowKind.Stats: // three rising bars
+            {
+                float bw = s * 0.14f, bx = x + s * 0.24f;
+                float[] tops = { y + s * 0.56f, y + s * 0.40f, y + s * 0.24f };
+                for (int i = 0; i < 3; i++)
+                    using (var bp = Theme.RoundedRect(new RectangleF(bx + i * (bw + s * 0.09f), tops[i], bw, y + s * 0.78f - tops[i]), bw / 2.4f))
+                        g.FillPath(br, bp);
                 break;
             }
             case SidebarRowKind.Albums: // vinyl disc
