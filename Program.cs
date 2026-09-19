@@ -1828,7 +1828,7 @@ internal static class Program
                 double.TryParse(Environment.GetEnvironmentVariable("MIX_NP_AT"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double npAt) ? npAt : 83,
                 int.TryParse(Environment.GetEnvironmentVariable("MIX_COVER_ID"), out int npCover) ? npCover : -1);
         }
-        if (view is "songs" or "videos" or "photos" or "device" or "albums" or "artists" or "local" or "localalbums" or "localartists" or "home") form.PreviewSelectView(view);   // "songs" explicitly: the library now lands on the home page
+        if (view is "songs" or "videos" or "photos" or "device" or "albums" or "artists" or "local" or "localalbums" or "localartists" or "home" or "stats") form.PreviewSelectView(view);   // "songs" explicitly: the library now lands on the home page
         if (Environment.GetEnvironmentVariable("MIX_NP_LOCAL") is { Length: > 0 } npl)   // a PC-library song as playing (title part or index), real path
         {
             for (int i = 0; i < 100 && form.PreviewLocalCount == 0; i++) { Application.DoEvents(); Thread.Sleep(50); }   // the folder scan is async

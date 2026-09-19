@@ -230,6 +230,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private int _selReserve;                  // px the list gives up at the bottom while that bar is up
     private Action? _layoutGridHost;          // re-runs the song-list layout (the reserve changes its height)
     private HomeView _homeView = null!;                  // the home page (built in BuildLayout)
+    private StatsView _statsView = null!;                // the listening page (built in BuildLayout)
     private Dictionary<string, Track>? _homeReps;        // representative track per home tile, so a cover that arrives later finds its tile
     private int _homeArtGen;
     private bool _landOnHome = true;                     // the first library to load opens on the home page; a navigation after that is the user's choice
@@ -359,6 +360,9 @@ internal sealed class MainForm : Form, IMessageFilter
         _homeView.ResumeRequested += ResumeFromHome;
         _homeView.Scrolled += UpdateBarFrost;
         center.Controls.Add(_homeView);     // Fill, hidden until the Home view is active
+        _statsView = new StatsView { Dock = DockStyle.Fill, Visible = false };
+        _statsView.Activated += OnStatsActivated;
+        center.Controls.Add(_statsView);    // Fill, hidden until the Listening view is active
         center.Controls.Add(gridHost);      // Fill
         _emptyView = new EmptyStateView(Loc.T("Open Local Music"), Loc.T("Add folder…"))
         {
@@ -2105,6 +2109,7 @@ internal sealed class MainForm : Form, IMessageFilter
             "device" => SidebarRowKind.Device,
             "albums" => SidebarRowKind.Albums,
             "artists" => SidebarRowKind.Artists,
+            "stats" => SidebarRowKind.Stats,
             "local" => SidebarRowKind.LocalMusic,
             "localalbums" => SidebarRowKind.LocalAlbums,
             "localartists" => SidebarRowKind.LocalArtists,
@@ -2221,6 +2226,8 @@ internal sealed class MainForm : Form, IMessageFilter
             _sidebar.AddItem(SidebarRowKind.AllSongs, Loc.T("All songs"), "all", _viewKind == SidebarRowKind.AllSongs, Fig(audio.Count));
             _sidebar.AddItem(SidebarRowKind.Albums, Loc.T("Albums"), "albums", _viewKind == SidebarRowKind.Albums, Fig(audio.Select(AlbumKey).Distinct().Count()));
             _sidebar.AddItem(SidebarRowKind.Artists, Loc.T("Artists"), "artists", _viewKind == SidebarRowKind.Artists, Fig(audio.Select(ArtistKey).Distinct().Count()));
+            if (audio.Any(t => t.PlayCount > 0))   // the page is built from play counts; without one it would be a page of zeroes
+                _sidebar.AddItem(SidebarRowKind.Stats, Loc.T("Listening"), "stats", _viewKind == SidebarRowKind.Stats);
             if (_device?.Profile.SupportsVideo == true && _settings.ShowVideos)
                 _sidebar.AddItem(SidebarRowKind.Videos, Loc.T("Videos"), "videos", _viewKind == SidebarRowKind.Videos, Fig(videoN));
             if (_device?.Profile.SupportsPhotos == true && _settings.ShowPhotos)
@@ -2346,6 +2353,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 case SidebarRowKind.AllSongs:
                 case SidebarRowKind.Albums:
                 case SidebarRowKind.Artists:
+                case SidebarRowKind.Stats:
                 case SidebarRowKind.Videos:
                 case SidebarRowKind.Photos:
                 case SidebarRowKind.LocalMusic:
@@ -2435,7 +2443,8 @@ internal sealed class MainForm : Form, IMessageFilter
         bool device = _viewKind == SidebarRowKind.Device;
         bool browse = _viewKind is SidebarRowKind.Albums or SidebarRowKind.Artists or SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists && _browseFilter is null; // the grid, not a drill-in
         bool home = _viewKind == SidebarRowKind.Home;
-        bool songs = !photos && !device && !browse && !home;
+        bool stats = _viewKind == SidebarRowKind.Stats;
+        bool songs = !photos && !device && !browse && !home && !stats;
         // The four centre panels are all Dock=Fill siblings. Only ONE must be Visible at a time — otherwise two
         // visible Fill siblings compete and only the back-most gets real size, so the front one collapses to zero.
         // (Previously this toggled _tracks.Parent — the INNER viewport — and left the gridHost itself always
@@ -2448,7 +2457,8 @@ internal sealed class MainForm : Form, IMessageFilter
         _deviceView.Visible = device;
         _browseView.Visible = browse;
         if (_homeView is not null) _homeView.Visible = home && !empty;
-        Control active = photos ? _photoView : device ? _deviceView : browse ? _browseView : home && !empty ? _homeView : empty ? _emptyView! : _gridHost;
+        if (_statsView is not null) _statsView.Visible = stats;
+        Control active = photos ? _photoView : device ? _deviceView : browse ? _browseView : stats ? _statsView : home && !empty ? _homeView : empty ? _emptyView! : _gridHost;
         active.SendToBack();
     }
 
@@ -2457,6 +2467,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _header.SetBadge("", false);   // cleared for every view; the song list re-sets it below when the DB has warnings
         ApplyColumns();                // rating/plays visibility depends on the view (hidden for PC-side files)
         if (_viewKind == SidebarRowKind.Home) { ShowHome(); return; }
+        if (_viewKind == SidebarRowKind.Stats) { ShowStats(); return; }
         if (_viewKind == SidebarRowKind.LocalPlaylist) { ShowLocalPlaylist(); return; }
         if (_viewKind == SidebarRowKind.LocalMusic) { ShowLocalMusic(); return; }
         if (_viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists) { if (_browseFilter is null) ShowBrowse(); else ShowLocalMusic(); return; }   // the PC library's grid, or one of its albums/artists
@@ -2558,6 +2569,106 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>The overview: the newest albums (the iPod's, then the PC's), the song that was playing when Mixtape last
     /// closed, and the most-played (else most recently played) songs. Every part is optional; with nothing at all the
     /// centre shows the empty state instead.</summary>
+    private sealed record StatsArtist(string Key);
+    private sealed record StatsAlbum(string Key);
+
+    /// <summary>The listening page. Every figure here is READ from the library's own counters - the iPod counts
+    /// plays itself, and Mixtape has been folding those counts back in since the sync feature landed. Nothing on
+    /// this page writes.</summary>
+    private void ShowStats()
+    {
+        _tracks.Rows.Clear();
+        _hotRow = -1;
+        _header.ArtClickable = false;
+        var audio = (_db?.Tracks ?? (IEnumerable<Track>)Array.Empty<Track>()).Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        long plays = audio.Sum(t => (long)t.PlayCount);
+        double secs = audio.Sum(t => t.PlayCount * (t.LengthMs / 1000.0));
+        int played = audio.Count(t => t.PlayCount > 0), never = audio.Count - played;
+
+        var stats = new List<StatsView.Stat>
+        {
+            new() { Value = plays.ToString("N0"), Label = Loc.T("Plays"), Accent = true },
+            new() { Value = LongDuration(secs), Label = Loc.T("Listening time") },
+            new() { Value = $"{played} / {audio.Count}", Label = Loc.T("Songs played") },
+            new() { Value = never.ToString("N0"), Label = Loc.T("Never played") },
+        };
+
+        var sections = new List<StatsView.Section>();
+        var heard = audio.Where(t => t.PlayCount > 0).ToList();
+
+        var artists = heard.GroupBy(ArtistKey)
+            .Select(g => (Key: g.Key, Name: g.Select(x => x.Artist).FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? Loc.T("Unknown artist"), Plays: g.Sum(x => (long)x.PlayCount)))
+            .OrderByDescending(x => x.Plays).Take(8).ToList();
+        if (artists.Count > 0)
+        {
+            var sec = new StatsView.Section { Label = Loc.T("Top artists") };
+            foreach (var a in artists) sec.Bars.Add(new StatsView.Bar { Name = a.Name, Value = a.Plays, Figure = a.Plays.ToString("N0"), Target = new StatsArtist(a.Key) });
+            sections.Add(sec);
+        }
+
+        var songs = heard.OrderByDescending(t => t.PlayCount).ThenByDescending(t => t.LastPlayed ?? DateTime.MinValue).Take(8).ToList();
+        if (songs.Count > 0)
+        {
+            var sec = new StatsView.Section { Label = Loc.T("Most played") };
+            foreach (var t in songs) sec.Bars.Add(new StatsView.Bar { Name = t.DisplayTitle, Value = t.PlayCount, Figure = t.PlayCount.ToString("N0"), Target = t });
+            sections.Add(sec);
+        }
+
+        var albums = heard.GroupBy(AlbumKey)
+            .Select(g => (Key: g.Key, Name: g.Select(x => x.Album).FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? Loc.T("Unknown album"), Plays: g.Sum(x => (long)x.PlayCount)))
+            .OrderByDescending(x => x.Plays).Take(8).ToList();
+        if (albums.Count > 0)
+        {
+            var sec = new StatsView.Section { Label = Loc.T("Top albums") };
+            foreach (var a in albums) sec.Bars.Add(new StatsView.Bar { Name = a.Name, Value = a.Plays, Figure = a.Plays.ToString("N0"), Target = new StatsAlbum(a.Key) });
+            sections.Add(sec);
+        }
+
+        if (audio.Any(t => t.Rating > 0))
+        {
+            // The five levels are scaled against EACH OTHER. Counting the unrated pile in the same scale
+            // flattened every star bar to nothing, so that number goes in the label instead.
+            int un = audio.Count(t => t.Rating < 20);
+            var sec = new StatsView.Section { Label = un > 0 ? Loc.T("Ratings · {0} unrated", un.ToString("N0")) : Loc.T("Ratings") };
+            for (int star = 5; star >= 1; star--)
+            {
+                int n = audio.Count(t => Math.Min(5, t.Rating / 20) == star);
+                sec.Bars.Add(new StatsView.Bar { Name = new string('★', star), Value = n, Figure = n.ToString("N0") });
+            }
+            sections.Add(sec);
+        }
+
+        _statsView.SetContent(stats, sections,
+            audio.Count == 0 ? Loc.T("Connect an iPod to see what it has been playing.")
+                             : Loc.T("Counted by the iPod itself. Nothing on this page changes it."));
+        SetCenter();
+        _header.SetInfo("", Loc.T("Listening"), Loc.T("{0} · {1} plays", CountNoun(audio.Count, "song"), plays.ToString("N0")), Theme.StableHash("Listening"), keepArt: true);
+        using (var tile = StatsView.HeaderTile(150)) _header.SetArt(tile);
+        _baseStatus = ""; _baseStatusClickable = false; SetStatus("");
+        SetActionButtons();
+        ScheduleSnap();
+    }
+
+    /// <summary>A listening total in human units: days and hours once it is long, else hours and minutes.</summary>
+    private static string LongDuration(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return t.TotalDays >= 1 ? Loc.T("{0} d {1} h", (int)t.TotalDays, t.Hours)
+            : t.TotalHours >= 1 ? Loc.T("{0} h {1} m", (int)t.TotalHours, t.Minutes)
+            : Loc.T("{0} m", (int)t.TotalMinutes);
+    }
+
+    /// <summary>A row on the listening page was clicked: songs play, artists and albums open their page.</summary>
+    private void OnStatsActivated(object target)
+    {
+        switch (target)
+        {
+            case Track t: PlayAnywhere(t); break;
+            case StatsArtist a: NavigateToArtist(a.Key); BuildSidebar(); break;
+            case StatsAlbum al: NavigateToAlbum(al.Key); BuildSidebar(); break;
+        }
+    }
+
     private void ShowHome()
     {
         _tracks.Rows.Clear();
@@ -3766,7 +3877,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // The search is always there now; typing on a page that cannot be searched takes you to the music.
         if (_photoSize is not null) _photoSize.Visible = _viewKind == SidebarRowKind.Photos;   // the size slider takes the search row on Photos
         _header.Invalidate();   // re-layout the header cluster for the changed search/slider visibility
-        if (_viewKind == SidebarRowKind.Home)   // the home page has no list actions of its own
+        if (_viewKind is SidebarRowKind.Home or SidebarRowKind.Stats)   // these pages have no list actions of their own
         {
             _header.CoverButton.Visible = false; _header.AddButton.Visible = false; _header.DeleteButton.Visible = false;
             return;
@@ -6613,6 +6724,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _photoView.BackColor = Theme.Bg;
         if (_emptyView is not null) _emptyView.BackColor = Theme.Bg;
         if (_homeView is not null) _homeView.BackColor = Theme.Bg;
+        if (_statsView is not null) { _statsView.BackColor = Theme.Bg; _statsView.Invalidate(); }
         if (_side is not null) { _side.BackColor = Theme.Bg; _side.UpNext.BackColor = Theme.Bg; _side.History.BackColor = Theme.Bg; _side.Lyrics.BackColor = Theme.Bg; }
         _deviceView.BackColor = Theme.Bg;
         _deviceScrollPanel.BackColor = Theme.Bg;
