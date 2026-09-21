@@ -32,6 +32,9 @@ internal static class Program
         // Smart-playlist write roundtrip: build a sandbox from a fixture, create a smart playlist, evaluate rules,
         // set members, save+reload, verify membership/order/idempotency/replace + no DB corruption. → ipod-smarttest.txt
         if (args.Length >= 2 && args[0] == "--smarttest") { RunSmartTest(args[1]); return; }
+        // Tag tidy-up writes to the iTunesDB, so it gets the same treatment the smart playlists have:
+        // a sandbox copy, the real scan + apply, then a reload that checks every value landed. → ipod-tidytest.txt
+        if (args.Length >= 2 && args[0] == "--tidytest") { RunTidyTest(args[1]); return; }
 
         // Controlled real-device write helpers (used for the cautious first test). They go
         // through the exact same IpodLibrary/SafeDbWriter path the Add/Delete buttons use.
@@ -2788,6 +2791,70 @@ internal static class Program
         }
         catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-remove.txt"), log.ToString());
+    }
+
+    private static void RunTidyTest(string fixtureDb)
+    {
+        var log = new StringBuilder();
+        int failures = 0;
+        void Check(bool ok, string what) { log.AppendLine((ok ? "PASS " : "FAIL ") + what); if (!ok) failures++; }
+        try
+        {
+            string sandbox = Path.Combine(Path.GetTempPath(), "ipodcmd-tidytest");
+            if (Directory.Exists(sandbox)) Directory.Delete(sandbox, true);
+            string control = Path.Combine(sandbox, "iPod_Control");
+            Directory.CreateDirectory(Path.Combine(control, "iTunes"));
+            Directory.CreateDirectory(Path.Combine(control, "Device"));
+            for (int i = 0; i < 10; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
+            File.Copy(fixtureDb, Path.Combine(control, "iTunes", "iTunesDB"));
+            File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
+
+            var device = DeviceDetector.Build(sandbox);
+            Check(device is not null && device!.Profile.CanWrite, "sandbox writable");
+            var lib = IpodLibrary.Load(device!);
+            int trackCount = lib.View.Tracks.Count;
+            int baseWarn = lib.View.Warnings.Count;
+            var audio = lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+            log.AppendLine($"baseline: {trackCount} tracks, {baseWarn} warning(s)");
+
+            // Plant the two shapes the scanner exists for, on songs that do not already carry them.
+            var a = audio[0];
+            var b = audio.FirstOrDefault(x => !ReferenceEquals(x, a) && !string.IsNullOrWhiteSpace(x.Artist)) ?? audio[1];
+            string spaced = "  " + (a.Album is { Length: > 0 } ? a.Album : "Test Album") + "  ";
+            lib.EditTrack(a.UniqueId, new TrackEdit { Album = spaced });
+            string mixed = (b.Artist ?? "Test").ToLowerInvariant();
+            lib.EditTrack(b.UniqueId, new TrackEdit { Artist = mixed });
+            lib.Save();
+            lib = IpodLibrary.Load(device!);
+            audio = lib.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+            Check(audio.Any(t => t.Album == spaced), "planted a value with stray spaces");
+
+            var groups = TagTidy.Scan(audio);
+            Check(groups.Any(g => g.Spacing), "the scan sees the stray spaces");
+            var plan = TagTidy.Plan(groups);
+            Check(plan.Count > 0, $"the plan has {plan.Count} edit(s) for {plan.Select(k => k.Key.Id).Distinct().Count()} song(s)");
+            Check(plan.Keys.Distinct().Count() == plan.Count, "one edit per song and field (no self-undo)");
+
+            foreach (var kv in plan) lib.EditTrack(kv.Key.Id, TagTidy.EditFor(new TagTidy.Group { What = kv.Key.F, To = kv.Value.Value }));
+            lib.Save();
+
+            var after = IpodLibrary.Load(device!);
+            var byId = after.View.Tracks.ToDictionary(t => t.UniqueId, t => t);
+            int landed = 0, missed = 0;
+            foreach (var kv in plan)
+                if (byId.TryGetValue(kv.Key.Id, out var t) && TagTidy.Read(t, kv.Key.F) == kv.Value.Value) landed++;
+                else missed++;
+            Check(missed == 0, $"every planned value is on the iPod after a reload ({landed} ok, {missed} missing)");
+            Check(after.View.Tracks.Count == trackCount, $"track count unchanged ({after.View.Tracks.Count})");
+            Check(after.View.Warnings.Count <= baseWarn, $"no NEW reader warnings ({after.View.Warnings.Count} <= {baseWarn})");
+            Check(TagTidy.Scan(after.View.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList()).Count(g => g.Spacing) == 0,
+                  "a second scan finds no stray spaces left");
+            Directory.Delete(sandbox, true);
+        }
+        catch (Exception ex) { log.AppendLine("EXCEPTION " + ex); failures++; }
+        log.AppendLine();
+        log.AppendLine(failures == 0 ? "RESULT: OK" : $"RESULT: {failures} FAILURE(S)");
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-tidytest.txt"), log.ToString());
     }
 
     private static void RunSmartTest(string fixtureDb)

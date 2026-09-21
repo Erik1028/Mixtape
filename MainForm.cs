@@ -869,7 +869,17 @@ internal sealed class MainForm : Form, IMessageFilter
 
     /// <summary>Render harness: switch the background palette at RUNTIME (MIX_THEME_SWITCH=Forest|Midnight|...), the way
     /// Settings does, so any surface still holding a baked colour shows up.</summary>
-    public void PreviewThemeSwitch(string variant) { _settings.ThemeVariant = variant; ApplyAllSettings(); }
+    public void PreviewThemeSwitch(string variant)
+    {
+        // A comma-separated list applies each in turn: "Carbon,Midnight" is the round trip that proves a
+        // surface re-reads the palette instead of keeping the colour it was built with.
+        foreach (string v in variant.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            _settings.ThemeVariant = v;
+            ApplyAllSettings();
+            Application.DoEvents();
+        }
+    }
     public void PreviewAccent(string accent) { _settings.Accent = accent; ApplyAllSettings(); }   // MIX_ACCENT=<preset name | #hex>: a runtime accent change
     /// <summary>Render harness: draw the poster for the biggest playlist straight to a file.</summary>
     public void PreviewPoster(string outPath)
@@ -4115,14 +4125,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (picked.Count == 0) return;
         if (!ConfirmWriteOnce()) return;
 
-        // One value per (song, field). A track can be in two picked groups at once - " azahriah " has both a
-        // spacing fix and a spelling fix - and writing both would let the second undo the first. The spelling
-        // target is already clean, so it wins; whitespace only fills in where nothing else claims the field.
-        var final = new Dictionary<(uint Id, TagTidy.Field F), (Track T, string Value)>();
-        foreach (var g in picked.Where(x => x.Spacing).Concat(picked.Where(x => !x.Spacing)))
-            foreach (var t in g.Tracks)
-                final[(t.UniqueId, g.What)] = (t, g.To);
-
+        var final = TagTidy.Plan(picked);   // one value per song and field; see TagTidy.Plan
         int songs = final.Select(kv => kv.Key.Id).Distinct().Count();
         try
         {
@@ -4133,15 +4136,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 _lib.EditTrack(kv.Key.Id, edit);
             }
             _lib.Save();
-            foreach (var kv in final)   // keep the loaded objects in step with what was written
-                switch (kv.Key.F)
-                {
-                    case TagTidy.Field.Title: kv.Value.T.Title = kv.Value.Value; break;
-                    case TagTidy.Field.Artist: kv.Value.T.Artist = kv.Value.Value; break;
-                    case TagTidy.Field.Album: kv.Value.T.Album = kv.Value.Value; break;
-                    case TagTidy.Field.AlbumArtist: kv.Value.T.AlbumArtist = kv.Value.Value; break;
-                    default: kv.Value.T.Genre = kv.Value.Value; break;
-                }
+            foreach (var kv in final) TagTidy.ApplyTo(kv.Value.T, kv.Key.F, kv.Value.Value);   // keep the loaded objects in step
         }
         catch (Exception ex)
         {
