@@ -231,6 +231,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private Action? _layoutGridHost;          // re-runs the song-list layout (the reserve changes its height)
     private HomeView _homeView = null!;                  // the home page (built in BuildLayout)
     private StatsView _statsView = null!;                // the listening page (built in BuildLayout)
+    private string? _countedPath;             // the PC file this playback already counted
     private Dictionary<string, Track>? _homeReps;        // representative track per home tile, so a cover that arrives later finds its tile
     private int _homeArtGen;
     private bool _landOnHome = true;                     // the first library to load opens on the home page; a navigation after that is the user's choice
@@ -424,7 +425,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _nowPlaying.Changed += PushMiniState;   // keep the detached mini player in sync (metadata / play-state / volume)
         _nowPlaying.Tick += PushMiniProgress;   // …and its seek bar (engine position ticks)
         _nowPlaying.Tick += () => { if (++_resumeTicks % 100 == 0) SaveResume(persist: true); };   // the "Continue listening" bookmark, every ~20 s
-        _nowPlaying.Tick += () => PushLyricsClock();      // live-lyrics clock
+        _nowPlaying.Tick += () => { PushLyricsClock(); NoteLocalProgress(); };      // live-lyrics clock + the PC library's own play counter
         _nowPlaying.Changed += PushLyricsClock;           // play/pause reaches the sheets at once, not at the next tick
         _nowPlaying.Changed += () => { _volSave.Stop(); _volSave.Start(); };   // remember the volume, debounced
 
@@ -1498,6 +1499,7 @@ internal sealed class MainForm : Form, IMessageFilter
             try { cover = new Bitmap(img); } catch { cover = null; }
         if (rowIndex >= 0) _tracks.EnsureRowVisible(rowIndex);   // scroll the now-playing row into view
         _playingTrack = t;
+        _countedPath = null;           // a new playback: countable again, even for the same file
         NotePlayed(t);
         _tracks.Invalidate();          // move the "playing" mark to the new row
         SetNowPlayingVisible(true); // expand the row first so the hosted media engine is realized before playing
@@ -2258,7 +2260,7 @@ internal sealed class MainForm : Form, IMessageFilter
             _sidebar.AddItem(SidebarRowKind.AllSongs, Loc.T("All songs"), "all", _viewKind == SidebarRowKind.AllSongs, Fig(audio.Count));
             _sidebar.AddItem(SidebarRowKind.Albums, Loc.T("Albums"), "albums", _viewKind == SidebarRowKind.Albums, Fig(audio.Select(AlbumKey).Distinct().Count()));
             _sidebar.AddItem(SidebarRowKind.Artists, Loc.T("Artists"), "artists", _viewKind == SidebarRowKind.Artists, Fig(audio.Select(ArtistKey).Distinct().Count()));
-            if (audio.Any(t => t.PlayCount > 0))   // the page is built from play counts; without one it would be a page of zeroes
+            if (audio.Any(t => t.PlayCount > 0) || _localTracks.Any(t => t.PlayCount > 0))   // built from play counts: without one it would be a page of zeroes
                 _sidebar.AddItem(SidebarRowKind.Stats, Loc.T("Listening"), "stats", _viewKind == SidebarRowKind.Stats);
             if (_device?.Profile.SupportsVideo == true && _settings.ShowVideos)
                 _sidebar.AddItem(SidebarRowKind.Videos, Loc.T("Videos"), "videos", _viewKind == SidebarRowKind.Videos, Fig(videoN));
@@ -2286,6 +2288,9 @@ internal sealed class MainForm : Form, IMessageFilter
             var la = _localTracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
             _sidebar.AddItem(SidebarRowKind.LocalAlbums, Loc.T("Albums"), "localalbums", _viewKind == SidebarRowKind.LocalAlbums, Fig(la.Select(AlbumKey).Distinct().Count()));
             _sidebar.AddItem(SidebarRowKind.LocalArtists, Loc.T("Artists"), "localartists", _viewKind == SidebarRowKind.LocalArtists, Fig(la.Select(ArtistKey).Distinct().Count()));
+            // With no iPod plugged in the LIBRARY section is absent, so the listening page lives here instead.
+            if (_db is null && la.Any(t => t.PlayCount > 0))
+                _sidebar.AddItem(SidebarRowKind.Stats, Loc.T("Listening"), "stats", _viewKind == SidebarRowKind.Stats);
         }
         foreach (var lp in _settings.LocalPlaylists)
             _sidebar.AddItem(SidebarRowKind.LocalPlaylist, lp.Name.Length == 0 ? Loc.T("Untitled") : lp.Name, lp,
@@ -2613,7 +2618,12 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.Rows.Clear();
         _hotRow = -1;
         _header.ArtClickable = false;
-        var audio = (_db?.Tracks ?? (IEnumerable<Track>)Array.Empty<Track>()).Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        // The iPod counts its own songs and Mixtape counts the PC's; the page shows whichever has been
+        // listened to, and the header says which one you are looking at.
+        var ipodAudio = (_db?.Tracks ?? (IEnumerable<Track>)Array.Empty<Track>()).Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        var pcAudio = _localTracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        bool fromPc = ipodAudio.All(t => t.PlayCount == 0) && pcAudio.Any(t => t.PlayCount > 0);
+        var audio = fromPc ? pcAudio : ipodAudio;
         long plays = audio.Sum(t => (long)t.PlayCount);
         double secs = audio.Sum(t => t.PlayCount * (t.LengthMs / 1000.0));
         int played = audio.Count(t => t.PlayCount > 0), never = audio.Count - played;
@@ -2675,7 +2685,8 @@ internal sealed class MainForm : Form, IMessageFilter
             audio.Count == 0 ? Loc.T("Connect an iPod to see what it has been playing.")
                              : Loc.T("Counted by the iPod itself. Nothing on this page changes it."));
         SetCenter();
-        _header.SetInfo("", Loc.T("Listening"), Loc.T("{0} · {1} plays", CountNoun(audio.Count, "song"), plays.ToString("N0")), Theme.StableHash("Listening"), keepArt: true);
+        string where = fromPc ? Loc.T("on your PC") : Loc.T("on the iPod");
+        _header.SetInfo("", Loc.T("Listening"), Loc.T("{0} · {1} plays · {2}", CountNoun(audio.Count, "song"), plays.ToString("N0"), where), Theme.StableHash("Listening"), keepArt: true);
         using (var tile = StatsView.HeaderTile(150)) _header.SetArt(tile);
         _baseStatus = ""; _baseStatusClickable = false; SetStatus("");
         SetActionButtons();
@@ -2717,7 +2728,9 @@ internal sealed class MainForm : Form, IMessageFilter
 
         // the list: the most-played songs, else the most recently played (both from the iPod's own counters)
         var rows = new List<HomeView.Row>(); string listLabel = "";
-        var most = ipod.Where(t => t.PlayCount > 0).OrderByDescending(t => t.PlayCount).ThenByDescending(t => t.LastPlayed ?? DateTime.MinValue).Take(6).ToList();
+        // Whichever library has been listened to: the iPod counts its own, Mixtape counts the PC's.
+        var counted = ipod.Any(t => t.PlayCount > 0) ? ipod : pc;
+        var most = counted.Where(t => t.PlayCount > 0).OrderByDescending(t => t.PlayCount).ThenByDescending(t => t.LastPlayed ?? DateTime.MinValue).Take(6).ToList();
         if (most.Count > 0)
         {
             listLabel = Loc.T("Most played");
@@ -3356,6 +3369,29 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_lyricSaveKey is null) return;
         string key = _lyricSaveKey; _lyricSaveKey = null;
         _settings.SetLyricSync(key, _lyricSaveMs);
+    }
+
+    /// <summary>The iPod counts its own plays; nothing ever counted the PC's. A song counts once it has
+    /// actually been listened to - half of it, or four minutes of a long one - so skipping through a folder
+    /// does not inflate anything. One counter per file, kept in settings.</summary>
+    private void NoteLocalProgress()
+    {
+        if (_playingTrack is not { LocalPath: { Length: > 0 } path } t || !_nowPlaying.Playing) return;
+        if (string.Equals(_countedPath, path, StringComparison.OrdinalIgnoreCase)) return;
+        double len = _nowPlaying.DurationSeconds, pos = _nowPlaying.PositionSeconds;
+        if (len <= 1 || pos <= 0) return;
+        if (pos < Math.Min(len * 0.5, 240)) return;
+
+        _countedPath = path;
+        if (!_settings.LocalPlays.TryGetValue(path, out var rec)) _settings.LocalPlays[path] = rec = new LocalPlay();
+        rec.Count++;
+        rec.Last = DateTime.Now;
+        _settings.Save();
+        t.PlayCount = (uint)rec.Count;          // the loaded track, so the list and the pages show it at once
+        t.LastPlayed = rec.Last;
+        if (_localTracks.FirstOrDefault(x => string.Equals(x.LocalPath, path, StringComparison.OrdinalIgnoreCase)) is { } lt && !ReferenceEquals(lt, t))
+        { lt.PlayCount = t.PlayCount; lt.LastPlayed = t.LastPlayed; }
+        if (_viewKind is SidebarRowKind.LocalMusic or SidebarRowKind.LocalPlaylist) _tracks.Invalidate();
     }
 
     private void PushLyricsClock()
@@ -5585,6 +5621,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         int gen = ++_localGen;
         var folders = _settings.LocalMusicFolders.ToList();
+        // A snapshot: the scan runs off the UI thread and the counters are written on it.
+        var plays = new Dictionary<string, LocalPlay>(_settings.LocalPlays, StringComparer.OrdinalIgnoreCase);
         if (folders.Count == 0) { _localTracks.Clear(); return; }
         if (_localTracks.Count == 0) SetStatus(Loc.T("Scanning your music…"));
         Task.Run(() =>
@@ -5612,6 +5650,7 @@ internal sealed class MainForm : Form, IMessageFilter
                     catch { t = new Track { Title = Path.GetFileNameWithoutExtension(f) }; }
                     t.MediaType = MediaType.Audio;
                     t.LocalPath = f;
+                    if (plays.TryGetValue(f, out var rec)) { t.PlayCount = (uint)Math.Max(0, rec.Count); t.LastPlayed = rec.Last; }
                     try { t.DateAdded = File.GetLastWriteTime(f); } catch { }
                     found.Add(t);
                 }
@@ -5758,6 +5797,46 @@ internal sealed class MainForm : Form, IMessageFilter
         return rows.Select(x => x.Path).ToList();
     }
 
+    /// <summary>Ask what this file is, then write the answer into the file. Only ever the title, the artist
+    /// and the album; the audio and every other tag are left exactly as they were.</summary>
+    private void IdentifyLocalFile(string path)
+    {
+        var track = _localTracks.FirstOrDefault(t => string.Equals(t.LocalPath, path, StringComparison.OrdinalIgnoreCase));
+        double secs = track is { LengthMs: > 0 } ? track.LengthMs / 1000.0 : 0;
+        SetStatus(Loc.T("Looking up “{0}”…", Identify.NameFrom(path)));
+        Task.Run(() =>
+        {
+            var found = Identify.Search(path, secs);
+            TryBeginInvoke(() =>
+            {
+                SetStatus("");
+                using var dlg = new IdentifyDialog(Path.GetFileName(path), secs, found);
+                if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Chosen is not { } pick) return;
+
+                // The engine holds the file open while it plays it, so a write would fail halfway.
+                if (_playingTrack is { LocalPath: { } lp } && string.Equals(lp, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (MessageDialog.Show(this, Loc.T("Mixtape is playing this song. Stop it and write the tags?"), "Mixtape",
+                            MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                    _nowPlaying.StopAndHide();
+                }
+                try
+                {
+                    Identify.Write(path, pick);
+                }
+                catch (Exception ex)
+                {
+                    MessageDialog.Show(this, Loc.T("Couldn't write the tags:") + Environment.NewLine + Environment.NewLine + ex.Message,
+                        "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                SetStatus(Loc.T("Tagged as “{0} — {1}”.", pick.Artist, pick.Title));
+                _localStale = false;
+                ScanLocalMusicAsync();   // the list, the albums and the artists all read the file again
+            });
+        });
+    }
+
     /// <summary>Right-click menu for tracks in Local Music / a local playlist (no iPod write involved).</summary>
     private void ShowLocalTrackMenu(Point screen)
     {
@@ -5770,6 +5849,15 @@ internal sealed class MainForm : Form, IMessageFilter
         if (firstRow >= 0) { int fr = firstRow; var play = new ToolStripMenuItem(Loc.T("Play")); play.Click += (_, _) => ActivateTrackRow(fr); m.Items.Add(play); }
         AddQueueMenuItems(m);
         m.Items.Add(new ToolStripSeparator());
+
+        if (paths.Count == 1)   // one file at a time: the answer depends on this file's own length
+        {
+            string only = paths[0];
+            var idm = new ToolStripMenuItem(Loc.T("Identify…"));
+            idm.Click += (_, _) => IdentifyLocalFile(only);
+            m.Items.Add(idm);
+            m.Items.Add(new ToolStripSeparator());
+        }
 
         var addTo = new ToolStripMenuItem(Loc.T("Add to playlist"));
         foreach (var lp in _settings.LocalPlaylists)

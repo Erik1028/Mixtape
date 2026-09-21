@@ -37,6 +37,10 @@ internal sealed class AppSettings
     /// <summary>LAB: the player lives in the window's top deck (transport · now-playing card · utilities), not under the list.</summary>
     public bool BarOnTop { get; set; } = true;   // EXPERIMENT: faint frosted blur of the song list at the top of the player bar
     public bool ShowRemaining { get; set; }      // the deck's total-time slot shows "-remaining" instead (clicking it toggles)
+
+    /// <summary>What the PC library has been played: the iPod counts its own songs, nothing counted these.
+    /// Keyed by full path (case-insensitively, as Windows compares them).</summary>
+    public Dictionary<string, LocalPlay> LocalPlays { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool GlassPopups { get => false; set { } }   // liquid-glass backdrops removed 2026-09-12 (kept so old settings.json files still load)
 
     // ---- Home page + the side card ----
@@ -224,6 +228,13 @@ internal sealed class AppSettings
 }
 
 /// <summary>A PC-side playlist: a name plus an ordered list of local audio file paths.</summary>
+/// <summary>One PC file's listening record.</summary>
+internal sealed class LocalPlay
+{
+    public int Count { get; set; }
+    public DateTime? Last { get; set; }
+}
+
 internal sealed class LocalPlaylistData
 {
     /// <summary>Stable id used to key a chosen cover (and any future per-playlist preference) so it survives a
