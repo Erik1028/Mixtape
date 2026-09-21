@@ -4115,26 +4115,33 @@ internal sealed class MainForm : Form, IMessageFilter
         if (picked.Count == 0) return;
         if (!ConfirmWriteOnce()) return;
 
-        int songs = 0;
+        // One value per (song, field). A track can be in two picked groups at once - " azahriah " has both a
+        // spacing fix and a spelling fix - and writing both would let the second undo the first. The spelling
+        // target is already clean, so it wins; whitespace only fills in where nothing else claims the field.
+        var final = new Dictionary<(uint Id, TagTidy.Field F), (Track T, string Value)>();
+        foreach (var g in picked.Where(x => x.Spacing).Concat(picked.Where(x => !x.Spacing)))
+            foreach (var t in g.Tracks)
+                final[(t.UniqueId, g.What)] = (t, g.To);
+
+        int songs = final.Select(kv => kv.Key.Id).Distinct().Count();
         try
         {
             Cursor = Cursors.WaitCursor;
-            foreach (var g in picked)
+            foreach (var kv in final)
             {
-                var edit = TagTidy.EditFor(g);
-                foreach (var t in g.Tracks) { _lib.EditTrack(t.UniqueId, edit); songs++; }
+                var edit = TagTidy.EditFor(new TagTidy.Group { What = kv.Key.F, To = kv.Value.Value });
+                _lib.EditTrack(kv.Key.Id, edit);
             }
             _lib.Save();
-            foreach (var g in picked)   // keep the loaded objects in step with what was written
-                foreach (var t in g.Tracks)
-                    switch (g.What)
-                    {
-                        case TagTidy.Field.Title: t.Title = g.To; break;
-                        case TagTidy.Field.Artist: t.Artist = g.To; break;
-                        case TagTidy.Field.Album: t.Album = g.To; break;
-                        case TagTidy.Field.AlbumArtist: t.AlbumArtist = g.To; break;
-                        default: t.Genre = g.To; break;
-                    }
+            foreach (var kv in final)   // keep the loaded objects in step with what was written
+                switch (kv.Key.F)
+                {
+                    case TagTidy.Field.Title: kv.Value.T.Title = kv.Value.Value; break;
+                    case TagTidy.Field.Artist: kv.Value.T.Artist = kv.Value.Value; break;
+                    case TagTidy.Field.Album: kv.Value.T.Album = kv.Value.Value; break;
+                    case TagTidy.Field.AlbumArtist: kv.Value.T.AlbumArtist = kv.Value.Value; break;
+                    default: kv.Value.T.Genre = kv.Value.Value; break;
+                }
         }
         catch (Exception ex)
         {
@@ -6276,6 +6283,9 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             var lm = ThemedMenu.New();
             var cov = new ToolStripMenuItem(Loc.T("Choose cover…")); cov.Click += (_, _) => ChooseLocalCover(lp); lm.Items.Add(cov);
+            var lpost = new ToolStripMenuItem(Loc.T("Save as image…"));   // a PC playlist deserves the same poster
+            lpost.Click += (_, _) => SavePoster(lp.Name, ResolveLocalTracks(lp.Paths, cacheOnly: false));
+            lm.Items.Add(lpost);
             lm.Items.Add(new ToolStripSeparator());
             var ren = new ToolStripMenuItem(Loc.T("Rename…")); ren.Click += (_, _) => RenameLocalPlaylist(lp); lm.Items.Add(ren);
             lm.Items.Add(new ToolStripSeparator());

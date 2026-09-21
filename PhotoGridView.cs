@@ -88,7 +88,7 @@ internal sealed class PhotoGridView : Panel
             return true;
         });
         if (removed == 0) return 0;
-        _hover = null;
+        ClearHover();
         _lastClicked = -1;
         _scroll = Math.Min(_scroll, MaxScroll());   // a shorter grid may need less scroll; keep position otherwise
         Invalidate();
@@ -310,6 +310,15 @@ internal sealed class PhotoGridView : Panel
 
     private float LiftOf(Tile t) => ReferenceEquals(t, _hover) ? _hoverT : ReferenceEquals(t, _leaving) ? _leaveT : 0f;
 
+    /// <summary>Forget the lift entirely (the tiles it referred to are gone).</summary>
+    private void ClearHover()
+    {
+        _hoverTw?.Cancel(); _leaveTw?.Cancel();
+        _hoverTw = _leaveTw = null;
+        _hover = _leaving = null;
+        _hoverT = _leaveT = 0;
+    }
+
     private void DrawTile(Graphics g, Rectangle rect, Tile t)
     {
         float lift = LiftOf(t);
@@ -324,7 +333,6 @@ internal sealed class PhotoGridView : Panel
                 g.FillPath(sh, sp);
             }
         }
-        bool hover = lift > 0.5f;
         var img = new Rectangle(rect.X, rect.Y, rect.Width, rect.Height);
         using (var path = Theme.RoundedRect(img, 10))
         {
