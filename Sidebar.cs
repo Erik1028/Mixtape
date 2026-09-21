@@ -15,6 +15,9 @@ internal sealed class Sidebar : Panel
     private float _pillY = -1, _pillH;     // the active pill's live position, so it can slide between rows
     private int _pillScroll;
     private Tween? _pillTw;
+    private object? _hoverLeaving;         // the row the pointer just left, still fading its lift out
+    private float _hoverT, _leaveT;
+    private Tween? _hoverTw, _leaveTw;
 
     public event Action<SidebarRowKind, object?>? RowActivated;
     public event Action<SidebarRowKind, object?, Point>? RowRightClicked;
@@ -98,9 +101,10 @@ internal sealed class Sidebar : Panel
             bool add = AddHitTest(e.Location) is not null;
             Cursor = (ej is not null || add) ? Cursors.Hand : Cursors.Default;
             var r = HitTest(e.Location);
-            if (!ReferenceEquals(r, _hover) || !ReferenceEquals(ej, _ejectHover) || add != _addHover) { _hover = r; _ejectHover = ej; _addHover = add; Invalidate(); }
+            if (!ReferenceEquals(r, _hover)) SetRowHover(r);
+            if (!ReferenceEquals(ej, _ejectHover) || add != _addHover) { _ejectHover = ej; _addHover = add; Invalidate(); }
         };
-        MouseLeave += (_, _) => { _hover = null; _ejectHover = null; _addHover = false; Invalidate(); };
+        MouseLeave += (_, _) => { SetRowHover(null); _ejectHover = null; _addHover = false; Invalidate(); };
         MouseClick += (_, e) =>
         {
             if (e.Button == MouseButtons.Left && AddHitTest(e.Location) is { } addKind) { SectionAddClicked?.Invoke(addKind, PointToScreen(e.Location)); return; }   // "+" → new (iPod / local) playlist
@@ -196,6 +200,26 @@ internal sealed class Sidebar : Panel
         foreach (var r in _rows)
             if (r.Tag is not null && ReferenceEquals(r.Tag, tag)) { r.Icon = icon; Invalidate(); return; }
     }
+
+    /// <summary>The hover wash fades in and out instead of blinking - the rail is the one surface the pointer
+    /// crosses constantly, so a hard on/off there is what makes an app feel cheap.</summary>
+    private void SetRowHover(object? row)
+    {
+        _hoverLeaving = _hover; _leaveT = _hoverT;
+        _hover = row as Row; _hoverT = 0;
+        _hoverTw?.Cancel(); _leaveTw?.Cancel();
+        if (!Anim.MotionEnabled) { _hoverT = row is null ? 0 : 1; _leaveT = 0; _hoverLeaving = null; Invalidate(); return; }
+        if (_hoverLeaving is not null)
+        {
+            float from = _leaveT;
+            _leaveTw = Anim.Run(130, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+                () => { _leaveTw = null; _hoverLeaving = null; }, Easings.OutCubic);
+        }
+        if (row is not null)
+            _hoverTw = Anim.Run(140, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+    }
+
+    private float HoverOf(Row r) => ReferenceEquals(r, _hover) ? _hoverT : ReferenceEquals(r, _hoverLeaving) ? _leaveT : 0f;
 
     private static Color TileColor(SidebarRowKind kind, string text) => kind switch
     {
@@ -439,7 +463,8 @@ internal sealed class Sidebar : Panel
             if (y >= clip.Top && y + rh <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
             {
                 var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, rh - 4);
-                bool hover = ReferenceEquals(row, _hover);
+                float hoverT = HoverOf(row);
+                bool hover = hoverT > 0.01f;
                 if (row.Active)
                 {
                     // The "you are here" pill travels to its new row rather than blinking there. It only
@@ -468,7 +493,7 @@ internal sealed class Sidebar : Panel
                     // hover = a faint grey lift. Both rounded, à la Apple Music.
                     Color fill = row.Active
                         ? Color.FromArgb(48, Theme.Accent)
-                        : Theme.Blend(Theme.SidebarBg, Color.White, 0.06);
+                        : Theme.Blend(Theme.SidebarBg, Color.White, 0.06 * hoverT);
                     using var pb = new SolidBrush(fill);
                     using var pp = Theme.RoundedRect(pill, Theme.RadControl);
                     g.FillPath(pb, pp);

@@ -17,7 +17,9 @@ internal sealed class BrowseGridView : Panel
         public float Fade = 1f; public Bitmap? Prev; public Tween? Tween; }   // Prev/Cover are cache-borrowed (never disposed); cross-dissolve state
     private readonly List<Card> _cards = new();
     private readonly List<(Rectangle Rect, Card Card)> _hit = new();
-    private Card? _hover;
+    private Card? _hover, _leaving;     // the card under the pointer, and the one it just left
+    private float _hoverT, _leaveT;     // each card's own share of the lift, so neither snaps
+    private Tween? _hoverTw, _leaveTw;
     private int _scroll;
     private string _empty = "Nothing here yet.";
 
@@ -44,8 +46,8 @@ internal sealed class BrowseGridView : Panel
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
         MouseMove += OnMove;
-        MouseLeave += (_, _) => { _hover = null; if (_barHover) _barHover = false; Invalidate(); };
-        MouseWheel += (_, e) => SetScroll(_scroll - Math.Sign(e.Delta) * 60);
+        MouseLeave += (_, _) => { SetHover(null); if (_barHover) _barHover = false; Invalidate(); };
+        MouseWheel += (_, e) => Glide(e.Delta);
         MouseDown += OnDown;
         MouseUp += (_, _) => { if (_barDragging) { _barDragging = false; Invalidate(); } };
         MouseDoubleClick += (_, e) => { if (e.X < Width - BarZone) { var c = HitTest(e.Location); if (c is not null) ItemActivated?.Invoke(c.Key); } };
@@ -109,11 +111,63 @@ internal sealed class BrowseGridView : Panel
     private int Columns => AvailW <= 0 ? 1 : Math.Max(1, (int)Math.Round((AvailW + Gap) / (double)(TargetCover + Gap)));
     private int Rows => (int)Math.Ceiling(_cards.Count / (double)Columns);
     private int ContentHeight => Pad * 2 + Rows * TileH + Math.Max(0, Rows - 1) * Gap;
+
+    // ---- wheel scrolling that glides ----
+    // The song list has eased its wheel since the redesign; these pages jumped a notch at a time, which is
+    // the roughness you feel most because you feel it constantly. A notch now moves the TARGET (so spinning
+    // fast adds up instead of restarting) and the drawn offset chases it.
+    private int _scrollTarget;
+    private Tween? _scrollTw;
+
+    private void Glide(int delta)
+    {
+        int step = Math.Max(40, Height / 6);
+        SetScroll(_scrollTarget - Math.Sign(delta) * step, animate: true);
+    }
+
     private int MaxScroll() => Math.Max(0, ContentHeight - Height);
 
     private Card? HitTest(Point p) { foreach (var (rect, card) in _hit) if (rect.Contains(p)) return card; return null; }
 
-    private void SetScroll(int v) { v = Math.Max(0, Math.Min(MaxScroll(), v)); if (v != _scroll) { _scroll = v; Invalidate(); Scrolled?.Invoke(); } }
+    private void SetScroll(int v, bool animate = false)
+    {
+        v = Math.Max(0, Math.Min(MaxScroll(), v));
+        _scrollTarget = v;
+        if (!animate || !Anim.MotionEnabled || v == _scroll)
+        {
+            _scrollTw?.Cancel(); _scrollTw = null;
+            if (v != _scroll) { _scroll = v; Invalidate(); Scrolled?.Invoke(); }
+            return;
+        }
+        _scrollTw?.Cancel();
+        int from = _scroll;
+        _scrollTw = Anim.Run(260, t =>
+        {
+            if (IsDisposed) return;
+            _scroll = (int)Math.Round(from + (v - from) * t);
+            Invalidate(); Scrolled?.Invoke();
+        }, () => _scrollTw = null, Easings.OutCubic);
+    }
+
+    /// <summary>Hand the lift from one card to the next: the arriving card rises, the leaving one settles
+    /// back. Two tweens, because a card that snapped flat the moment the pointer left looked broken.</summary>
+    private void SetHover(Card? c)
+    {
+        _leaving = _hover; _leaveT = _hoverT;
+        _hover = c; _hoverT = 0;
+        _hoverTw?.Cancel(); _leaveTw?.Cancel();
+        if (!Anim.MotionEnabled) { _hoverT = c is null ? 0 : 1; _leaveT = 0; _leaving = null; Invalidate(); return; }
+        if (_leaving is not null)
+        {
+            float from = _leaveT;
+            _leaveTw = Anim.Run(150, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+                () => { _leaveTw = null; _leaving = null; }, Easings.OutCubic);
+        }
+        if (c is not null)
+            _hoverTw = Anim.Run(170, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+    }
+
+    private float LiftOf(Card c) => ReferenceEquals(c, _hover) ? _hoverT : ReferenceEquals(c, _leaving) ? _leaveT : 0f;
 
     private (int Max, int BarH, int BarY) Bar()
     {
@@ -135,7 +189,7 @@ internal sealed class BrowseGridView : Panel
         bool overBar = Bar().Max > 0 && e.X >= Width - BarZone;
         if (overBar != _barHover) { _barHover = overBar; Invalidate(); }
         var c = HitTest(e.Location);
-        if (!ReferenceEquals(c, _hover)) { _hover = c; Invalidate(); }
+        if (!ReferenceEquals(c, _hover)) SetHover(c);
     }
 
     private void OnDown(object? s, MouseEventArgs e)
@@ -196,9 +250,22 @@ internal sealed class BrowseGridView : Panel
 
     private void DrawCard(Graphics g, int x, int y, Card c)
     {
-        var cover = new Rectangle(x, y, CoverW, CoverW);
-        int cr = (int)Math.Round(CoverW * Theme.TileFrac);
+        float lift = LiftOf(c);
+        int grow = (int)Math.Round(5 * lift);        // the cover grows around its own centre
+        var cover = new Rectangle(x - grow, y - grow, CoverW + 2 * grow, CoverW + 2 * grow);
+        int cr = (int)Math.Round(cover.Width * Theme.TileFrac);
         bool hover = ReferenceEquals(c, _hover);
+        if (lift > 0.01f)   // a soft ground shadow: three rings, so it reads as depth and not as a halo
+        {
+            var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+            for (int i = 3; i >= 1; i--)
+            {
+                using var sh = new SolidBrush(Color.FromArgb((int)(16 * lift), 0, 0, 0));
+                using var sp = Theme.RoundedRect(new RectangleF(cover.X - i, cover.Y + i + 1, cover.Width + 2 * i, cover.Height + i), cr + i);
+                g.FillPath(sh, sp);
+            }
+            g.SmoothingMode = sm0;
+        }
         using (var path = Theme.RoundedRect(cover, cr))
         {
             using var clip = g.Clip; g.SetClip(path, CombineMode.Intersect);
@@ -214,7 +281,7 @@ internal sealed class BrowseGridView : Panel
             else g.DrawImage(c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), cover);
             g.Clip = clip;
         }
-        if (hover) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255)); g.FillPath(hb, hp); }
+        if (lift > 0.01f) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb((int)(36 * lift), 255, 255, 255)); g.FillPath(hb, hp); }
         using (var bp = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.08))) { using var p2 = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cr); g.DrawPath(bp, p2); }
 
         TextRenderer.DrawText(g, c.Title, _fTitle,
