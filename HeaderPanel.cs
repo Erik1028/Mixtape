@@ -153,7 +153,7 @@ internal sealed class HeaderPanel : Panel
         _textTw?.Cancel();
         if (!Anim.MotionEnabled) { _textT = 1; Invalidate(); return; }
         _textT = 0;
-        _textTw = Anim.Run(220, v => { if (IsDisposed) return; _textT = (float)v; Invalidate(); }, () => _textTw = null, Easings.OutCubic);
+        _textTw = Anim.Run(150, v => { if (IsDisposed) return; _textT = (float)v; Invalidate(); }, () => _textTw = null, Easings.OutQuint);
     }
 
     public void SetInfo(string kicker, string title, string subtitle, int seed, bool keepArt = false)
@@ -332,7 +332,7 @@ internal sealed class HeaderPanel : Panel
         Size badgeText = hasBadge ? TextRenderer.MeasureText(g, _badge, badgeFont) : Size.Empty;
         const int chipPadX = 9, chipPadY = 2;
         int badgeH = hasBadge ? badgeText.Height + chipPadY * 2 : 0;
-        int slide = (int)Math.Round((1 - _textT) * 9);   // the block rises the last 9 px into place
+        int slide = (int)Math.Round((1 - _textT) * 7);   // the block rises the last 9 px into place
         int ty = 7 + slide;
 
         TextRenderer.DrawText(g, _title, titleFont,

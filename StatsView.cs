@@ -82,8 +82,8 @@ internal sealed class StatsView : Panel
         }
         _scrollTw?.Cancel();
         int from = _scroll;
-        _scrollTw = Anim.Run(260, t => { if (IsDisposed) return; _scroll = (int)Math.Round(from + (v - from) * t); Invalidate(); },
-            () => _scrollTw = null, Easings.OutCubic);
+        _scrollTw = Anim.Run(150, t => { if (IsDisposed) return; _scroll = (int)Math.Round(from + (v - from) * t); Invalidate(); },
+            () => _scrollTw = null, Easings.OutQuint);
     }
 
     private object? HitTest(Point p)
@@ -129,7 +129,7 @@ internal sealed class StatsView : Panel
         _enterTw?.Cancel();
         if (!Anim.MotionEnabled) { _enter = 1; Invalidate(); return; }
         _enter = 0;
-        _enterTw = Anim.Run(300, v => { _enter = v; if (!IsDisposed) Invalidate(); }, () => _enterTw = null, Easings.OutCubic);
+        _enterTw = Anim.Run(240, v => { _enter = v; if (!IsDisposed) Invalidate(); }, () => _enterTw = null, Easings.OutCubic);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -159,7 +159,7 @@ internal sealed class StatsView : Panel
             {
                 int cx = Pad + i % cols * (cw + Gap), cy = y + i / cols * (StatH + Gap);
                 // Each figure settles a beat after the one before it, left to right.
-                double step = Easings.OutCubic(Math.Clamp((_enter - i * 0.07) / 0.6, 0, 1));
+                double step = Easings.OutCubic(Math.Clamp((_enter - i * 0.05) / 0.55, 0, 1));
                 DrawStat(g, new Rectangle(cx, cy + (int)Math.Round((1 - step) * 14), cw, StatH), _stats[i]);
             }
             y += rows * (StatH + Gap) - Gap + SectionGap;
@@ -254,7 +254,7 @@ internal sealed class StatsView : Panel
             TextRenderer.DrawText(g, b.Name, _fName, new Rectangle(card.X + 16, row.Y, nameW, RowH), hot ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
-            double step = Math.Clamp((grow - i * 0.045) / 0.55, 0, 1);
+            double step = Math.Clamp((grow - i * 0.035) / 0.5, 0, 1);
             int bw = (int)Math.Round(barW * Math.Clamp(b.Value / max, 0, 1) * Easings.OutCubic(step));
             var track = new Rectangle(barX, row.Y + RowH / 2 - 4, barW, 8);
             using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.35)))
