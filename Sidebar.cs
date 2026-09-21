@@ -212,11 +212,11 @@ internal sealed class Sidebar : Panel
         if (_hoverLeaving is not null)
         {
             float from = _leaveT;
-            _leaveTw = Anim.Run(130, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+            _leaveTw = Anim.Run(110, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
                 () => { _leaveTw = null; _hoverLeaving = null; }, Easings.OutCubic);
         }
         if (row is not null)
-            _hoverTw = Anim.Run(140, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+            _hoverTw = Anim.Run(90, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutQuint);
     }
 
     private float HoverOf(Row r) => ReferenceEquals(r, _hover) ? _hoverT : ReferenceEquals(r, _hoverLeaving) ? _leaveT : 0f;
@@ -476,12 +476,12 @@ internal sealed class Sidebar : Panel
                         {
                             float fromY = _pillY, fromH = _pillH;
                             float toY = pill.Y, toH = pill.Height;
-                            _pillTw = Anim.Run(220, v =>
+                            _pillTw = Anim.Run(160, v =>
                             {
                                 _pillY = (float)(fromY + (toY - fromY) * v);
                                 _pillH = (float)(fromH + (toH - fromH) * v);
                                 if (!IsDisposed) Invalidate();
-                            }, () => _pillTw = null, Easings.OutCubic);
+                            }, () => _pillTw = null, Easings.OutQuint);
                         }
                     }
                     pill = new Rectangle(pill.X, (int)Math.Round(_pillY), pill.Width, (int)Math.Round(_pillH));

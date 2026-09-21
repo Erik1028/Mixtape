@@ -109,7 +109,7 @@ internal sealed class SelectionBar : Control
         BringToFront();
         if (!Anim.MotionEnabled) return;
         int y0 = at.Y + 14;
-        _tw = Anim.Run(200, v => { if (!IsDisposed) Location = new Point(_restingAt.X, (int)Math.Round(y0 + (_restingAt.Y - y0) * v)); }, () => _tw = null, Easings.OutCubic);
+        _tw = Anim.Run(160, v => { if (!IsDisposed) Location = new Point(_restingAt.X, (int)Math.Round(y0 + (_restingAt.Y - y0) * v)); }, () => _tw = null, Easings.OutCubic);
     }
 
     public void Dismiss() { _tw?.Cancel(); _tw = null; Visible = false; }

@@ -96,8 +96,10 @@ internal sealed class ThinScrollBar : Control
         if (!Anim.MotionEnabled) { SetFirst(_scrollTarget); _scrollTarget = int.MinValue; return; }
         double from = First; int to = _scrollTarget;
         _scrollTween?.Cancel();
-        _scrollTween = Anim.Run(170, v => SetFirst((int)Math.Round(from + (to - from) * v)),
-            () => { _scrollTween = null; _scrollTarget = int.MinValue; }, Easings.OutCubic);
+        // 150 ms on a curve that covers most of the distance early: the list has to answer the notch at
+        // once, or the whole app feels like it is catching up with the wheel. Same figure as the pages.
+        _scrollTween = Anim.Run(150, v => SetFirst((int)Math.Round(from + (to - from) * v)),
+            () => { _scrollTween = null; _scrollTarget = int.MinValue; }, Easings.OutQuint);
     }
 
     private (int Y, int H) Thumb()

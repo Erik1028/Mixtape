@@ -301,11 +301,11 @@ internal sealed class PhotoGridView : Panel
         if (_leaving is not null)
         {
             float from = _leaveT;
-            _leaveTw = Anim.Run(150, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+            _leaveTw = Anim.Run(120, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
                 () => { _leaveTw = null; _leaving = null; }, Easings.OutCubic);
         }
         if (t is not null)
-            _hoverTw = Anim.Run(170, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+            _hoverTw = Anim.Run(110, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutQuint);
     }
 
     private float LiftOf(Tile t) => ReferenceEquals(t, _hover) ? _hoverT : ReferenceEquals(t, _leaving) ? _leaveT : 0f;

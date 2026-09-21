@@ -73,9 +73,9 @@ internal class CardDialog : GlassDialog
         if (!_adopted) return;
         if (!Anim.MotionEnabled) { Opacity = 1; return; }
         int home = Top;
-        Top = home + 14;
-        Anim.Run(200, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(14 * (1 - v)); },
-            () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutCubic);
+        Top = home + 10;
+        Anim.Run(150, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(10 * (1 - v)); },
+            () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutQuint);
     }
 
     protected override void OnPaint(PaintEventArgs e)

@@ -143,12 +143,12 @@ internal sealed class BrowseGridView : Panel
         }
         _scrollTw?.Cancel();
         int from = _scroll;
-        _scrollTw = Anim.Run(260, t =>
+        _scrollTw = Anim.Run(150, t =>
         {
             if (IsDisposed) return;
             _scroll = (int)Math.Round(from + (v - from) * t);
             Invalidate(); Scrolled?.Invoke();
-        }, () => _scrollTw = null, Easings.OutCubic);
+        }, () => _scrollTw = null, Easings.OutQuint);
     }
 
     /// <summary>Hand the lift from one card to the next: the arriving card rises, the leaving one settles
@@ -162,11 +162,11 @@ internal sealed class BrowseGridView : Panel
         if (_leaving is not null)
         {
             float from = _leaveT;
-            _leaveTw = Anim.Run(150, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+            _leaveTw = Anim.Run(120, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
                 () => { _leaveTw = null; _leaving = null; }, Easings.OutCubic);
         }
         if (c is not null)
-            _hoverTw = Anim.Run(170, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+            _hoverTw = Anim.Run(110, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutQuint);
     }
 
     private float LiftOf(Card c) => ReferenceEquals(c, _hover) ? _hoverT : ReferenceEquals(c, _leaving) ? _leaveT : 0f;
