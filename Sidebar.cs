@@ -12,6 +12,10 @@ internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Video
 /// </summary>
 internal sealed class Sidebar : Panel
 {
+    private float _pillY = -1, _pillH;     // the active pill's live position, so it can slide between rows
+    private int _pillScroll;
+    private Tween? _pillTw;
+
     public event Action<SidebarRowKind, object?>? RowActivated;
     public event Action<SidebarRowKind, object?, Point>? RowRightClicked;
     public event Action<Point>? PlaylistAreaRightClicked; // right-click on empty space / the PLAYLISTS header
@@ -436,6 +440,28 @@ internal sealed class Sidebar : Panel
             {
                 var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, rh - 4);
                 bool hover = ReferenceEquals(row, _hover);
+                if (row.Active)
+                {
+                    // The "you are here" pill travels to its new row rather than blinking there. It only
+                    // animates when the rail itself did not move, so scrolling never drags it along.
+                    if (_pillY < 0 || _pillScroll != _scroll) { _pillY = pill.Y; _pillH = pill.Height; }
+                    else if (Math.Abs(_pillY - pill.Y) > 0.5 || Math.Abs(_pillH - pill.Height) > 0.5)
+                    {
+                        if (_pillTw is null)
+                        {
+                            float fromY = _pillY, fromH = _pillH;
+                            float toY = pill.Y, toH = pill.Height;
+                            _pillTw = Anim.Run(220, v =>
+                            {
+                                _pillY = (float)(fromY + (toY - fromY) * v);
+                                _pillH = (float)(fromH + (toH - fromH) * v);
+                                if (!IsDisposed) Invalidate();
+                            }, () => _pillTw = null, Easings.OutCubic);
+                        }
+                    }
+                    pill = new Rectangle(pill.X, (int)Math.Round(_pillY), pill.Width, (int)Math.Round(_pillH));
+                    _pillScroll = _scroll;
+                }
                 if (row.Active || hover)
                 {
                     // Active = translucent teal wash (a tinted pill, not a solid block);

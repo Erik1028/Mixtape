@@ -871,6 +871,28 @@ internal sealed class MainForm : Form, IMessageFilter
     /// Settings does, so any surface still holding a baked colour shows up.</summary>
     public void PreviewThemeSwitch(string variant) { _settings.ThemeVariant = variant; ApplyAllSettings(); }
     public void PreviewAccent(string accent) { _settings.Accent = accent; ApplyAllSettings(); }   // MIX_ACCENT=<preset name | #hex>: a runtime accent change
+    /// <summary>Render harness: draw the poster for the biggest playlist straight to a file.</summary>
+    public void PreviewPoster(string outPath)
+    {
+        var pl = _shownPlaylists.Where(x => _db is null || !ReferenceEquals(x, _db.Master)).OrderByDescending(x => x.TrackIds.Count).FirstOrDefault()
+                 ?? _db?.Master;
+        if (pl is null) return;
+        var tracks = pl.TrackIds.Select(id => _db?.FindByUniqueId(id)).Where(t => t is not null).Select(t => t!).ToList();
+        long ms = tracks.Sum(t => (long)t.LengthMs);
+        var covers = new List<Bitmap>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in tracks)
+        {
+            if (covers.Count == 4) break;
+            if (!seen.Add(AlbumKey(t))) continue;
+            string? path = t.LocalPath ?? (_device is not null ? t.ResolveFilePath(_device.MountRoot) : null);
+            if (ArtworkService.LoadSquare("post:" + ArtworkService.KeyFor(t), path, 560) is { } art) covers.Add(art);
+        }
+        using var bmp = Poster.Render(pl.Name, Loc.T("{0} · {1}", CountNoun(tracks.Count, "song"), FormatDur(ms)),
+            tracks.Select(t => new Poster.Song { Title = t.DisplayTitle, Artist = t.Artist ?? "" }).ToList(), covers, DateTime.Now.ToString("yyyy.MM.dd"));
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
     public void PreviewRemaining(bool on) => _nowPlaying.ShowRemaining = on;       // MIX_REMAINING=1: the card's total slot counts down
     /// <summary>Harness (MIX_RATE=0..5): show the deck's rating stars at that value.</summary>
     public void PreviewRating(int stars)
@@ -2460,6 +2482,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_statsView is not null) _statsView.Visible = stats;
         Control active = photos ? _photoView : device ? _deviceView : browse ? _browseView : stats ? _statsView : home && !empty ? _homeView : empty ? _emptyView! : _gridHost;
         active.SendToBack();
+
     }
 
     private void ShowCurrent()
@@ -4080,6 +4103,90 @@ internal sealed class MainForm : Form, IMessageFilter
 
     /// <summary>Open the cover picker for a local playlist, minting its stable id on first use so the choice persists
     /// across renames. Mirrors the iPod-playlist cover flow (<see cref="OnHeaderArtClicked"/> / the sidebar menu).</summary>
+    /// <summary>Scan the library's tags, show what drifted, and write back only what the user ticks.</summary>
+    private void OpenTagTidy()
+    {
+        if (_db is null || _lib is null || _device is not { Profile.CanWrite: true }) return;
+        var audio = _db.Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList();
+        var groups = TagTidy.Scan(audio);
+        using var dlg = new TagTidyDialog(groups);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var picked = dlg.Selected;
+        if (picked.Count == 0) return;
+        if (!ConfirmWriteOnce()) return;
+
+        int songs = 0;
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            foreach (var g in picked)
+            {
+                var edit = TagTidy.EditFor(g);
+                foreach (var t in g.Tracks) { _lib.EditTrack(t.UniqueId, edit); songs++; }
+            }
+            _lib.Save();
+            foreach (var g in picked)   // keep the loaded objects in step with what was written
+                foreach (var t in g.Tracks)
+                    switch (g.What)
+                    {
+                        case TagTidy.Field.Title: t.Title = g.To; break;
+                        case TagTidy.Field.Artist: t.Artist = g.To; break;
+                        case TagTidy.Field.Album: t.Album = g.To; break;
+                        case TagTidy.Field.AlbumArtist: t.AlbumArtist = g.To; break;
+                        default: t.Genre = g.To; break;
+                    }
+        }
+        catch (Exception ex)
+        {
+            MessageDialog.Show(this, Loc.T("Saving failed (a backup was kept as iTunesDB.bak):") + "\n\n" + ex.Message, "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        finally { Cursor = Cursors.Default; }
+        BuildSidebar();
+        ShowCurrent();
+        SetStatus(Loc.T("Tidied {0} song(s).", songs));
+    }
+
+    /// <summary>A playlist as a picture: the covers, the name and the songs, saved as a PNG to send to someone.</summary>
+    private void SavePoster(string name, List<Track> tracks)
+    {
+        if (tracks.Count == 0) { SetStatus(Loc.T("That playlist has no songs to draw.")); return; }
+        string title = name.Length == 0 ? Loc.T("Untitled") : name;
+        long ms = tracks.Sum(t => (long)t.LengthMs);
+        var songs = tracks.Select(t => new Poster.Song { Title = t.DisplayTitle, Artist = t.Artist ?? "" }).ToList();
+
+        // One cover per album, in playlist order: four of them make the quilt, one makes the single cover.
+        var covers = new List<Bitmap>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in tracks)
+        {
+            if (covers.Count == 4) break;
+            string key = AlbumKey(t);
+            if (!seen.Add(key)) continue;
+            string? path = t.LocalPath ?? (_device is not null ? t.ResolveFilePath(_device.MountRoot) : null);
+            if (ArtworkService.LoadSquare("post:" + ArtworkService.KeyFor(t), path, 560) is { } art) covers.Add(art);
+        }
+
+        using var dlg = new SaveFileDialog
+        {
+            Filter = "PNG (*.png)|*.png",
+            FileName = string.Concat(title.Split(Path.GetInvalidFileNameChars())) + ".png",
+            Title = Loc.T("Save as image…"),
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            using var bmp = Poster.Render(title, Loc.T("{0} · {1}", CountNoun(tracks.Count, "song"), FormatDur(ms)), songs, covers,
+                DateTime.Now.ToString("yyyy.MM.dd"));
+            bmp.Save(dlg.FileName, System.Drawing.Imaging.ImageFormat.Png);
+            SetStatus(Loc.T("Saved “{0}”.", Path.GetFileName(dlg.FileName)));
+        }
+        catch (Exception ex)
+        {
+            MessageDialog.Show(this, Loc.T("Couldn't save the image:\n\n{0}", ex.Message), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private void ChooseLocalCover(LocalPlaylistData lp)
     {
         if (string.IsNullOrEmpty(lp.Id)) { lp.Id = Guid.NewGuid().ToString("N"); _settings.Save(); }
@@ -4279,6 +4386,13 @@ internal sealed class MainForm : Form, IMessageFilter
             artBtn.Click += (_, _) => RebuildArtwork(dev);
             options.AddRow(Loc.T("Album artwork"), Loc.T("Write cover art onto every song already on the iPod (from each file's embedded cover). Handy after copying songs from an older version."), artBtn, 64);
         }
+        var notesBtn = new ThemedButton { Text = Loc.T("Notes…"), Pill = true, Width = 120, Height = 30 };
+        notesBtn.Click += (_, _) => { using var d = new NotesDialog(dev.MountRoot); d.ShowDialog(this); };
+        // Plain files at the drive's root, not the music database - so this works even on an iPod that is read-only for music.
+        options.AddRow(Loc.T("Notes"), Loc.T("Put text on the iPod: it shows notes under Extras → Notes. Works even on a read-only iPod."), notesBtn, 64);
+        var tidyBtn = new ThemedButton { Text = Loc.T("Tidy tags…"), Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
+        tidyBtn.Click += (_, _) => OpenTagTidy();
+        options.AddRow(Loc.T("Tags"), Loc.T("Find stray spaces and the same artist or album written several ways — then fix the ones you tick."), tidyBtn, 64);
         var docBtn = new ThemedButton { Text = Loc.T("Check library"), Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
         docBtn.Click += (_, _) => OpenLibraryDoctor();
         options.AddRow(Loc.T("Library Doctor"), Loc.T("Scan for missing files, duplicate songs and stray files left on the iPod — then fix them safely in one click."), docBtn, 64);
@@ -6214,6 +6328,10 @@ internal sealed class MainForm : Form, IMessageFilter
         // Choosing a cover is a local preference, so offer it even on read-only iPods.
         string? ck = CoverKeyFor(SidebarRowKind.Playlist, pl);
         if (ck is not null) { AddCoverItem(m, ck, Loc.T("Cover for “{0}”", pl.Name)); m.Items.Add(new ToolStripSeparator()); }
+        var poster = new ToolStripMenuItem(Loc.T("Save as image…"));   // drawing only, so it is offered on read-only iPods too
+        poster.Click += (_, _) => SavePoster(pl.Name, pl.TrackIds.Select(id => _db?.FindByUniqueId(id)).Where(t => t is not null).Select(t => t!).ToList());
+        m.Items.Add(poster);
+        m.Items.Add(new ToolStripSeparator());
 
         if (_lib is null || _device is null || !_device.Profile.CanWrite)
         {

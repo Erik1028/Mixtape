@@ -57,6 +57,7 @@ internal sealed class StatsView : Panel
         _sections.Clear(); _sections.AddRange(sections);
         _note = note;
         _scroll = 0; _hover = null;
+        BeginEnter();   // the bars fill in instead of appearing already full
         Invalidate();
     }
 
@@ -100,6 +101,21 @@ internal sealed class StatsView : Panel
         if (e.Button != MouseButtons.Left || e.X < Width - BarZone || _contentH <= Height) return;
         _barDrag = true; _dragY0 = e.Y; _dragScroll0 = _scroll;
         Invalidate();
+    }
+
+
+    // The page's entrance: content rises a little and fades up from the background. One tween, applied in
+    // OnPaint, so it costs nothing when it is not running and needs no per-control opacity.
+    private double _enter = 1;
+    private Tween? _enterTw;
+    /// <summary>Play the entrance. Called when the page is given its content, so it runs just behind the
+    /// shell's own cross-dissolve instead of fighting it.</summary>
+    private void BeginEnter()
+    {
+        _enterTw?.Cancel();
+        if (!Anim.MotionEnabled) { _enter = 1; Invalidate(); return; }
+        _enter = 0;
+        _enterTw = Anim.Run(300, v => { _enter = v; if (!IsDisposed) Invalidate(); }, () => _enterTw = null, Easings.OutCubic);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -187,6 +203,8 @@ internal sealed class StatsView : Panel
     /// <summary>Draws one ranked list and returns its height (the caller decides only x and width).</summary>
     private int DrawSection(Graphics g, Rectangle r, Section sec)
     {
+        // Each bar draws itself to its share of the entrance, a little later than the one above it.
+        double grow = _enter;
         int h = LabelH + sec.Bars.Count * RowH + 14;
         var card = new Rectangle(r.X, r.Y, r.Width, h);
         using (var b = new SolidBrush(Theme.PanelBg))
@@ -220,7 +238,8 @@ internal sealed class StatsView : Panel
             TextRenderer.DrawText(g, b.Name, _fName, new Rectangle(card.X + 16, row.Y, nameW, RowH), hot ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
-            int bw = (int)Math.Round(barW * Math.Clamp(b.Value / max, 0, 1));
+            double step = Math.Clamp((grow - i * 0.045) / 0.55, 0, 1);
+            int bw = (int)Math.Round(barW * Math.Clamp(b.Value / max, 0, 1) * Easings.OutCubic(step));
             var track = new Rectangle(barX, row.Y + RowH / 2 - 4, barW, 8);
             using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.35)))
             using (var tp = Theme.RoundedRect(track, 4)) g.FillPath(tb, tp);

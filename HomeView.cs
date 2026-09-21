@@ -156,6 +156,7 @@ internal sealed class HomeView : Panel
     protected override void OnResize(EventArgs e) { base.OnResize(e); _scroll = Math.Min(_scroll, MaxScroll()); Invalidate(); }
 
     // ---- paint (the layout is computed here, once per frame — one source of truth for drawing and hit-testing) ----
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
