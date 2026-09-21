@@ -115,6 +115,35 @@ internal static class TagTidy
         return found.OrderByDescending(g => g.Tracks.Count).ThenBy(g => g.From, StringComparer.CurrentCulture).ToList();
     }
 
+    /// <summary>What the picked groups actually write: ONE value per song and field. A song can be in both a
+    /// spacing group and a spelling group, and two writes to one field would let the later undo the earlier;
+    /// spacing is laid down first and the spelling target (already clean) wins.</summary>
+    public static Dictionary<(uint Id, Field F), (Track T, string Value)> Plan(IEnumerable<Group> picked)
+    {
+        var plan = new Dictionary<(uint, Field), (Track, string)>();
+        var all = picked.ToList();
+        foreach (var g in all.Where(x => x.Spacing).Concat(all.Where(x => !x.Spacing)))
+            foreach (var t in g.Tracks)
+                plan[(t.UniqueId, g.What)] = (t, g.To);
+        return plan;
+    }
+
+    /// <summary>Copy a planned value into the loaded Track, so the UI shows what was written.</summary>
+    public static void ApplyTo(Track t, Field f, string value)
+    {
+        switch (f)
+        {
+            case Field.Title: t.Title = value; break;
+            case Field.Artist: t.Artist = value; break;
+            case Field.Album: t.Album = value; break;
+            case Field.AlbumArtist: t.AlbumArtist = value; break;
+            default: t.Genre = value; break;
+        }
+    }
+
+    /// <summary>The value a planned edit should end up as, for a verification pass.</summary>
+    public static string Read(Track t, Field f) => Get(t, f);
+
     public static string Label(Field f) => f switch
     {
         Field.Title => Loc.T("Title"),

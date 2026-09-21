@@ -37,6 +37,16 @@ internal static class Tip
             try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
         }
 
+        /// <summary>Re-read the palette. The window is created once and kept, so a theme change would
+        /// otherwise leave the tooltip painted in the old colours until the app restarts.</summary>
+        public void Restyle()
+        {
+            BackColor = Theme.Blend(Theme.PanelBg, Color.White, 0.08);
+            if (IsHandleCreated)
+                try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
+            Invalidate();
+        }
+
         public Size Measure()
         {
             var s = TextRenderer.MeasureText(Caption, _f, new Size(420, 100), TextFormatFlags.NoPrefix);
@@ -80,6 +90,7 @@ internal static class Tip
         try
         {
             _form ??= new TipForm();
+            _form.Restyle();   // the chip outlives a theme change: its colours are re-read every time it appears
             _form.Caption = _text;
             var sz = _form.Measure();
             var scr = Screen.FromPoint(new Point(_anchor.X, _anchor.Y)).WorkingArea;
