@@ -40,6 +40,11 @@ internal sealed class HeaderPanel : Panel
     public bool ArtClickable { get; set; }
 
     private string _kicker = "";
+    // The title block slides up into place when the page changes, the way the cover already dissolves. It is a
+    // SLIDE and not a fade because GDI's TextRenderer ignores alpha, and swapping to GDI+ text for 200 ms would
+    // change the glyph shapes mid-move.
+    private float _textT = 1;
+    private Tween? _textTw;
     private string _title = "";
     private string _subtitle = "";
     private int _seed;
@@ -142,9 +147,20 @@ internal sealed class HeaderPanel : Panel
 
     private Rectangle ArtRect => new(Pad, (Height - ArtSize) / 2, ArtSize, ArtSize);
 
+    /// <summary>A new page's title arrives from just below instead of appearing already there.</summary>
+    private void SlideText()
+    {
+        _textTw?.Cancel();
+        if (!Anim.MotionEnabled) { _textT = 1; Invalidate(); return; }
+        _textT = 0;
+        _textTw = Anim.Run(220, v => { if (IsDisposed) return; _textT = (float)v; Invalidate(); }, () => _textTw = null, Easings.OutCubic);
+    }
+
     public void SetInfo(string kicker, string title, string subtitle, int seed, bool keepArt = false)
     {
+        bool moved = title != _title || subtitle != _subtitle;
         _kicker = kicker; _title = title; _subtitle = subtitle; _seed = seed;
+        if (moved) SlideText();
         // keepArt: hold the CURRENT cover on screen instead of reverting to the seed gradient — the caller then
         // cross-dissolves straight to the new cover (or a null-fallback gradient), so switching playlists fades
         // cover→cover with no ♪-placeholder flash in between. Without it, revert to the gradient (disposes prior art).
@@ -316,12 +332,13 @@ internal sealed class HeaderPanel : Panel
         Size badgeText = hasBadge ? TextRenderer.MeasureText(g, _badge, badgeFont) : Size.Empty;
         const int chipPadX = 9, chipPadY = 2;
         int badgeH = hasBadge ? badgeText.Height + chipPadY * 2 : 0;
-        int ty = 7;
+        int slide = (int)Math.Round((1 - _textT) * 9);   // the block rises the last 9 px into place
+        int ty = 7 + slide;
 
         TextRenderer.DrawText(g, _title, titleFont,
             new Rectangle(tx, ty, rightW, th), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        ty = 31;   // line 2, the meta line
+        ty = 31 + slide;   // line 2, the meta line
 
         // "185 songs · 11 hr" → the leading count owns a bold/bright run; the "· 11 hr" tail stays quiet. The status
         // line (folder count, a drop hint, transient feedback) is a further quiet run on the same line: the bar has

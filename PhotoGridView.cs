@@ -21,7 +21,9 @@ internal sealed class PhotoGridView : Panel
     // Cached font for the empty-state line. Theme.UiFont allocates a fresh GDI Font per call, so this is held once.
     // (The per-tile placeholder is a vector photo glyph — Theme.DrawPhoto — so it needs no font handle.)
     private readonly Font _fEmpty = Theme.UiFont(11f);
-    private Tile? _hover;
+    private Tile? _hover, _leaving;     // the tile under the pointer, and the one it just left
+    private float _hoverT, _leaveT;
+    private Tween? _hoverTw, _leaveTw;
     private int _scroll;
     private int _lastClicked = -1;
     private string _empty = "No photos yet.";
@@ -55,7 +57,7 @@ internal sealed class PhotoGridView : Panel
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
         MouseMove += OnMouseMoveInternal;
-        MouseLeave += (_, _) => { _hover = null; if (_barHover) _barHover = false; Invalidate(); };
+        MouseLeave += (_, _) => { SetHover(null); if (_barHover) _barHover = false; Invalidate(); };
         MouseWheel += (_, e) => SetScroll(_scroll - Math.Sign(e.Delta) * 60);
         MouseDown += OnMouseDown;
         MouseUp += (_, _) => { if (_barDragging) { _barDragging = false; Invalidate(); } };
@@ -176,7 +178,7 @@ internal sealed class PhotoGridView : Panel
         bool overBar = Bar().Max > 0 && e.X >= Width - BarZone;
         if (overBar != _barHover) { _barHover = overBar; Invalidate(); }
         var ht = HitTest(e.Location);
-        if (!ReferenceEquals(ht, _hover)) { _hover = ht; Invalidate(); }
+        if (!ReferenceEquals(ht, _hover)) SetHover(ht);
     }
 
     private void OnMouseDown(object? sender, MouseEventArgs e)
@@ -289,13 +291,44 @@ internal sealed class PhotoGridView : Panel
         return bmp;
     }
 
+    /// <summary>The same hand-off the album grid uses, so a photo behaves like a cover.</summary>
+    private void SetHover(Tile? t)
+    {
+        _leaving = _hover; _leaveT = _hoverT;
+        _hover = t; _hoverT = 0;
+        _hoverTw?.Cancel(); _leaveTw?.Cancel();
+        if (!Anim.MotionEnabled) { _hoverT = t is null ? 0 : 1; _leaveT = 0; _leaving = null; Invalidate(); return; }
+        if (_leaving is not null)
+        {
+            float from = _leaveT;
+            _leaveTw = Anim.Run(150, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+                () => { _leaveTw = null; _leaving = null; }, Easings.OutCubic);
+        }
+        if (t is not null)
+            _hoverTw = Anim.Run(170, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+    }
+
+    private float LiftOf(Tile t) => ReferenceEquals(t, _hover) ? _hoverT : ReferenceEquals(t, _leaving) ? _leaveT : 0f;
+
     private void DrawTile(Graphics g, Rectangle rect, Tile t)
     {
-        bool hover = ReferenceEquals(t, _hover);
+        float lift = LiftOf(t);
+        int grow = (int)Math.Round(5 * lift);
+        if (grow > 0) rect = new Rectangle(rect.X - grow, rect.Y - grow, rect.Width + 2 * grow, rect.Height + 2 * grow);
+        if (lift > 0.01f)
+        {
+            for (int i = 3; i >= 1; i--)
+            {
+                using var sh = new SolidBrush(Color.FromArgb((int)(16 * lift), 0, 0, 0));
+                using var sp = Theme.RoundedRect(new RectangleF(rect.X - i, rect.Y + i + 1, rect.Width + 2 * i, rect.Height + i), 10 + i);
+                g.FillPath(sh, sp);
+            }
+        }
+        bool hover = lift > 0.5f;
         var img = new Rectangle(rect.X, rect.Y, rect.Width, rect.Height);
         using (var path = Theme.RoundedRect(img, 10))
         {
-            using (var bg = new SolidBrush(hover ? Theme.RowHover : Theme.PanelBg)) g.FillPath(bg, path);
+            using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Theme.RowHover, lift))) g.FillPath(bg, path);
             if (t.Thumb is not null)
             {
                 if (t.Fade < 1f)   // placeholder glyph shows through while the freshly-decoded thumb dissolves in
