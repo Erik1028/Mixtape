@@ -151,6 +151,7 @@ internal sealed class BrowseGridView : Panel
 
     protected override void OnResize(EventArgs e) { base.OnResize(e); _scroll = Math.Min(_scroll, MaxScroll()); Invalidate(); }
 
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;

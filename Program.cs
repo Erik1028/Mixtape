@@ -1245,6 +1245,9 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Loc.Lang = Loc.Resolve(Environment.GetEnvironmentVariable("MIX_LANG"));   // render harness: MIX_LANG=hu to preview Hungarian
         AppSettings.Frozen = true;   // a preview never writes the user's settings.json
+        // A render is a still: every tween jumps to its final frame, so a capture can never catch a bar
+        // halfway up or a card halfway faded. MIX_MOTION=1 keeps motion on for deliberate mid-animation shots.
+        if (Environment.GetEnvironmentVariable("MIX_MOTION") != "1") Anim.MotionEnabled = false;
         var rset = AppSettings.Load();                  // dialogs rendered on their own also deserve the live palette
         Theme.SetThemeVariant(rset.ThemeVariant);
         Theme.SetAccent(rset.Accent);
@@ -1461,7 +1464,7 @@ internal static class Program
         }
 
         // The small modal windows that now wear the app's own card chrome (title strip + round close).
-        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress")
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy")
         {
             Form dlg = view switch
             {
@@ -1472,6 +1475,9 @@ internal static class Program
                     new() { Title = "Higher Ground", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, Rating = 80 },
                     new() { Title = "Rakpart", Artist = "Azahriah", Album = "memento", Genre = "Pop", Year = 2023, Rating = 100 },
                 }, null),
+                "notes" => new NotesDialog(Path.GetDirectoryName(dbPath)!),
+                "tagtidy" => new TagTidyDialog(TagTidy.Scan(ITunesDbReader.Read(File.ReadAllBytes(dbPath)).Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList())),
+                "noteeditor" => NotesDialog.PreviewEditor(),
                 _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }),
             };
             bool cardLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow = the real window
@@ -1846,6 +1852,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_COMPACT") is { } cmp) { Application.DoEvents(); form.PreviewRows(cmp != "0"); }   // row density, in memory only
         if (Environment.GetEnvironmentVariable("MIX_THEME_SWITCH") is { Length: > 0 } tv) { Application.DoEvents(); form.PreviewThemeSwitch(tv); }   // a runtime palette change (baked-colour check)
         if (Environment.GetEnvironmentVariable("MIX_ACCENT") is { Length: > 0 } acc) { Application.DoEvents(); form.PreviewAccent(acc); }   // a runtime accent change (preset name or #hex)
+        if (view == "poster") { Application.DoEvents(); form.PreviewPoster(outPng); form.Dispose(); return; }   // a playlist drawn as a picture
         if (Environment.GetEnvironmentVariable("MIX_REMAINING") == "1") form.PreviewRemaining(true);   // the card's total slot counts down
         if (Environment.GetEnvironmentVariable("MIX_RATE") is { Length: > 0 } rt && int.TryParse(rt, out int rtv)) { Application.DoEvents(); form.PreviewRating(rtv); }   // the deck's rating stars
         if (Environment.GetEnvironmentVariable("MIX_SELECT") is { Length: > 0 } selSpec && selSpec.Split('-') is { Length: 2 } sp2
