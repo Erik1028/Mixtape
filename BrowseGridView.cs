@@ -63,7 +63,9 @@ internal sealed class BrowseGridView : Panel
         foreach (var (key, title, sub) in items)
             _cards.Add(new Card { Key = key, Title = title, Subtitle = sub, Seed = Theme.StableHash(title + sub), Initials = Theme.Initials(title, sub) });
         _empty = emptyText;
-        _scroll = 0;
+        _scroll = 0; _scrollTarget = 0; _scrollTw?.Cancel(); _scrollTw = null;
+        _hoverTw?.Cancel(); _leaveTw?.Cancel(); _hoverTw = _leaveTw = null;
+        _hover = _leaving = null; _hoverT = _leaveT = 0;
         Invalidate();
     }
 

@@ -56,7 +56,7 @@ internal sealed class StatsView : Panel
         _stats.Clear(); _stats.AddRange(stats);
         _sections.Clear(); _sections.AddRange(sections);
         _note = note;
-        _scroll = 0; _hover = null;
+        _scroll = 0; _scrollTarget = 0; _scrollTw?.Cancel(); _scrollTw = null; _hover = null;
         BeginEnter();   // the bars fill in instead of appearing already full
         Invalidate();
     }

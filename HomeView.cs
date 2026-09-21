@@ -81,7 +81,9 @@ internal sealed class HomeView : Panel
         _listLabel = listLabel;
         _resume = resume;
         _resumeBtn.Visible = resume is not null;
-        _scroll = 0; _hover = null;
+        _scroll = 0; _scrollTarget = 0; _scrollTw?.Cancel(); _scrollTw = null;
+        _hoverTw?.Cancel(); _leaveTw?.Cancel(); _hoverTw = _leaveTw = null;
+        _hover = _leaving = null; _hoverT = _leaveT = 0;
         Invalidate();
     }
 
