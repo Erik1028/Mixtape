@@ -37,7 +37,6 @@ internal sealed class WallpaperPickerDialog : CardDialog
         AcceptButton = _add; CancelButton = cancel;
         UpdateAdd();
         AdoptCard();
-        if (Anim.MotionEnabled) Opacity = 0;
     }
 
     private void UpdateAdd()
@@ -47,14 +46,6 @@ internal sealed class WallpaperPickerDialog : CardDialog
         _add.Enabled = n > 0;
     }
 
-    protected override void OnShown(EventArgs e)
-    {
-        base.OnShown(e);
-        if (!Anim.MotionEnabled) { Opacity = 1; return; }
-        int home = Top; Top = home + 10;
-        Anim.Run(190, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(10 * (1 - v)); },
-            () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutCubic);
-    }
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);

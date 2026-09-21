@@ -40,7 +40,7 @@ internal sealed class StatsView : Panel
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         MouseMove += OnMove;
         MouseLeave += (_, _) => { if (_hover is not null || _barHover) { _hover = null; _barHover = false; Cursor = Cursors.Default; Invalidate(); } };
-        MouseWheel += (_, e) => SetScroll(_scroll - Math.Sign(e.Delta) * 60);
+        MouseWheel += (_, e) => Glide(e.Delta);
         MouseDown += OnDown;
         MouseUp += (_, _) => { if (_barDrag) { _barDrag = false; Invalidate(); } };
         MouseClick += (_, e) =>
@@ -63,13 +63,27 @@ internal sealed class StatsView : Panel
 
     public bool IsEmpty => _stats.Count == 0 && _sections.Count == 0;
 
-    private void SetScroll(int v)
+    // The wheel moves a TARGET and the drawn offset chases it, so a fast spin adds up instead of restarting.
+    private int _scrollTarget;
+    private Tween? _scrollTw;
+
+    private void Glide(int delta) => SetScroll(_scrollTarget - Math.Sign(delta) * Math.Max(40, Height / 6), animate: true);
+
+    private void SetScroll(int v, bool animate = false)
     {
         int max = Math.Max(0, _contentH - Height);
         v = Math.Clamp(v, 0, max);
-        if (v == _scroll) return;
-        _scroll = v;
-        Invalidate();
+        _scrollTarget = v;
+        if (!animate || !Anim.MotionEnabled || v == _scroll)
+        {
+            _scrollTw?.Cancel(); _scrollTw = null;
+            if (v != _scroll) { _scroll = v; Invalidate(); }
+            return;
+        }
+        _scrollTw?.Cancel();
+        int from = _scroll;
+        _scrollTw = Anim.Run(260, t => { if (IsDisposed) return; _scroll = (int)Math.Round(from + (v - from) * t); Invalidate(); },
+            () => _scrollTw = null, Easings.OutCubic);
     }
 
     private object? HitTest(Point p)
@@ -144,7 +158,9 @@ internal sealed class StatsView : Panel
             for (int i = 0; i < _stats.Count; i++)
             {
                 int cx = Pad + i % cols * (cw + Gap), cy = y + i / cols * (StatH + Gap);
-                DrawStat(g, new Rectangle(cx, cy, cw, StatH), _stats[i]);
+                // Each figure settles a beat after the one before it, left to right.
+                double step = Easings.OutCubic(Math.Clamp((_enter - i * 0.07) / 0.6, 0, 1));
+                DrawStat(g, new Rectangle(cx, cy + (int)Math.Round((1 - step) * 14), cw, StatH), _stats[i]);
             }
             y += rows * (StatH + Gap) - Gap + SectionGap;
         }

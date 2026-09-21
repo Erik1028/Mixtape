@@ -32,7 +32,9 @@ internal sealed class HomeView : Panel
     private readonly ThemedButton _resumeBtn = new() { Primary = true, Height = 30, Text = Loc.T("Continue"), Visible = false };
 
     private readonly List<(Rectangle Rect, object Target)> _hit = new();
-    private object? _hover;
+    private object? _hover, _leaving;    // what the pointer is on, and what it just left
+    private float _hoverT, _leaveT;      // the lift each of them still has
+    private Tween? _hoverTw, _leaveTw;
     private int _scroll;
     private bool _barDragging, _barHover;
     private int _barDragStartY, _barDragStartScroll;
@@ -53,8 +55,8 @@ internal sealed class HomeView : Panel
         Controls.Add(_resumeBtn);
         _resumeBtn.Click += (_, _) => { if (_resume is not null) ResumeRequested?.Invoke(_resume); };
         MouseMove += OnMove;
-        MouseLeave += (_, _) => { _hover = null; if (_barHover) _barHover = false; Invalidate(); };
-        MouseWheel += (_, e) => SetScroll(_scroll - Math.Sign(e.Delta) * 60);
+        MouseLeave += (_, _) => { SetHover(null); if (_barHover) _barHover = false; Invalidate(); };
+        MouseWheel += (_, e) => Glide(e.Delta);
         MouseDown += OnDown;
         MouseUp += (_, _) => { if (_barDragging) { _barDragging = false; Invalidate(); } };
         MouseClick += (_, e) =>
@@ -112,11 +114,62 @@ internal sealed class HomeView : Panel
     private int Cols => Math.Clamp((AvailW + Gap) / (TargetCover + Gap), MinCols, MaxCols);
     private int CoverW => Math.Clamp((AvailW - (Cols - 1) * Gap) / Cols, 64, MaxCover);
     private int TileH => CoverW + TextH;
+
+    // ---- wheel scrolling that glides ----
+    // The song list has eased its wheel since the redesign; these pages jumped a notch at a time, which is
+    // the roughness you feel most because you feel it constantly. A notch now moves the TARGET (so spinning
+    // fast adds up instead of restarting) and the drawn offset chases it.
+    private int _scrollTarget;
+    private Tween? _scrollTw;
+
+    private void Glide(int delta)
+    {
+        int step = Math.Max(40, Height / 6);
+        SetScroll(_scrollTarget - Math.Sign(delta) * step, animate: true);
+    }
+
+    /// <summary>Hand the lift from one cover to the next: the arriving one rises, the leaving one settles.</summary>
+    private void SetHover(object? h)
+    {
+        _leaving = _hover; _leaveT = _hoverT;
+        _hover = h; _hoverT = 0;
+        _hoverTw?.Cancel(); _leaveTw?.Cancel();
+        if (!Anim.MotionEnabled) { _hoverT = h is null ? 0 : 1; _leaveT = 0; _leaving = null; Invalidate(); return; }
+        if (_leaving is not null)
+        {
+            float from = _leaveT;
+            _leaveTw = Anim.Run(150, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+                () => { _leaveTw = null; _leaving = null; }, Easings.OutCubic);
+        }
+        if (h is not null)
+            _hoverTw = Anim.Run(170, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutCubic);
+    }
+
+    private float LiftOf(object o) => ReferenceEquals(o, _hover) ? _hoverT : ReferenceEquals(o, _leaving) ? _leaveT : 0f;
+
     private int MaxScroll() => Math.Max(0, _contentH - Height);
     private bool TwoColumns => AvailW >= 680;
 
     private object? HitTest(Point p) { foreach (var (rect, target) in _hit) if (rect.Contains(p)) return target; return null; }
-    private void SetScroll(int v) { v = Math.Max(0, Math.Min(MaxScroll(), v)); if (v != _scroll) { _scroll = v; Invalidate(); Scrolled?.Invoke(); } }
+    private void SetScroll(int v, bool animate = false)
+    {
+        v = Math.Max(0, Math.Min(MaxScroll(), v));
+        _scrollTarget = v;
+        if (!animate || !Anim.MotionEnabled || v == _scroll)
+        {
+            _scrollTw?.Cancel(); _scrollTw = null;
+            if (v != _scroll) { _scroll = v; Invalidate(); Scrolled?.Invoke(); }
+            return;
+        }
+        _scrollTw?.Cancel();
+        int from = _scroll;
+        _scrollTw = Anim.Run(260, t =>
+        {
+            if (IsDisposed) return;
+            _scroll = (int)Math.Round(from + (v - from) * t);
+            Invalidate(); Scrolled?.Invoke();
+        }, () => _scrollTw = null, Easings.OutCubic);
+    }
 
     private (int Max, int BarH, int BarY) Bar()
     {
@@ -139,7 +192,7 @@ internal sealed class HomeView : Panel
         if (overBar != _barHover) { _barHover = overBar; Invalidate(); }
         var h = overBar ? null : HitTest(e.Location);
         Cursor = h is not null ? Cursors.Hand : Cursors.Default;
-        if (!ReferenceEquals(h, _hover)) { _hover = h; Invalidate(); }
+        if (!ReferenceEquals(h, _hover)) SetHover(h);
     }
 
     private void OnDown(object? s, MouseEventArgs e)
@@ -238,9 +291,19 @@ internal sealed class HomeView : Panel
 
     private void DrawTile(Graphics g, int x, int y, int cw, Tile t)
     {
-        var cover = new Rectangle(x, y, cw, cw);
-        int cr = (int)Math.Round(cw * Theme.TileFrac);
-        bool hover = ReferenceEquals(t, _hover);
+        float lift = LiftOf(t);
+        int grow = (int)Math.Round(5 * lift);
+        var cover = new Rectangle(x - grow, y - grow, cw + 2 * grow, cw + 2 * grow);
+        int cr = (int)Math.Round(cover.Width * Theme.TileFrac);
+        if (lift > 0.01f)   // the same ground shadow the album grid uses, so a cover behaves the same everywhere
+        {
+            for (int i = 3; i >= 1; i--)
+            {
+                using var sh = new SolidBrush(Color.FromArgb((int)(16 * lift), 0, 0, 0));
+                using var sp = Theme.RoundedRect(new RectangleF(cover.X - i, cover.Y + i + 1, cover.Width + 2 * i, cover.Height + i), cr + i);
+                g.FillPath(sh, sp);
+            }
+        }
         using (var path = Theme.RoundedRect(cover, cr))
         {
             using var clip = g.Clip; g.SetClip(path, CombineMode.Intersect);
@@ -254,7 +317,7 @@ internal sealed class HomeView : Panel
             else g.DrawImage(art, cover);
             g.Clip = clip;
         }
-        if (hover) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255)); g.FillPath(hb, hp); }
+        if (lift > 0.01f) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb((int)(36 * lift), 255, 255, 255)); g.FillPath(hb, hp); }
         using (var bp = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.08))) { using var p2 = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cr); g.DrawPath(bp, p2); }
         TextRenderer.DrawText(g, t.Title, _fTitle, new Rectangle(x, y + cw + 6, cw, 18), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         TextRenderer.DrawText(g, t.Subtitle, _fSub, new Rectangle(x, y + cw + 24, cw, 16), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);

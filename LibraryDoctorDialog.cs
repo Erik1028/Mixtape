@@ -32,7 +32,6 @@ internal sealed class LibraryDoctorDialog : CardDialog
         ClientSize = new Size(W, 240);
         Build();
         AdoptCard();
-        if (Anim.MotionEnabled) Opacity = 0;   // fade up in OnShown (matches Settings)
     }
 
     private void Build()
@@ -188,19 +187,6 @@ internal sealed class LibraryDoctorDialog : CardDialog
         return $"{bytes} B";
     }
 
-    protected override void OnShown(EventArgs e)
-    {
-        base.OnShown(e);
-        if (!Anim.MotionEnabled) { Opacity = 1; return; }
-        int home = Top;
-        Top = home + 16;
-        Anim.Run(190, v =>
-        {
-            if (IsDisposed) return;
-            Opacity = v;
-            Top = home + (int)Math.Round(16 * (1 - v));
-        }, () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutCubic);
-    }
 
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);

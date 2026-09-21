@@ -40,6 +40,7 @@ internal class CardDialog : GlassDialog
         ResumeLayout(true);
         foreach (var (c, at) in home) c.Location = new Point(at.X, at.Y + TitleH);
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        if (Anim.MotionEnabled) Opacity = 0;   // OnShown fades it up
         MouseDown += OnChromeDown;
         MouseMove += (_, e) => SetCloseHover(ShowClose && CloseRect.Contains(e.Location));
         MouseLeave += (_, _) => SetCloseHover(false);
@@ -62,6 +63,19 @@ internal class CardDialog : GlassDialog
     {
         base.OnHandleCreated(e);   // dark frame + DWMWCP_ROUND + the caption colour (GlassDialog)
         try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }   // a subtle border, like MessageDialog
+    }
+
+    /// <summary>Every card dialog arrives the same way: a short rise and fade, the motion Settings and the
+    /// Library Doctor already had. Subclasses do not repeat it; <see cref="AdoptCard"/> arms it.</summary>
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (!_adopted) return;
+        if (!Anim.MotionEnabled) { Opacity = 1; return; }
+        int home = Top;
+        Top = home + 14;
+        Anim.Run(200, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(14 * (1 - v)); },
+            () => { if (!IsDisposed) { Opacity = 1; Top = home; } }, Easings.OutCubic);
     }
 
     protected override void OnPaint(PaintEventArgs e)
