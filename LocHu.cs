@@ -351,6 +351,21 @@ internal static partial class LocHu
         ["Mixtape is still writing to the iPod. Please wait for it to finish before closing."] =
             "A Mixtape még ír az iPodra. Várd meg, amíg befejezi, mielőtt bezárod.",
         ["Close anyway"] = "Bezárás így is",
+        // identifying a file, and the PC's own play counts
+        ["Identify song"] = "Dal felismerése",
+        ["Identify…"] = "Felismerés…",
+        ["Write tags"] = "Címkék beírása",
+        ["No match"] = "Nincs találat",
+        ["(no album)"] = "(nincs album)",
+        ["{0} long. The closest match by length is picked; only the title, artist and album are written."] = "{0} hosszú. A hosszban legközelebbi találat van kiválasztva; csak a cím, az előadó és az album íródik be.",
+        ["Nothing came back for this name. Renaming the file closer to the song's title usually helps."] = "Erre a névre nem jött találat. Általában segít, ha a fájlnév közelebb van a dal címéhez.",
+        ["Looking up „{0}”…"] = "„{0}” keresése…",
+        ["Mixtape is playing this song. Stop it and write the tags?"] = "A Mixtape épp ezt a dalt játssza. Megállítsam, és beírjam a címkéket?",
+        ["Couldn't write the tags:"] = "Nem sikerült a címkék írása:",
+        ["Tagged as „{0} — {1}”."] = "Felismerve: „{0} — {1}”.",
+        ["on your PC"] = "a gépeden",
+        ["on the iPod"] = "az iPodon",
+        ["{0} · {1} plays · {2}"] = "{0} · {1} lejátszás · {2}",
         // notes on the iPod
         ["Notes"] = "Jegyzetek",
         ["Notes…"] = "Jegyzetek…",

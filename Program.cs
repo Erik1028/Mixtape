@@ -35,6 +35,16 @@ internal static class Program
         // Tag tidy-up writes to the iTunesDB, so it gets the same treatment the smart playlists have:
         // a sandbox copy, the real scan + apply, then a reload that checks every value landed. → ipod-tidytest.txt
         if (args.Length >= 2 && args[0] == "--tidytest") { RunTidyTest(args[1]); return; }
+        // What the identifier would offer for a file, printed. → the console
+        if (args.Length >= 2 && args[0] == "--identify")
+        {
+            double secs = 0;
+            try { using var probe = TagLib.File.Create(args[1]); secs = probe.Properties.Duration.TotalSeconds; } catch { }
+            Console.WriteLine($"file: {Path.GetFileName(args[1])}  ({secs:0}s)  query: \"{Identify.NameFrom(args[1])}\"");
+            foreach (var c in Identify.Search(args[1], secs))
+                Console.WriteLine($"  {c.Artist,-24} | {c.Title,-24} | {c.Album,-28} | {c.Seconds:0}s  d={c.Delta:0.0}");
+            return;
+        }
 
         // Controlled real-device write helpers (used for the cautious first test). They go
         // through the exact same IpodLibrary/SafeDbWriter path the Add/Delete buttons use.
@@ -1467,7 +1477,7 @@ internal static class Program
         }
 
         // The small modal windows that now wear the app's own card chrome (title strip + round close).
-        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy")
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify")
         {
             Form dlg = view switch
             {
@@ -1479,6 +1489,7 @@ internal static class Program
                     new() { Title = "Rakpart", Artist = "Azahriah", Album = "memento", Genre = "Pop", Year = 2023, Rating = 100 },
                 }, null),
                 "notes" => new NotesDialog(Path.GetDirectoryName(dbPath)!),
+                "identify" => IdentifyPreview(),
                 "tagtidy" => new TagTidyDialog(TagTidy.Scan(ITunesDbReader.Read(File.ReadAllBytes(dbPath)).Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList())),
                 "noteeditor" => NotesDialog.PreviewEditor(),
                 _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }),
@@ -2791,6 +2802,15 @@ internal static class Program
         }
         catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-remove.txt"), log.ToString());
+    }
+
+    /// <summary>Render harness: the identify dialog, filled by a real lookup for MIX_IDENTIFY (or a sample).</summary>
+    private static Form IdentifyPreview()
+    {
+        string f = Environment.GetEnvironmentVariable("MIX_IDENTIFY") ?? @"E:\Music\Flac\A hegyekbe fönn.mp3";
+        double secs = 0;
+        try { using var probe = TagLib.File.Create(f); secs = probe.Properties.Duration.TotalSeconds; } catch { }
+        return new IdentifyDialog(Path.GetFileName(f), secs, Identify.Search(f, secs));
     }
 
     private static void RunTidyTest(string fixtureDb)
