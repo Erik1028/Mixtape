@@ -35,6 +35,8 @@ internal static class Program
         // Tag tidy-up writes to the iTunesDB, so it gets the same treatment the smart playlists have:
         // a sandbox copy, the real scan + apply, then a reload that checks every value landed. → ipod-tidytest.txt
         if (args.Length >= 2 && args[0] == "--tidytest") { RunTidyTest(args[1]); return; }
+        // How often a tween actually gets a frame, on both pacers. → the console
+        if (args.Length >= 1 && args[0] == "--animbench") { RunAnimBench(); return; }
         // What the identifier would offer for a file, printed. → the console
         if (args.Length >= 2 && args[0] == "--identify")
         {
@@ -2811,6 +2813,37 @@ internal static class Program
         double secs = 0;
         try { using var probe = TagLib.File.Create(f); secs = probe.Properties.Duration.TotalSeconds; } catch { }
         return new IdentifyDialog(Path.GetFileName(f), secs, Identify.Search(f, secs));
+    }
+
+    private static void RunAnimBench()
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        var form = new Form { Width = 300, Height = 120, StartPosition = FormStartPosition.Manual, Location = new Point(-3000, -3000), ShowInTaskbar = false };
+        form.Shown += async (_, _) =>
+        {
+            foreach (bool legacy in new[] { true, false })
+            {
+                Anim.LegacyPacing = legacy;
+                var gaps = new List<double>();
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                double last = 0;
+                var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Anim.Run(2000, _ =>
+                {
+                    double now = sw.Elapsed.TotalMilliseconds;
+                    if (last > 0) gaps.Add(now - last);
+                    last = now;
+                }, () => done.SetResult(), t => t);
+                await done.Task;
+                await Task.Delay(120);   // let the pacer shut down before measuring the other one
+                gaps.Sort();
+                double Pick(double q) => gaps.Count == 0 ? 0 : gaps[Math.Min(gaps.Count - 1, (int)(gaps.Count * q))];
+                Console.WriteLine($"{(legacy ? "WinForms timer" : "threading timer"),-16} frames={gaps.Count,4}  {gaps.Count / 2.0,5:0} fps   median {Pick(0.5),5:0.0}   p90 {Pick(0.9),5:0.0}   p99 {Pick(0.99),5:0.0} ms   over 20 ms: {gaps.Count(g => g > 20) * 100.0 / Math.Max(1, gaps.Count),4:0}%");
+            }
+            form.Close();
+        };
+        Application.Run(form);
     }
 
     private static void RunTidyTest(string fixtureDb)

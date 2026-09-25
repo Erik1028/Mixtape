@@ -3,14 +3,28 @@ using System.Diagnostics;
 namespace iPodCommander;
 
 /// <summary>
-/// A tiny UI-thread tween engine for Apple-like motion. One shared WinForms timer drives every active
+/// A tiny UI-thread tween engine for Apple-like motion. One shared pacer drives every active
 /// <see cref="Tween"/>; each tween is Stopwatch-timed so it's frame-rate independent. Callbacks run on
 /// the UI thread, so handlers may touch controls directly. Honours the user's "show animations" setting
 /// (<see cref="MotionEnabled"/>) — when off, a tween jumps straight to its final frame.
 /// </summary>
 internal static class Anim
 {
-    private static readonly System.Windows.Forms.Timer _timer = new() { Interval = 10 }; // ~60-100 fps (paint-limited)
+    // WM_TIMER is delivered only when the message queue is empty and is quantised to the system tick, so a
+    // WinForms timer asking for 10 ms really ticks at ~16 ms - and one frame in six lands past 20 ms. That is
+    // the judder you feel in every tween (measured with --animbench: 65 fps, median 15.8, p99 20.9 ms). The
+    // pacer is a threading timer instead, marshalled onto the UI thread: 125 fps, median 8.0, nothing over
+    // 20 ms. Two guards keep it from doing to the app what the lyrics stage once did - only ONE frame may be
+    // in flight (_pending), so a slow frame cannot pile up a backlog of invokes, and a frame never takes more
+    // than half the UI thread (_cost), so input and painting always have room between frames.
+    private static System.Threading.Timer? _pump;
+    private static Control? _sync;            // a handle to marshal onto; created on the UI thread at first use
+    private static int _pending;
+    private static readonly Stopwatch _clock = Stopwatch.StartNew();
+    private static double _freeAt, _cost;     // when the next frame may start, and what the last one cost
+    /// <summary>Force the old WM_TIMER pacing (the bench compares the two; nothing else sets it).</summary>
+    public static bool LegacyPacing;
+    private static readonly System.Windows.Forms.Timer _timer = new() { Interval = 10 };   // the legacy pacer
     private static readonly List<Tween> _active = new();
     private static bool _hiRes;   // winmm hi-res timer period held ONLY while tweens run
 
@@ -43,12 +57,71 @@ internal static class Anim
         tw.Sw.Start();
         try { onTick(0); } catch { } // paint the first frame now so there's no flash before the first tick
         _active.Add(tw);
-        if (!_timer.Enabled)
-        {
-            if (!_hiRes) { try { timeBeginPeriod(1); _hiRes = true; } catch { } }
-            _timer.Start();
-        }
+        StartPump();
         return tw;
+    }
+
+    private static void StartPump()
+    {
+        if (!_hiRes) { try { timeBeginPeriod(1); _hiRes = true; } catch { } }
+        if (LegacyPacing) { StopThreadPump(); if (!_timer.Enabled) _timer.Start(); return; }
+        _timer.Stop();
+        if (_pump is not null) return;
+        try
+        {
+            _sync ??= NewSync();
+            _freeAt = _cost = 0;
+            _pump = new System.Threading.Timer(_ => Pump(), null, 0, 8);
+        }
+        catch { if (!_timer.Enabled) _timer.Start(); }   // no handle to marshal onto: the old pacer still works
+    }
+
+    private static Control NewSync()
+    {
+        var c = new Control();
+        var _ = c.Handle;   // realise it here, on the UI thread
+        return c;
+    }
+
+    private static void StopPump()
+    {
+        _timer.Stop();
+        StopThreadPump();
+        if (_hiRes) { try { timeEndPeriod(1); } catch { } _hiRes = false; }
+    }
+
+    private static void StopThreadPump()
+    {
+        var p = _pump; _pump = null;
+        p?.Dispose();
+    }
+
+    /// <summary>Thread-pool tick: hand ONE frame at a time to the UI thread.</summary>
+    private static void Pump()
+    {
+        if (Volatile.Read(ref _freeAt) > _clock.Elapsed.TotalMilliseconds) return;   // leave the thread room to paint
+        if (Interlocked.Exchange(ref _pending, 1) == 1) return;                      // the last frame is still running
+        var sync = _sync;
+        if (sync is null || sync.IsDisposed || !sync.IsHandleCreated) { Volatile.Write(ref _pending, 0); return; }
+        try
+        {
+            sync.BeginInvoke(() =>
+            {
+                double started = _clock.Elapsed.TotalMilliseconds;
+                try { Tick(); }
+                finally
+                {
+                    double ended = _clock.Elapsed.TotalMilliseconds;
+                    // A frame gets the thread back only after the app has had as long as that frame took. On a
+                    // machine that keeps up this never bites (a frame costs well under 8 ms); on one that does
+                    // not, the tweens quietly drop to half rate instead of starving the message queue.
+                    _cost = _cost * 0.7 + (ended - started) * 0.3;
+                    Volatile.Write(ref _freeAt, ended + _cost);
+                    Volatile.Write(ref _pending, 0);
+                }
+            });
+        }
+        catch { Volatile.Write(ref _pending, 0); }
     }
 
     private static void Tick()
@@ -68,11 +141,7 @@ internal static class Anim
                 try { tw.OnDone?.Invoke(); } catch { }
             }
         }
-        if (_active.Count == 0)
-        {
-            _timer.Stop();
-            if (_hiRes) { try { timeEndPeriod(1); } catch { } _hiRes = false; }
-        }
+        if (_active.Count == 0) StopPump();
     }
 }
 
