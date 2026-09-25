@@ -78,6 +78,6 @@ A self-contained build unpacks on first launch, so the very first start can be a
 
 ## Still stuck?
 1. Open your iPod's **device page** and click **Save report…** — it writes a small diagnostic file (model, signature, why it's read-only, drive info).
-2. Open an issue at **<https://github.com/fgs8z2n9qh-tech/Mixtape/issues>** and attach that report (it contains no personal data — no song titles or files, just device details).
+2. Open an issue at **<https://github.com/Erik1028/Mixtape/issues>** and attach that report (it contains no personal data — no song titles or files, just device details).
 
 Please **always keep your own backup** of the iPod's contents before writing, and test with one song first on a device you care about.

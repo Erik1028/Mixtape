@@ -49,7 +49,7 @@ public static class CoverArtLookup
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(8), MaxResponseContentBufferSize = 2 * 1024 * 1024 };
         // MusicBrainz requires a descriptive User-Agent; Apple simply likes one.
-        c.DefaultRequestHeaders.Add("User-Agent", "Mixtape/1.0 (+https://github.com/fgs8z2n9qh-tech/Mixtape)");
+        c.DefaultRequestHeaders.Add("User-Agent", "Mixtape/1.0 (+https://github.com/Erik1028/Mixtape)");
         return c;
     }
 

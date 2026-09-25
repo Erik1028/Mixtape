@@ -24,7 +24,7 @@ internal static class Identify
     private static HttpClient Create()
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(8), MaxResponseContentBufferSize = 2 * 1024 * 1024 };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("Mixtape (https://github.com/fgs8z2n9qh-tech/Mixtape)");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("Mixtape (https://github.com/Erik1028/Mixtape)");
         return c;
     }
 

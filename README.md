@@ -47,7 +47,7 @@ iOS devices (iPod Touch / iPhone) don't mount as a disk and are out of scope.
 
 ## Download
 
-**[Latest release](https://github.com/fgs8z2n9qh-tech/Mixtape/releases/latest)** — grab `Mixtape.exe` and run it. No installer, no .NET to install, nothing written outside your own user folder until you plug an iPod in.
+**[Latest release](https://github.com/Erik1028/Mixtape/releases/latest)** — grab `Mixtape.exe` and run it. No installer, no .NET to install, nothing written outside your own user folder until you plug an iPod in.
 
 **First launch shows a blue "Windows protected your PC" box.** Mixtape isn't code-signed, so Windows doesn't recognise the publisher yet. Click **More info → Run anyway**; you only do this once. It is not a virus warning — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) if your browser blocked the download instead.
 
@@ -56,7 +56,7 @@ iOS devices (iPod Touch / iPhone) don't mount as a disk and are out of scope.
 Requirements: **.NET 8 SDK** on Windows.
 
 ```sh
-git clone https://github.com/fgs8z2n9qh-tech/Mixtape.git
+git clone https://github.com/Erik1028/Mixtape.git
 cd Mixtape
 dotnet build -c Release
 ```
