@@ -46,7 +46,7 @@ public static class LyricsLookup
         // A lyrics sheet is a few KB; cap the buffer so a misconfigured proxy or a hostile reply cannot
         // stream an unbounded body into memory. Over the cap the read throws, which we treat as a failure.
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(8), MaxResponseContentBufferSize = 2 * 1024 * 1024 };
-        c.DefaultRequestHeaders.Add("User-Agent", "Mixtape/1.0 (+https://github.com/fgs8z2n9qh-tech/Mixtape)");
+        c.DefaultRequestHeaders.Add("User-Agent", "Mixtape/1.0 (+https://github.com/Erik1028/Mixtape)");
         return c;
     }
 

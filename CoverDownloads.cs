@@ -36,7 +36,7 @@ internal static class CoverDownloads
     public static void Init(Control ui)
     {
         _ui = ui;
-        try { Http.DefaultRequestHeaders.UserAgent.ParseAdd("Mixtape/1.0 (+https://github.com/fgs8z2n9qh-tech/Mixtape)"); } catch { }
+        try { Http.DefaultRequestHeaders.UserAgent.ParseAdd("Mixtape/1.0 (+https://github.com/Erik1028/Mixtape)"); } catch { }
         Scan();
     }
 
