@@ -171,6 +171,25 @@ internal sealed class BrowseGridView : Panel
 
     private float LiftOf(Card c) => ReferenceEquals(c, _hover) ? _hoverT : ReferenceEquals(c, _leaving) ? _leaveT : 0f;
 
+    /// <summary>Where a card's cover sits right now and a COPY of what is drawn in it (the caller owns the
+    /// bitmap). Null when that card is not on screen - there is nothing to fly then.</summary>
+    public (Rectangle Rect, Bitmap Image)? CoverSpot(string key)
+    {
+        foreach (var (r, c) in _hit)
+        {
+            if (c.Key != key) continue;
+            var rect = new Rectangle(r.X, r.Y, CoverW, CoverW);
+            var bmp = new Bitmap(CoverW, CoverW);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), new Rectangle(0, 0, CoverW, CoverW));   // cache-owned: drawn, never disposed
+            }
+            return (rect, bmp);
+        }
+        return null;
+    }
+
     private (int Max, int BarH, int BarY) Bar()
     {
         int max = MaxScroll();

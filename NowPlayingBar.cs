@@ -27,12 +27,23 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>The card's total-time slot shows "-remaining" instead of the length (a click toggles; the host persists it).</summary>
     public bool ShowRemaining { get => _showRemaining; set { if (_showRemaining == value) return; _showRemaining = value; Invalidate(); } }
     private double _hoverFrac = -1;      // where the pointer sits along the seek line (0..1), -1 when it is elsewhere
+    private float _textSlide = 1f;       // the card's two lines arriving with a new song
+    private Tween? _textTw;
 
     public event Action? CoverFlowRequested;            // corner group: open Cover Flow
     public event Action<Point>? AddToPlaylistRequested; // corner group: add the playing song to a playlist (screen anchor)
     public event Action<int>? RateRequested;            // corner group: rate the playing song 0..5
     /// <summary>The host can write ratings back (an iPod track on a writable device); without it the stars stay hidden.</summary>
     public bool CanRate { get; set; }
+    /// <summary>The card's text arrives with the song instead of switching under the cover's dissolve.</summary>
+    private void SlideCardText()
+    {
+        _textTw?.Cancel();
+        if (!Anim.MotionEnabled) { _textSlide = 1f; return; }
+        _textSlide = 0f;
+        _textTw = Anim.Run(260, v => { _textSlide = (float)v; if (!IsDisposed) Invalidate(); }, () => _textTw = null, Easings.OutQuint);
+    }
+
     private void ResetStars() { _ratingTw?.Cancel(); _ratingTw = null; _ratingShown = -1; _ratingT = 1f; _starHover = -1; }
     private int _starHover = -1;      // 1..5 while the pointer previews a rating, -1 otherwise
     private float _ratingT = 1f;      // fades a changed rating in
@@ -355,6 +366,7 @@ internal sealed class NowPlayingBar : Panel
         CancelSleepFade();   // a (re)start during the final fade means the user is still listening — don't fade/pause it
         _track = track;
         _path = filePath;
+        SlideCardText();
         ResetStars();        // the new song's rating shows outright, it does not fade in from the old one
         SwapCover(ResolveCover(track, filePath, cover));   // prefer the file's own embedded art; cross-dissolve in
         ClearPending();
@@ -915,6 +927,7 @@ internal sealed class NowPlayingBar : Panel
         public Track? Track; public Bitmap? Cover, CoverPrev; public float CoverFade;
         public bool Playing, CoverHover, SeekHot; public double ScrubFrac;   // ScrubFrac >= 0 while the seek line is being dragged
         public double Pos, Dur; public Color Tint; public float KnobR; public double EqPhase; public float[]? Viz;
+        public float? TextSlide;                          // 0..1 while a new song's two lines rise into place; null from a caller that does not animate
         public double? HoverFrac;                         // set while the pointer hovers the seek line: THAT time reads in the accent
         public bool Remaining, ArtistHover, AlbumHover;   // the total slot counts down; a subtitle link is hovered
     }
@@ -924,6 +937,7 @@ internal sealed class NowPlayingBar : Panel
         Track = _track, Cover = _cover, CoverPrev = _coverPrev, CoverFade = _coverFade, Playing = _playing,
         CoverHover = _hover == Hit.Cover, SeekHot = _hover == Hit.Seek || _drag == Drag.Seek, ScrubFrac = _scrubFrac,
         Pos = CurPos, Dur = CurDur, Tint = _accentTint, KnobR = _seekKnobR, EqPhase = _eqPhase, Viz = _coverViz,
+        TextSlide = _textSlide,
         HoverFrac = _hoverFrac >= 0 ? _hoverFrac : null, Remaining = _showRemaining,
         ArtistHover = _hover == Hit.Artist, AlbumHover = _hover == Hit.Album,
     };
@@ -959,9 +973,12 @@ internal sealed class NowPlayingBar : Panel
             // the slab's own tone to the text tone over the same 220 ms the art dissolves).
             Color slab = Theme.Blend(Theme.SidebarBg, Color.White, 0.07);
             float tf = idle ? 1f : Math.Clamp(s.CoverFade, 0f, 1f);
-            TextRenderer.DrawText(g, title, fTitle, new Rectangle(c.TextX, card.Y + 8, c.TextW, 17), Theme.Blend(slab, idle ? Theme.Subtle : Theme.TextCol, tf),
+            // A new song's lines rise the last few pixels into place while its cover dissolves, so the card
+            // changes as one thing. A slide and not a fade: GDI text ignores alpha.
+            int ts = s.TextSlide is { } slide ? (int)Math.Round((1 - Math.Clamp(slide, 0f, 1f)) * 7) : 0;
+            TextRenderer.DrawText(g, title, fTitle, new Rectangle(c.TextX, card.Y + 8 + ts, c.TextW, 17), Theme.Blend(slab, idle ? Theme.Subtle : Theme.TextCol, tf),
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25, c.TextW, 15), Theme.Blend(slab, idle ? Theme.Faint : Theme.Subtle, tf),
+            TextRenderer.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25 + ts, c.TextW, 15), Theme.Blend(slab, idle ? Theme.Faint : Theme.Subtle, tf),
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
             if (!idle && (s.ArtistHover || s.AlbumHover))   // the hovered half of the subtitle brightens and underlines, the way a link does
             {
