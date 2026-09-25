@@ -2947,11 +2947,26 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     /// <summary>Drill into the clicked album/artist card → show its songs in the track grid.</summary>
+    /// <summary>The clicked cover travels from its tile to the header's art, over the content dissolve, so the
+    /// page you land on is visibly the thing you picked.</summary>
+    private void FlyOpenedCover(string key)
+    {
+        if (_root is null || !Anim.MotionEnabled || _browseView.CoverSpot(key) is not { } spot) return;
+        try
+        {
+            var start = _root.RectangleToClient(_browseView.RectangleToScreen(spot.Rect));
+            var end = _root.RectangleToClient(_header.RectangleToScreen(_header.ArtBounds));
+            FlyCover.Fly(_root, spot.Image, start, end);
+        }
+        catch { spot.Image.Dispose(); }
+    }
+
     private void OnBrowseActivated(string key)
     {
         bool local = _viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists;
         if (!local && _db is null) return;
         ClearSearch(); // drilling into an album/artist starts unfiltered (no leftover query)
+        FlyOpenedCover(key);   // the cover you clicked carries on into the header
         TransitionCenter(() =>
         {
             if (_viewKind is SidebarRowKind.Albums or SidebarRowKind.LocalAlbums)

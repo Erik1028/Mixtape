@@ -146,6 +146,8 @@ internal sealed class HeaderPanel : Panel
     }
 
     private Rectangle ArtRect => new(Pad, (Height - ArtSize) / 2, ArtSize, ArtSize);
+    /// <summary>Where this header's cover sits, for a shell that wants to fly one into it.</summary>
+    public Rectangle ArtBounds => ArtRect;
 
     /// <summary>A new page's title arrives from just below instead of appearing already there.</summary>
     private void SlideText()
