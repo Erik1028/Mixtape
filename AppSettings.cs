@@ -13,6 +13,8 @@ internal sealed class AppSettings
     /// <summary>The Windows 95 look (Settings > Appearance > Look). Applied before any control is built,
     /// so the skin is chosen at startup - which is why changing it offers a restart.</summary>
     public bool ClassicSkin { get; set; }
+    /// <summary>The Windows 95 look's covers in 256 colours (dithered onto the halftone palette). Live.</summary>
+    public bool DitherCovers { get; set; } = true;
     public bool Compact { get; set; }          // false = comfortable (52px rows + art), true = compact (28px, text-only)
     public bool ShowArtwork { get; set; } = true;
     /// <summary>UI language code: "en" | "hu". Empty = auto (follow the OS language). Applied at startup;

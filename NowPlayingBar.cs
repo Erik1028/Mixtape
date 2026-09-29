@@ -1057,16 +1057,9 @@ internal sealed class NowPlayingBar : Panel
             if (idle)
             {
                 using (var fb = new SolidBrush(Theme.Face)) g.FillRectangle(fb, cr);
-                var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-                Theme.DrawNote(g, cr, Theme.FaceShadow);
-                g.SmoothingMode = sm0;
+                ClassicIcons.DrawCentered(g, ClassicIcons.Id.Album, cr, Math.Max(1, (cr.Width - 4) / 16));   // nothing loaded: the Audio CD icon
             }
-            else
-            {
-                var nv0 = cover ?? Theme.MakeArt(cr.Width, seed);
-                if (prev is not null && fade < 1f) { g.DrawImage(prev, cr); Theme.DrawImageAlpha(g, nv0, new RectangleF(cr.X, cr.Y, cr.Width, cr.Height), fade); }
-                else g.DrawImage(nv0, cr);
-            }
+            else Theme.PaintClassicPicture(g, cr, cover ?? Theme.MakeArt(cr.Width, seed), frame: false);   // 256 colours, pixel for pixel
             Theme.Bevel(g, cr, raised: false, thin: true);
             return;
         }
@@ -1539,6 +1532,7 @@ internal sealed class NowPlayingBar : Panel
     private void DrawFlowGlyph(Graphics g, Rectangle r, bool hover)
     {
         if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.CoverFlow, r, false); return; }
         // The app's own Cover Flow mark, drawn from a box a little larger than the cell: at 24 px it comes out
         // smaller than the line glyphs beside it, and a weaker icon in a row of equals reads as a mistake.
         ThemedButton.DrawIcon(g, Theme.Classic ? new RectangleF(r.X, r.Y, r.Width, r.Height) : new RectangleF(r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6),
@@ -1549,6 +1543,7 @@ internal sealed class NowPlayingBar : Panel
     private void DrawAddGlyph(Graphics g, Rectangle r, bool hover)
     {
         if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.AddToList, r, false); return; }
         Color c = Theme.Classic ? Theme.FaceDark : hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 5, x2 = r.Right - 5;
@@ -1850,6 +1845,14 @@ internal sealed class NowPlayingBar : Panel
         g.SmoothingMode = sm;
     }
 
+    /// <summary>Classic: a toolbar button's 16 px icon, centred on its button - and, while the button is pushed in,
+    /// one pixel down and right, the way a pressed 1995 button moved its picture.</summary>
+    internal static void ClassicGlyph(Graphics g, ClassicIcons.Id id, Rectangle r, bool pressed)
+    {
+        int o = pressed ? 1 : 0;
+        ClassicIcons.Draw(g, id, r.X + (r.Width - 16) / 2 + o, r.Y + (r.Height - 16) / 2 + o);
+    }
+
     /// <summary>A w x h square centred in <paramref name="r"/> (the transport's hit rects differ in size; the
     /// buttons drawn in them do not).</summary>
     internal static Rectangle Centered(Rectangle r, int w, int h) => new(r.X + (r.Width - w) / 2, r.Y + (r.Height - h) / 2, w, h);
@@ -1889,6 +1892,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (Theme.Classic && active) LatchedChip(g, r);
         else if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.Shuffle, r, active); return; }
         DrawModeGlyph(g, r, "\uE8B1", ModeColor(active, hover));   // Shuffle
     }
 
@@ -1896,6 +1900,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (Theme.Classic && mode != RepeatMode.Off) LatchedChip(g, r);
         else if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, mode == RepeatMode.One ? ClassicIcons.Id.RepeatOne : ClassicIcons.Id.Repeat, r, mode != RepeatMode.Off); return; }
         // RepeatAll glyph (greyed when Off), RepeatOne glyph when One.
         DrawModeGlyph(g, r, mode == RepeatMode.One ? "\uE8ED" : "\uE8EE", ModeColor(mode != RepeatMode.Off, hover));
     }
@@ -1970,6 +1975,7 @@ internal sealed class NowPlayingBar : Panel
 
     internal static void DrawSpeaker(Graphics g, Rectangle r, bool muted, bool hover)
     {
+        if (Theme.Classic) { ClassicGlyph(g, muted ? ClassicIcons.Id.SpeakerMute : ClassicIcons.Id.Speaker, r, false); return; }
         Color c = muted ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle;
         using var b = new SolidBrush(c);
         using var p = new Pen(c, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
@@ -2007,6 +2013,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (_lyricsOpen) LatchedChip(g, r);   // the words are open: the button reads as pressed
         else if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.Lyrics, r, _lyricsOpen); return; }
         var c = Theme.Classic ? Theme.FaceDark : _lyricsOpen ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle;
         int cx = r.Left + r.Width / 2, cy = r.Top + r.Height / 2;
 
@@ -2033,6 +2040,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (Theme.Classic && _eqOn) LatchedChip(g, r);
         else if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.Eq, r, _eqOn); return; }
         Color c = Theme.Classic ? Theme.FaceDark : _eqOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var bar = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var dot = new SolidBrush(c);
@@ -2052,6 +2060,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (Theme.Classic && _proOn) LatchedChip(g, r);
         else if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.Wand, r, _proOn); return; }
         Color c = Theme.Classic ? Theme.FaceDark : _proOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         float tipX = r.X + 15.5f, tipY = r.Y + 8f;     // sparkle star at the wand's tip (upper-right)
         using (var pen = new Pen(c, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -2068,6 +2077,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (_queueOpen) LatchedChip(g, r);   // the side card is open: pressed
         else if (hover) HoverChip(g, r);
+        if (Theme.Classic) { ClassicGlyph(g, ClassicIcons.Id.Queue, r, _queueOpen); return; }
         Color c = Theme.Classic ? Theme.FaceDark : _queueOpen ? Theme.AccentBright : _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 6, x2 = r.Right - 6;

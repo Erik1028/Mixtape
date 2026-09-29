@@ -702,7 +702,7 @@ internal sealed class Sidebar : Panel
             {
                 inSection = true;
                 if (ry + SectionH <= inner.Top || ry >= inner.Bottom) continue;
-                DrawClassicFolder(g, x0, ry + (SectionH - 13) / 2);
+                ClassicIcons.Draw(g, ClassicIcons.Id.Folder, x0, ry + (SectionH - 16) / 2);
                 TextRenderer.DrawText(g, Theme.ClassicCase(row.Text), _fRow, new Rectangle(x0 + 20, ry, inner.Right - x0 - 44, SectionH), Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 if (row.ShowAdd)   // "+": a tiny push button at the end of the folder's line
@@ -724,27 +724,10 @@ internal sealed class Sidebar : Panel
 
             int ix = inSection ? x0 + indent : x0;
             var icon = new Rectangle(ix, ry + (rh - 16) / 2, 16, 16);
-            if (row.Icon is not null)
-            {
-                var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(row.Icon, icon);
-                g.InterpolationMode = im;
-            }
-            else
-            {
-                using (var tb = new SolidBrush(row.Tile)) g.FillRectangle(tb, icon);
-                if (row.Kind is SidebarRowKind.Playlist or SidebarRowKind.SmartPlaylist or SidebarRowKind.LocalPlaylist)
-                {
-                    string first = row.Text.Length > 0 ? row.Text[..1].ToUpperInvariant() : "•";
-                    TextRenderer.DrawText(g, first, _fRowBold, icon, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-                }
-                else
-                {
-                    var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-                    DrawRowGlyph(g, icon, row.Kind, Theme.OnColor(row.Tile));
-                    g.SmoothingMode = sm;
-                }
-            }
+            // a playlist with a cover the user chose keeps it (Explorer showed a folder's custom icon too); every
+            // other node gets its 16 px pixel icon
+            if (row.Icon is not null && row.Kind != SidebarRowKind.Device) Theme.PaintClassicPicture(g, icon, row.Icon, frame: false);
+            else ClassicIcons.Draw(g, ClassicIconFor(row.Kind), icon.X, icon.Y);
 
             int right = inner.Right - 4;
             if (row.Kind == SidebarRowKind.Device)   // the eject glyph, in black, where the modern row has it
@@ -782,6 +765,21 @@ internal sealed class Sidebar : Panel
         using (var sh = new Pen(Theme.FaceShadow)) g.DrawLine(sh, 4, Height - FooterH + 4, Width - 5, Height - FooterH + 4);
         using (var hi = new Pen(Theme.FaceHi)) g.DrawLine(hi, 4, Height - FooterH + 5, Width - 5, Height - FooterH + 5);
     }
+
+    private static ClassicIcons.Id ClassicIconFor(SidebarRowKind kind) => kind switch
+    {
+        SidebarRowKind.Home => ClassicIcons.Id.Home,
+        SidebarRowKind.Device => ClassicIcons.Id.IPod,
+        SidebarRowKind.Albums or SidebarRowKind.LocalAlbums => ClassicIcons.Id.Album,
+        SidebarRowKind.Artists or SidebarRowKind.LocalArtists => ClassicIcons.Id.Artist,
+        SidebarRowKind.Stats => ClassicIcons.Id.Chart,
+        SidebarRowKind.Playlist or SidebarRowKind.LocalPlaylist => ClassicIcons.Id.Playlist,
+        SidebarRowKind.SmartPlaylist => ClassicIcons.Id.SmartPlaylist,
+        SidebarRowKind.LocalMusic => ClassicIcons.Id.Computer,
+        SidebarRowKind.Videos => ClassicIcons.Id.Video,
+        SidebarRowKind.Photos => ClassicIcons.Id.Photos,
+        _ => ClassicIcons.Id.Songs,
+    };
 
     /// <summary>The 16 x 13 manila folder of a 1995 tree view: a tab, a yellow body, a black outline.</summary>
     private static void DrawClassicFolder(Graphics g, int x, int y)

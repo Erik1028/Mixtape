@@ -221,6 +221,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         {
             // The accent and the background belong to the modern look; the 95 skin has exactly one palette.
             Row(Loc.T("Colours"), Loc.T("The Windows 95 look has one palette of its own \u2014 the accent colour and the background are used by the Modern look."), null);
+            Row(Loc.T("256-colour pictures"), Loc.T("Show covers the way a 256-colour display of 1995 did: on the Windows halftone palette, dithered."),
+                Toggle(_s.DitherCovers, v => { _s.DitherCovers = v; _s.Save(); Theme.DitherCovers = v; _applyChanged(); }));
         }
         else
         {
