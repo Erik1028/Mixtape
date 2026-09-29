@@ -248,7 +248,14 @@ internal static class Program
         {
             // A "Restart now" relaunch (e.g. after a language change) races the closing instance for the lock —
             // wait briefly for the old process to release it instead of just surfacing the (exiting) window.
-            if (args.Contains("--relaunch") && mutex.WaitOne(5000)) isFirst = true;
+            if (args.Contains("--relaunch"))
+            {
+                // The closing instance hands the lock over when it exits. If its thread ends without releasing it,
+                // the wait still SUCCEEDS but reports the mutex as abandoned - an exception that used to go
+                // uncaught, so every "Restart Mixtape now?" silently crashed the new instance before its window.
+                try { isFirst = mutex.WaitOne(10000); }
+                catch (System.Threading.AbandonedMutexException) { isFirst = true; }
+            }
             if (!isFirst) { PostMessage(HWND_BROADCAST, ShowInstanceMessage, IntPtr.Zero, IntPtr.Zero); return; }
         }
 
@@ -264,6 +271,9 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.Run(new MainForm());
+        // Hand the lock over on the way out (a "Restart now" relaunch is waiting on it) - releasing it here, on the
+        // thread that owns it, is what keeps the next instance's wait from ending in an abandoned mutex.
+        try { mutex.ReleaseMutex(); } catch { }
         GC.KeepAlive(mutex); // keep the handle (and thus the lock) alive for the app's lifetime
     }
 
