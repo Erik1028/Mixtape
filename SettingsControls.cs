@@ -31,13 +31,7 @@ internal sealed class ToggleSwitch : Control
     {
         g.SmoothingMode = SmoothingMode.None;
         g.Clear(Parent?.BackColor ?? Theme.Face);
-        var box = new Rectangle(Width - 13 - 2, (Height - 13) / 2, 13, 13);
-        using (var wb = new SolidBrush(Enabled ? Color.White : Theme.Face)) g.FillRectangle(wb, box);
-        Theme.Bevel(g, box, raised: false);
-        if (!_checked) return;
-        using var br = new SolidBrush(Enabled ? Theme.FaceDark : Theme.FaceShadow);
-        int[] top = { 2, 3, 4, 3, 2, 1, 0 };   // the tick: seven columns, each three pixels tall
-        for (int i = 0; i < 7; i++) g.FillRectangle(br, box.X + 3 + i, box.Y + 3 + top[i], 1, 3);
+        Theme.ClassicCheckBox(g, new Rectangle(Width - 13 - 2, (Height - 13) / 2, 13, 13), _checked, Enabled);
     }
 
     private void AnimateKnob()

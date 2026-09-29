@@ -30,7 +30,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private static readonly string[] Categories = { "Appearance", "Library", "Video", "Photos", "Safety", "Discord", "This iPod", "About" };
 
-    public SettingsForm(AppSettings settings, IPodDevice? device, Action applyChanged, Action reloadDevice)
+    public SettingsForm(AppSettings settings, IPodDevice? device, Action applyChanged, Action reloadDevice, int startCategory = 0)
     {
         _s = settings; _device = device; _applyChanged = applyChanged; _reloadDevice = reloadDevice;
 
@@ -64,7 +64,9 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Controls.Add(_nav);
         Controls.Add(new DialogTitleBar(Loc.T("Settings"), NavW));   // added LAST so it docks to the top first; nav+pane fill below it
         Application.AddMessageFilter(this);   // route the mouse wheel over the pane to the themed scrollbar
-        ShowCategory(0);
+        startCategory = Math.Clamp(startCategory, 0, Categories.Length - 1);
+        if (startCategory > 0) _nav.SelectedIndex = startCategory;   // raises Selected → ShowCategory
+        else ShowCategory(0);
 
         if (Anim.MotionEnabled) Opacity = 0; // fade up from invisible in OnShown
     }

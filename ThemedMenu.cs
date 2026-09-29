@@ -213,6 +213,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     {
         var g = e.Graphics;
         var ts = e.ToolStrip;
+        if (ts is MenuStrip) { g.Clear(Theme.Face); return; }   // the Classic menu bar: the window face, nothing more
 
         if (ts is ToolStripDropDown dd)
         {
@@ -243,6 +244,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
     {
         var g = e.Graphics;
+        if (e.ToolStrip is MenuStrip) return;
         if (Theme.Classic) { Theme.Bevel(g, new Rectangle(0, 0, e.ToolStrip.Width, e.ToolStrip.Height), raised: true); return; }   // a 95 menu: a raised window
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using var path = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, e.ToolStrip.Width - 1.5f, e.ToolStrip.Height - 1.5f), Radius() - 0.5f);
@@ -252,6 +254,13 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
 
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
     {
+        if (e.Item.Owner is MenuStrip)   // a menu-bar title: raised under the pointer, pushed in while its menu is open
+        {
+            var r0 = new Rectangle(0, 0, e.Item.Width, e.Item.Height);
+            if (e.Item.Pressed) Theme.Bevel(e.Graphics, r0, raised: false, thin: true);
+            else if (e.Item.Selected) Theme.Bevel(e.Graphics, r0, raised: true, thin: true);
+            return;
+        }
         if (!e.Item.Selected || !e.Item.Enabled) return;   // disabled items never light up
         var g = e.Graphics;                                 // graphics origin is the item's top-left
         if (Theme.Classic)   // a solid navy band across the row, inside the menu's edge
@@ -285,6 +294,12 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
         var tr = e.TextRectangle;
         e.TextRectangle = new Rectangle(tr.X, 0, tr.Width, e.Item.Height);
         e.TextFormat = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+        if (e.Item.Owner is MenuStrip)   // a menu-bar title keeps its underlined access key ("File" with the F underlined), as in 1995
+        {
+            e.TextColor = Theme.TextCol;
+            e.TextFormat = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
+            if (e.Item.Pressed) e.TextRectangle = new Rectangle(tr.X + 1, 1, tr.Width, e.Item.Height);
+        }
         base.OnRenderItemText(e);
     }
 

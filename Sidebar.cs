@@ -71,7 +71,12 @@ internal sealed class Sidebar : Panel
 
     // No wordmark header any more — the window has ONE, in the caption strip. The rail's header is now the
     // app's single search box, which is where a search that filters the LIBRARY belongs.
-    private const int HeaderH = 54, SectionH = 30, ItemH = 34, FooterH = 56, Pad = 12;
+    private const int HeaderH = 54, FooterH = 56, Pad = 12;
+    // Classic draws the rail as a 1995 tree view, whose rows were 20 px tall (the modern rail's are 30 / 34 / 56).
+    private static int SectionH => Theme.Classic ? 20 : 30;
+    private static int ItemH => Theme.Classic ? 20 : 34;
+    private static int DeviceH => Theme.Classic ? 20 : 56;
+    private static int GroupGap => Theme.Classic ? 2 : 10;
 
     /// <summary>The app-wide search box, hosted at the top of the rail (set once by the host).</summary>
     public Control? Search { get; set; }
@@ -165,7 +170,7 @@ internal sealed class Sidebar : Panel
     public void AddSection(string text, bool showAdd = false, SidebarRowKind addKind = SidebarRowKind.Playlist) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text, ShowAdd = showAdd, AddKind = addKind });
     public void AddItem(SidebarRowKind kind, string text, object? tag, bool active, string? count = null, string? sub = null) =>
         _rows.Add(new Row { Kind = kind, Text = text, Tag = tag, Active = active, Tile = TileColor(kind, text),
-                            Count = count, Sub = sub, Height = kind == SidebarRowKind.Device ? 56 : ItemH });
+                            Count = count, Sub = sub, Height = kind == SidebarRowKind.Device ? DeviceH : ItemH });
     public void AddHint(string text) => _rows.Add(new Row { Kind = SidebarRowKind.Section, Text = text, Hint = true });
     // PRESERVE the scroll across rebuilds — a nav rebuild (Begin/AddItem/End on every view switch) must NOT yank the rail
     // back to the top; just re-measure + re-clamp to the (possibly new) content height. (Was `_scroll = 0` → the scroll-reset bug.)
@@ -179,7 +184,7 @@ internal sealed class Sidebar : Panel
         foreach (var row in _rows)
         {
             if (row.Hint) { h += ItemH; any = true; }
-            else if (row.Kind == SidebarRowKind.Section) { if (any) h += 10; h += SectionH; any = true; }
+            else if (row.Kind == SidebarRowKind.Section) { if (any) h += GroupGap; h += SectionH; any = true; }
             else { h += row.Height; any = true; }
         }
         return h;
@@ -189,7 +194,9 @@ internal sealed class Sidebar : Panel
     private void LayoutScrollbar()
     {
         int vis = Math.Max(0, Height - HeaderH - FooterH);
-        _scrollbar.Bounds = new Rectangle(Width - 10, HeaderH, 10, vis);   // 10px margin = the gap right of the row pills
+        _scrollbar.Bounds = Theme.Classic
+            ? new Rectangle(Width - 6 - _scrollbar.Width, HeaderH, _scrollbar.Width, vis)   // inside the tree's sunken edge
+            : new Rectangle(Width - 10, HeaderH, 10, vis);   // 10px margin = the gap right of the row pills
         _scrollbar.Visible = _contentH > vis;
         _scrollbar.Invalidate();
     }
@@ -410,6 +417,7 @@ internal sealed class Sidebar : Panel
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.SidebarBg);
         g.TextRenderingHint = Theme.TextHint;
+        if (Theme.Classic) { PaintClassicTree(g); return; }
 
         // --- rows (scrollable region) ---
         _hit.Clear();
@@ -436,7 +444,7 @@ internal sealed class Sidebar : Panel
                 if (anyDrawn) y += 10; // breathing room above each group after the first
                 if (y >= clip.Top && y + SectionH <= clip.Bottom)   // fully inside (see the item-row note: avoid text bleeding past the edges)
                 {
-                    TextRenderer.DrawText(g, row.Text, _fSection,
+                    TextRenderer.DrawText(g, Theme.ClassicCase(row.Text), _fSection,   // Classic: "Library", not "LIBRARY"
                         new Rectangle(Pad + 4, y, Width - Pad * 2, SectionH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.Bottom);
                     if (row.ShowAdd)   // a 2-stroke vector "+" on the right of the header → New Playlist (creation was right-click-only)
@@ -625,6 +633,171 @@ internal sealed class Sidebar : Panel
         //  a hard vertical line there read as an out-of-place divider.)
 
         Theme.CarveCardCorners(g, this, Theme.RadShell, true, true, true, true);   // smooth (AA) rounded card corners
+    }
+
+    /// <summary>
+    /// The Windows 95 rail: an Explorer tree view. A white, sunken client area; every section a folder node with its
+    /// rows as children, joined to it by the dotted tree lines; the chosen row marked by a navy band behind its LABEL
+    /// only, the way a 95 tree selected. The same rows, hit lists and scroll offset as the modern rail - only the
+    /// drawing differs, so every click, eject, "+" and drop target behaves exactly as it does there.
+    /// </summary>
+    private void PaintClassicTree(Graphics g)
+    {
+        _hit.Clear(); _ejectHit.Clear(); _addHit.Clear();
+        g.SmoothingMode = SmoothingMode.None;
+        var frame = new Rectangle(4, HeaderH - 2, Width - 8, Math.Max(4, Height - HeaderH - FooterH + 4));
+        using (var wb = new SolidBrush(Color.White)) g.FillRectangle(wb, frame);
+        var inner = new Rectangle(frame.X + 2, HeaderH, frame.Width - 4 - (_scrollbar.Visible ? _scrollbar.Width : 0), Math.Max(0, Height - HeaderH - FooterH));
+
+        // pass 1: where every row sits
+        var ys = new int[_rows.Count];
+        int y = inner.Y - _scroll; bool any = false;
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            var row = _rows[i];
+            if (row.Kind == SidebarRowKind.Section && !row.Hint && any) y += GroupGap;
+            ys[i] = y;
+            y += row.Hint ? ItemH : row.Kind == SidebarRowKind.Section ? SectionH : row.Height;
+            any = true;
+        }
+        _contentH = y + _scroll - inner.Y;
+
+        int x0 = inner.X + 3;                 // a root node's icon
+        int indent = 19;                      // one tree level
+        var saved = g.Clip;
+        g.SetClip(inner);
+
+        // pass 2: the dotted lines from each folder down to its children
+        using (var dot = new Pen(Theme.FaceShadow) { DashStyle = DashStyle.Dot })
+            for (int s = 0; s < _rows.Count; s++)
+            {
+                if (_rows[s].Kind != SidebarRowKind.Section || _rows[s].Hint) continue;
+                int last = -1;
+                for (int c = s + 1; c < _rows.Count && _rows[c].Kind != SidebarRowKind.Section; c++) last = c;
+                if (last < 0) continue;
+                int lx = x0 + 7;
+                g.DrawLine(dot, lx, ys[s] + SectionH - 3, lx, ys[last] + _rows[last].Height / 2);
+                for (int c = s + 1; c <= last; c++)
+                {
+                    if (_rows[c].Hint) continue;
+                    int cy = ys[c] + _rows[c].Height / 2;
+                    g.DrawLine(dot, lx, cy, lx + indent - 8, cy);
+                }
+            }
+
+        // pass 3: the nodes
+        bool inSection = false;
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            var row = _rows[i];
+            int ry = ys[i];
+            if (row.Hint)
+            {
+                if (ry + ItemH > inner.Top && ry < inner.Bottom)
+                    TextRenderer.DrawText(g, row.Text, _fHint, new Rectangle(x0 + indent, ry, inner.Right - x0 - indent - 4, ItemH), Theme.Faint,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                continue;
+            }
+            if (row.Kind == SidebarRowKind.Section)
+            {
+                inSection = true;
+                if (ry + SectionH <= inner.Top || ry >= inner.Bottom) continue;
+                DrawClassicFolder(g, x0, ry + (SectionH - 13) / 2);
+                TextRenderer.DrawText(g, Theme.ClassicCase(row.Text), _fRow, new Rectangle(x0 + 20, ry, inner.Right - x0 - 44, SectionH), Theme.TextCol,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                if (row.ShowAdd)   // "+": a tiny push button at the end of the folder's line
+                {
+                    var hit = new Rectangle(inner.Right - 18, ry + (SectionH - 14) / 2, 14, 14);
+                    _addHit.Add((hit, row.AddKind));
+                    Theme.FaceBevel(g, hit, raised: true, thin: true);
+                    using var kb = new SolidBrush(Theme.FaceDark);
+                    g.FillRectangle(kb, hit.X + 3, hit.Y + 6, 7, 1);
+                    g.FillRectangle(kb, hit.X + 6, hit.Y + 3, 1, 7);
+                }
+                continue;
+            }
+
+            int rh = row.Height;
+            var rowRect = new Rectangle(inner.X, ry, inner.Width, rh);
+            _hit.Add((rowRect, row));
+            if (ry + rh <= inner.Top || ry >= inner.Bottom) continue;
+
+            int ix = inSection ? x0 + indent : x0;
+            var icon = new Rectangle(ix, ry + (rh - 16) / 2, 16, 16);
+            if (row.Icon is not null)
+            {
+                var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(row.Icon, icon);
+                g.InterpolationMode = im;
+            }
+            else
+            {
+                using (var tb = new SolidBrush(row.Tile)) g.FillRectangle(tb, icon);
+                if (row.Kind is SidebarRowKind.Playlist or SidebarRowKind.SmartPlaylist or SidebarRowKind.LocalPlaylist)
+                {
+                    string first = row.Text.Length > 0 ? row.Text[..1].ToUpperInvariant() : "•";
+                    TextRenderer.DrawText(g, first, _fRowBold, icon, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                }
+                else
+                {
+                    var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+                    DrawRowGlyph(g, icon, row.Kind, Theme.OnColor(row.Tile));
+                    g.SmoothingMode = sm;
+                }
+            }
+
+            int right = inner.Right - 4;
+            if (row.Kind == SidebarRowKind.Device)   // the eject glyph, in black, where the modern row has it
+            {
+                var ej = new Rectangle(right - 18, ry, 18, rh);
+                _ejectHit.Add((ej, row));
+                using var eb = new SolidBrush(ReferenceEquals(row, _ejectHover) ? Theme.ClassicNavy : Theme.FaceDark);
+                int ex = ej.X + ej.Width / 2, ey = ry + rh / 2;
+                for (int k = 0; k < 4; k++) g.FillRectangle(eb, ex - k, ey - 5 + k, 2 * k + 1, 1);   // the triangle
+                g.FillRectangle(eb, ex - 4, ey + 1, 9, 2);                                           // the bar under it
+                right = ej.X - 2;
+            }
+            if (row.Count is { Length: > 0 } cnt)
+            {
+                int cw = TextRenderer.MeasureText(g, cnt, _fSub).Width + 2;
+                TextRenderer.DrawText(g, cnt, _fSub, new Rectangle(right - cw, ry, cw, rh), Theme.Faint,
+                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                right -= cw + 4;
+            }
+
+            string label = row.Kind == SidebarRowKind.Device && row.Sub is { Length: > 0 } sub ? $"{row.Text} ({sub})" : row.Text;
+            int tx = icon.Right + 4, tw = Math.Max(0, right - tx);
+            int lw = Math.Min(tw, TextRenderer.MeasureText(g, label, _fRow, new Size(int.MaxValue, rh), TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Width + 4);
+            var lab = new Rectangle(tx, ry + (rh - 16) / 2, lw, 16);
+            if (row.Active) using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, lab);   // the selection covers the label, not the row
+            if (ReferenceEquals(row, _dropRow))   // a song drag hovering a playlist: the drop target, outlined
+                using (var dp = new Pen(Theme.ClassicNavy)) g.DrawRectangle(dp, lab.X - 1, lab.Y - 1, lab.Width + 1, lab.Height + 1);
+            TextRenderer.DrawText(g, label, _fRow, new Rectangle(lab.X + 2, ry, tw - 2, rh), row.Active ? Color.White : Theme.TextCol,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+        g.Clip = saved;
+        Theme.Bevel(g, frame, raised: false);
+
+        // the footer is separated from the tree by an etched rule
+        using (var sh = new Pen(Theme.FaceShadow)) g.DrawLine(sh, 4, Height - FooterH + 4, Width - 5, Height - FooterH + 4);
+        using (var hi = new Pen(Theme.FaceHi)) g.DrawLine(hi, 4, Height - FooterH + 5, Width - 5, Height - FooterH + 5);
+    }
+
+    /// <summary>The 16 x 13 manila folder of a 1995 tree view: a tab, a yellow body, a black outline.</summary>
+    private static void DrawClassicFolder(Graphics g, int x, int y)
+    {
+        using var body = new SolidBrush(Color.FromArgb(255, 255, 0));
+        using var shade = new SolidBrush(Color.FromArgb(128, 128, 0));
+        using var k = new Pen(Color.Black);
+        using var hi = new Pen(Color.FromArgb(255, 255, 192));
+        g.FillRectangle(body, x + 1, y, 6, 2);           // the tab
+        g.DrawLine(k, x + 1, y, x + 6, y);
+        g.DrawLine(k, x, y + 1, x, y + 2);
+        g.DrawLine(k, x + 7, y + 1, x + 7, y + 2);
+        g.FillRectangle(body, x + 1, y + 3, 14, 9);      // the body
+        g.DrawRectangle(k, x, y + 2, 15, 10);
+        g.DrawLine(hi, x + 1, y + 3, x + 14, y + 3);     // lit top edge
+        g.FillRectangle(shade, x + 1, y + 11, 14, 1);    // shaded bottom edge
     }
 
     protected override void Dispose(bool disposing)

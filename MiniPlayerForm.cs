@@ -422,6 +422,7 @@ internal sealed class MiniPlayerForm : Form
         bool idle = _track is null;
 
         // transport (dimmed + inert when idle); shuffle/repeat are modes — always live
+        if (Theme.Classic) { NowPlayingBar.ClassicToolButton(g, l.Shuffle); NowPlayingBar.ClassicToolButton(g, l.Repeat); }
         NowPlayingBar.DrawShuffle(g, l.Shuffle, _shuffle, _hover == Hit.Shuffle);
         NowPlayingBar.DrawCircleGlyph(g, l.Prev, _hover == Hit.Prev, NowPlayingBar.GlyphPrevL, idle);
         NowPlayingBar.DrawPlayDisc(g, l.Play, _hover == Hit.Play, idle, _playMorph);

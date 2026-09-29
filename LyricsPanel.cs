@@ -90,7 +90,9 @@ internal sealed class LyricsPanel : Control
     /// (the tab strip already says "Lyrics") with the picker + full-view buttons, and there is no × of its own.</summary>
     public bool Docked { get => _docked; set { _docked = value; BackColor = Surface; Invalidate(); } }
     private bool _docked;
-    private Color Surface => _docked ? Theme.Bg : Theme.PanelBg;
+    // Classic: the words sit on a white page - the sheet reads like a document open in Notepad - while the header
+    // and the sync row stay grey chrome round it (PaintBand).
+    private Color Surface => Theme.Classic ? Color.White : _docked ? Theme.Bg : Theme.PanelBg;
 
     private double _scroll;                         // current pixel offset
     private double _userScroll;                     // manual wheel offset (decays back to follow mode)
@@ -480,6 +482,25 @@ internal sealed class LyricsPanel : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        PaintCore(e);
+        if (Theme.Classic) PaintClassicSheetEdge(e.Graphics);
+    }
+
+    /// <summary>The white sheet's sunken edge, with a strip of window face either side of it.</summary>
+    private void PaintClassicSheetEdge(Graphics g)
+    {
+        int top = HeaderH, bottom = _lines.Count > 0 && !_picking ? Height - FooterH : Height - 3;
+        if (bottom - top < 8) return;
+        using (var face = new SolidBrush(Theme.Face))
+        {
+            g.FillRectangle(face, 0, top, 4, bottom - top);
+            g.FillRectangle(face, Width - 4, top, 4, bottom - top);
+        }
+        Theme.Bevel(g, new Rectangle(4, top, Width - 8, bottom - top), raised: false);
+    }
+
+    private void PaintCore(PaintEventArgs e)
+    {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = Theme.TextHint;
@@ -703,12 +724,7 @@ internal sealed class LyricsPanel : Control
     /// turns inward to come back.</summary>
     private void DrawExpand(Graphics g, Rectangle r, bool hot)
     {
-        if (hot)
-        {
-            using var hp = Theme.RoundedRect(r, 6);
-            using var hb = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, 0.14f));
-            g.FillPath(hb, hp);
-        }
+        if (hot) HotChip(g, r);
         using var pen = new Pen(hot ? Theme.TextCol : Theme.Subtle, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
         g.DrawLine(pen, cx + 5, cy - 5, cx + 1, cy - 1); g.DrawLine(pen, cx + 1, cy - 5, cx + 5, cy - 5); g.DrawLine(pen, cx + 5, cy - 1, cx + 5, cy - 5);
@@ -719,12 +735,7 @@ internal sealed class LyricsPanel : Control
     /// becomes a back arrow, because the same button is the way out.</summary>
     private void DrawMore(Graphics g, Rectangle r, bool hot, bool back)
     {
-        if (hot)
-        {
-            using var hp = Theme.RoundedRect(r, 6);
-            using var hb = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, 0.14f));
-            g.FillPath(hb, hp);
-        }
+        if (hot) HotChip(g, r);
         var c = hot ? Theme.TextCol : Theme.Subtle;
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
         if (back)
@@ -778,7 +789,7 @@ internal sealed class LyricsPanel : Control
         g.SetClip(band);
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint))
         {
-            using var b = new SolidBrush(Surface);
+            using var b = new SolidBrush(Theme.Classic ? Theme.Face : Surface);
             g.FillRectangle(b, band);
         }
         g.ResetClip();
@@ -827,12 +838,7 @@ internal sealed class LyricsPanel : Control
         string num = (ms > 0 ? "+" : ms < 0 ? "−" : "") + (Math.Abs(ms) / 1000.0).ToString("0.0");
         // Non-zero is drawn in the accent colour: a single press changes the number AND lights it up, so the
         // control answers immediately even though one step barely moves the sheet.
-        if (_hotSync == 2)
-        {
-            using var path = Theme.RoundedRect(ValueRect, 6);
-            using var back = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, 0.14f));
-            g.FillPath(back, path);
-        }
+        if (_hotSync == 2) HotChip(g, ValueRect);
         TextRenderer.DrawText(g, Loc.T("{0} s", num), _fStatus, ValueRect,
             ms == 0 ? Theme.Subtle : Theme.Accent,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
@@ -841,14 +847,18 @@ internal sealed class LyricsPanel : Control
         DrawStep(g, PlusRect, plus: true, hot: _hotSync == 3);
     }
 
+    /// <summary>The hover chip behind a header or sync button. Classic: a toolbar button's thin raised edge.</summary>
+    private void HotChip(Graphics g, Rectangle r)
+    {
+        if (Theme.Classic) { Theme.Bevel(g, r, raised: true, thin: true); return; }
+        using var path = Theme.RoundedRect(r, 6);
+        using var back = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, 0.14f));
+        g.FillPath(back, path);
+    }
+
     private void DrawStep(Graphics g, Rectangle r, bool plus, bool hot)
     {
-        if (hot)
-        {
-            using var path = Theme.RoundedRect(r, 6);
-            using var back = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, 0.14f));
-            g.FillPath(back, path);
-        }
+        if (hot) HotChip(g, r);
         using var pen = new Pen(hot ? Theme.TextCol : Theme.Subtle, 1.7f);
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, m = 5;
         g.DrawLine(pen, cx - m, cy, cx + m, cy);

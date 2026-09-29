@@ -142,6 +142,7 @@ internal abstract class FlyoutForm : Form, IGlassHost
             }
             return;
         }
+        if (Theme.Classic) { Theme.Bevel(e.Graphics, ClientRectangle, raised: true); return; }   // a popup of 1995: a small raised window
         // A faint rounded edge that aligns with the DWM-rounded corners (the OS clips the window to this radius).
         using var path = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Radius);
         using var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.12));

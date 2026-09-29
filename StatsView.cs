@@ -96,7 +96,7 @@ internal sealed class StatsView : Panel
     {
         if (_barDrag)
         {
-            int track = Math.Max(1, Height - 12);
+            int track = Math.Max(1, Theme.Classic ? Theme.PageTrackLen(Height) : Height - 12);
             SetScroll(_dragScroll0 + (int)((e.Y - _dragY0) * (double)_contentH / track));
             return;
         }
@@ -113,6 +113,7 @@ internal sealed class StatsView : Panel
     private void OnDown(object? s, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left || e.X < Width - BarZone || _contentH <= Height) return;
+        if (Theme.PageArrowAt(e.Y, Height) is int arrow && arrow != 0) { SetScroll(_scroll + arrow * 48, animate: true); return; }
         _barDrag = true; _dragY0 = e.Y; _dragScroll0 = _scroll;
         Invalidate();
     }
@@ -213,7 +214,7 @@ internal sealed class StatsView : Panel
         TextRenderer.DrawText(g, s.Value, f, new Rectangle(r.X + 16, r.Y + 11, box, 36), s.Accent ? Theme.AccentBright : Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         fit?.Dispose();
-        TextRenderer.DrawText(g, s.Label.ToUpperInvariant(), _fLabel, new Rectangle(r.X + 16, r.Bottom - 30, r.Width - 32, 20), Theme.Faint,
+        TextRenderer.DrawText(g, Theme.Caps(s.Label), _fLabel, new Rectangle(r.X + 16, r.Bottom - 30, r.Width - 32, 20), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
     }
 
@@ -228,7 +229,7 @@ internal sealed class StatsView : Panel
         using (var p = Theme.RoundedRect(card, Theme.RadCard)) g.FillPath(b, p);
         if (Theme.Classic) Theme.EtchedFrame(g, card);
 
-        TextRenderer.DrawText(g, sec.Label.ToUpperInvariant(), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
+        TextRenderer.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         double max = 1;
@@ -284,9 +285,9 @@ internal sealed class StatsView : Panel
     private void DrawScrollBar(Graphics g)
     {
         if (_contentH <= Height) return;
-        int track = Height - 12;
+        int track = Theme.Classic ? Theme.PageTrackLen(Height) : Height - 12;
         int th = Math.Max(30, (int)(track * (double)Height / _contentH));
-        int ty = 6 + (int)((track - th) * (_scroll / (double)Math.Max(1, _contentH - Height)));
+        int ty = (Theme.Classic ? Theme.PageTrackTop : 6) + (int)((track - th) * (_scroll / (double)Math.Max(1, _contentH - Height)));
         if (Theme.Classic) { Theme.PaintClassicPageScroll(g, Width, Height, ty, th); return; }
         using var b = new SolidBrush(Color.FromArgb(_barHover || _barDrag ? 90 : 46, 255, 255, 255));
         using var p = Theme.RoundedRect(new Rectangle(Width - 10, ty, 5, th), 2.5f);

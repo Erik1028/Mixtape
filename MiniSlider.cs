@@ -45,6 +45,15 @@ internal sealed class MiniSlider : Control
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.Bg);
+        if (Theme.Classic)
+        {
+            float f0 = _max > _min ? (float)(_value - _min) / (_max - _min) : 0;
+            Color gl = Theme.TextCol;
+            DrawPhotoGlyph(g, 18f, Height / 2f, 11f, gl);
+            DrawPhotoGlyph(g, Width - 20f, Height / 2f, 15f, gl);
+            Theme.ClassicTrackbar(g, new Rectangle((int)TrackX0, 0, (int)(TrackX1 - TrackX0), Height), f0);
+            return;
+        }
 
         // Recessed rounded frame — matches the search box that shares this header row (1.5px inset so the pill's
         // rounded ends don't clip against the control edge).

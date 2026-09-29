@@ -124,8 +124,9 @@ internal sealed class UpNextPanel : Control
         }
         if (_items.Count > 0)
         {
-            if (_hoverClear) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(ClearRect, Theme.RadControl); g.FillPath(hb, hp); }
-            TextRenderer.DrawText(g, Loc.T("Clear"), _fClear, ClearRect, _hoverClear ? Theme.TextCol : Theme.Subtle,
+            if (Theme.Classic) Theme.FaceBevel(g, ClearRect, raised: true);   // Classic: "Clear" is a push button
+            else if (_hoverClear) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(ClearRect, Theme.RadControl); g.FillPath(hb, hp); }
+            TextRenderer.DrawText(g, Loc.T("Clear"), _fClear, ClearRect, Theme.Classic || _hoverClear ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
         if (!_docked) DrawX(g, CloseRect, _hoverClose);
@@ -139,7 +140,7 @@ internal sealed class UpNextPanel : Control
             int cy = HeadH + (NowH - Art) / 2;
             DrawArt(g, _nowArt, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad;
-            TextRenderer.DrawText(g, Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeadH + 8, tw, 12), Theme.Accent,
+            TextRenderer.DrawText(g, Theme.Classic ? Loc.T("Now Playing") : Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeadH + 8, tw, 12), Theme.Accent,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix);
             TextRenderer.DrawText(g, _now.DisplayTitle, _fNowTitle, new Rectangle(tx, HeadH + 20, tw, 18), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
@@ -150,6 +151,7 @@ internal sealed class UpNextPanel : Control
 
         // upcoming list (clipped)
         var clip = new Rectangle(0, ListTop, Width, ListViewH);
+        if (Theme.Classic) using (var wb = new SolidBrush(Color.White)) g.FillRectangle(wb, clip);   // the queue is a list box: white inside a sunken edge
         using var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
         if (_items.Count == 0)
         {
@@ -182,9 +184,15 @@ internal sealed class UpNextPanel : Control
             using var dot = new SolidBrush(Theme.Accent); g.FillEllipse(dot, Pad - 3, y - 3, 6, 6);
         }
         g.Clip = saved;
+        if (Theme.Classic) Theme.Bevel(g, clip, raised: false);
 
         // scrollbar thumb
-        if (MaxScroll > 0)
+        if (MaxScroll > 0 && Theme.Classic)
+        {
+            var (cty, cth) = Thumb();
+            Theme.FaceBevel(g, new Rectangle(Width - ThumbW - 8, cty, ThumbW + 4, cth), raised: true);
+        }
+        else if (MaxScroll > 0)
         {
             var (ty, th) = Thumb();
             using var b = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, _thumbDrag ? 0.40 : 0.22));
@@ -221,6 +229,16 @@ internal sealed class UpNextPanel : Control
 
     private static void DrawX(Graphics g, Rectangle r, bool hover)
     {
+        if (Theme.Classic)   // the pixel cross of a 95 caption button; raised while the pointer is on it
+        {
+            var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.None;
+            if (hover) Theme.Bevel(g, r, raised: true, thin: true);
+            using var kb = new SolidBrush(Theme.FaceDark);
+            int kx = r.X + r.Width / 2, ky = r.Y + r.Height / 2;
+            for (int i = 0; i < 6; i++) { g.FillRectangle(kb, kx - 3 + i, ky - 3 + i, 2, 1); g.FillRectangle(kb, kx + 2 - i, ky - 3 + i, 2, 1); }
+            g.SmoothingMode = sm0;
+            return;
+        }
         if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, r.Width / 2f); g.FillPath(hb, hp); }
         using var pen = new Pen(hover ? Theme.TextCol : Theme.Subtle, 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f, s = 4.5f;

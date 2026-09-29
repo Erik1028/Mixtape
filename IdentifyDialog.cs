@@ -100,8 +100,9 @@ internal sealed class IdentifyDialog : CardDialog
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = Theme.TextHint;
             g.Clear(Parent?.BackColor ?? Theme.Bg);
-            using (var b = new SolidBrush(Theme.PanelBg))
+            using (var b = new SolidBrush(Theme.Classic ? Color.White : Theme.PanelBg))
             using (var p = Theme.RoundedRect(new Rectangle(0, 0, Width, Height), Theme.RadCard)) g.FillPath(b, p);
+            if (Theme.Classic) Theme.Bevel(g, new Rectangle(0, 0, Width, Height), raised: false);
 
             if (_c.Count == 0)
             {
@@ -120,26 +121,27 @@ internal sealed class IdentifyDialog : CardDialog
                 bool sel = i == Index;
                 if (sel || i == _hover)
                 {
-                    using var hb = new SolidBrush(sel ? Color.FromArgb(48, Theme.Accent) : Theme.RowHover);
+                    using var hb = new SolidBrush(sel ? (Theme.Classic ? Theme.ClassicNavy : Color.FromArgb(48, Theme.Accent)) : Theme.RowHover);
                     using var hp = Theme.RoundedRect(row, Theme.RadControl);
                     g.FillPath(hb, hp);
                 }
-                if (sel)
+                if (sel && !Theme.Classic)   // Classic: the navy band is the whole mark
                 {
                     using var bar = new SolidBrush(Theme.AccentBright);
                     using var bp = Theme.RoundedRect(new RectangleF(row.X + 3, row.Y + 7f, 3, row.Height - 14f), 1.5f);
                     g.FillPath(bar, bp);
                 }
                 var c = _c[i];
-                TextRenderer.DrawText(g, c.Artist + "  —  " + c.Title, _fTitle, new Rectangle(row.X + 16, row.Y + 3, row.Width - 130, 18), Theme.TextCol,
+                bool inv = sel && Theme.Classic;   // white on the navy band
+                TextRenderer.DrawText(g, c.Artist + "  —  " + c.Title, _fTitle, new Rectangle(row.X + 16, row.Y + 3, row.Width - 130, 18), inv ? Color.White : Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, c.Album.Length > 0 ? c.Album : Loc.T("(no album)"), _fSub, new Rectangle(row.X + 16, row.Y + 19, row.Width - 130, 16), Theme.Faint,
+                TextRenderer.DrawText(g, c.Album.Length > 0 ? c.Album : Loc.T("(no album)"), _fSub, new Rectangle(row.X + 16, row.Y + 19, row.Width - 130, 16), inv ? Color.FromArgb(206, 206, 206) : Theme.Faint,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, NowPlayingBar.Fmt(c.Seconds), _fTitle, new Rectangle(row.Right - 110, row.Y + 3, 92, 18), Theme.Subtle,
+                TextRenderer.DrawText(g, NowPlayingBar.Fmt(c.Seconds), _fTitle, new Rectangle(row.Right - 110, row.Y + 3, 92, 18), inv ? Color.White : Theme.Subtle,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 if (c.Delta > 0.9)
                     TextRenderer.DrawText(g, (c.Delta < 60 ? $"±{c.Delta:0} s" : "±" + NowPlayingBar.Fmt(c.Delta)), _fSub, new Rectangle(row.Right - 110, row.Y + 19, 92, 16),
-                        c.Delta <= 10 ? Theme.Faint : Theme.Blend(Theme.Faint, Color.Red, 0.35),   // a few seconds apart is the same recording; a minute is not
+                        inv ? Color.FromArgb(206, 206, 206) : c.Delta <= 10 ? Theme.Faint : Theme.Blend(Theme.Faint, Color.Red, 0.35),   // a few seconds apart is the same recording; a minute is not
                         TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
             g.Clip = clip;

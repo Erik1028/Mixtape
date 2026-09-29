@@ -43,6 +43,7 @@ internal sealed class HomeView : Panel
     private const int Pad = 22, Gap = 16, TextH = 42, LabelH = 22, RowH = 26, CardH = 70, SectionGap = 26, BarZone = 16;
     private const int TargetCover = 118, MaxCover = 150, MinCols = 3, MaxCols = 8;
     private readonly Font _fLabel = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);
+    private readonly Font _fGroup = Theme.UiFont(Theme.SzBody);   // Classic: a group box caption (regular weight, as in 1995)
     private readonly Font _fTitle = Theme.UiFont(9.5f, FontStyle.Bold), _fSub = Theme.UiFont(Theme.SzCaption);
     private readonly Font _fRow = Theme.UiFont(Theme.SzTitle, FontStyle.Bold), _fFig = Theme.UiFont(Theme.SzCaption, FontStyle.Bold);
     private readonly Font _fCardTitle = Theme.UiFont(10.5f, FontStyle.Bold);
@@ -177,8 +178,9 @@ internal sealed class HomeView : Panel
     {
         int max = MaxScroll();
         if (max <= 0 || _contentH <= 0) return (0, 0, 0);
-        int barH = Math.Max(30, (int)(Height * ((float)Height / _contentH)));
-        int barY = (int)((Height - barH) * (_scroll / (float)max));
+        int track = Theme.PageTrackLen(Height);   // Classic: between the arrow buttons
+        int barH = Math.Max(30, (int)(track * ((float)Height / _contentH)));
+        int barY = Theme.PageTrackTop + (int)((track - barH) * (_scroll / (float)max));
         return (max, barH, barY);
     }
 
@@ -187,7 +189,7 @@ internal sealed class HomeView : Panel
         if (_barDragging)
         {
             var (max, barH, _) = Bar();
-            if (max > 0) { double per = max / (double)Math.Max(1, Height - barH); SetScroll((int)Math.Round(_barDragStartScroll + (e.Y - _barDragStartY) * per)); }
+            if (max > 0) { double per = max / (double)Math.Max(1, Theme.PageTrackLen(Height) - barH); SetScroll((int)Math.Round(_barDragStartScroll + (e.Y - _barDragStartY) * per)); }
             return;
         }
         bool overBar = Bar().Max > 0 && e.X >= Width - BarZone;
@@ -203,6 +205,7 @@ internal sealed class HomeView : Panel
         var (max, barH, barY) = Bar();
         if (e.Button == MouseButtons.Left && max > 0 && e.X >= Width - BarZone)
         {
+            if (Theme.PageArrowAt(e.Y, Height) is int arrow && arrow != 0) { SetScroll(_scroll + arrow * 48, animate: true); return; }
             if (e.Y >= barY && e.Y <= barY + barH) { _barDragging = true; _barDragStartY = e.Y; _barDragStartScroll = _scroll; }
             else SetScroll(_scroll + (e.Y < barY ? -1 : 1) * (int)(Height * 0.9));
         }
@@ -272,9 +275,30 @@ internal sealed class HomeView : Panel
         }
     }
 
-    private void DrawLabel(Graphics g, int x, int y, int w, string text) =>
-        TextRenderer.DrawText(g, text.ToUpperInvariant(), _fLabel, new Rectangle(x, y, w, LabelH), Theme.Faint,
+    private void DrawLabel(Graphics g, int x, int y, int w, string text)
+    {
+        if (Theme.Classic) return;   // Classic: the caption rides the group box's frame instead (ClassicGroup)
+        TextRenderer.DrawText(g, Theme.Caps(text), _fLabel, new Rectangle(x, y, w, LabelH), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>
+    /// Classic: a section of the page as a 1995 group box - an etched frame round the label's content, with the
+    /// caption sitting ON the top line and interrupting it, the way every property sheet of the era grouped its
+    /// controls. The frame stands eight pixels outside the content, inside the page's own padding.
+    /// </summary>
+    private void ClassicGroup(Graphics g, int x, int y, int w, int contentBottom, string caption)
+    {
+        if (!Theme.Classic) return;
+        int top = y + LabelH / 2;
+        Theme.EtchedFrame(g, new Rectangle(x - 8, top, w + 16, contentBottom + 8 - top));
+        // measured and drawn with the SAME flags, or the caption comes out a few pixels short and ellipsised
+        var sz = TextRenderer.MeasureText(g, caption, _fGroup, new Size(int.MaxValue, LabelH), TextFormatFlags.NoPrefix);
+        var cap = new Rectangle(x - 4, top - sz.Height / 2, Math.Min(w - 4, sz.Width + 2), sz.Height);
+        using (var face = new SolidBrush(Theme.Bg)) g.FillRectangle(face, cap);
+        TextRenderer.DrawText(g, caption, _fGroup, cap, Theme.TextCol,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
 
     /// <summary>A shelf: the label, then as many covers as fit on one row (the covers flex to fill the width).</summary>
     private int DrawStrip(Graphics g, int x, int y, int w, Strip s)
@@ -292,6 +316,7 @@ internal sealed class HomeView : Panel
             if (ty + TileH < 0 || ty > Height) continue;
             DrawTile(g, tx, ty, cover, t);
         }
+        ClassicGroup(g, x, y, w, ty + TileH, s.Label);
         return ty + TileH + SectionGap;
     }
 
@@ -343,8 +368,7 @@ internal sealed class HomeView : Panel
         using (var fill = new SolidBrush(cardCol))
         using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.FillPath(fill, cp);
         _resumeBtn.Surface = cardCol;   // the button clears its corners to the CARD, not to the page behind it
-        if (Theme.Classic) Theme.EtchedFrame(g, card);
-        else
+        if (!Theme.Classic)   // Classic: the group box round the section frames the card
         using (var line = new Pen(Color.FromArgb(28, 255, 255, 255)))
         using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.DrawPath(line, cp);
         var art = new Rectangle(card.X + 8, card.Y + 8, CardH - 16, CardH - 16);
@@ -363,6 +387,7 @@ internal sealed class HomeView : Panel
         if (timesW > 0) TextRenderer.DrawText(g, r.Times, _fSub, new Rectangle(tx + tw - timesW, card.Y + 37, timesW, 18), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
         _resumeBtn.Visible = true;
         _resumeBtn.SetBounds(card.Right - 12 - btnW, card.Y + (CardH - 30) / 2, btnW, 30);
+        ClassicGroup(g, x, y, w, card.Bottom, Loc.T("Continue listening"));
         return card.Bottom;
     }
 
@@ -377,7 +402,12 @@ internal sealed class HomeView : Panel
             var rect = new Rectangle(x, ry + i * RowH, w, RowH);
             _hit.Add((rect, row));
             if (rect.Bottom < 0 || rect.Top > Height) continue;
-            if (ReferenceEquals(row, _hover)) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(new Rectangle(rect.X - 8, rect.Y, rect.Width + 16, rect.Height), 6); g.FillPath(hb, hp); }
+            if (ReferenceEquals(row, _hover))
+            {
+                using var hb = new SolidBrush(Theme.RowHover);
+                if (Theme.Classic) g.FillRectangle(hb, rect.X - 4, rect.Y, rect.Width + 8, rect.Height);   // inside the group box's frame
+                else { using var hp = Theme.RoundedRect(new Rectangle(rect.X - 8, rect.Y, rect.Width + 16, rect.Height), 6); g.FillPath(hb, hp); }
+            }
             int figW = row.Figure.Length > 0 ? TextRenderer.MeasureText(row.Figure, _fFig, new Size(200, RowH), TextFormatFlags.NoPrefix).Width + 6 : 0;
             int textW = w - figW;
             int titleW = TextRenderer.MeasureText(row.Title, _fRow, new Size(int.MaxValue, RowH), TextFormatFlags.NoPrefix).Width;
@@ -389,6 +419,7 @@ internal sealed class HomeView : Panel
                 TextRenderer.DrawText(g, row.Figure, _fFig, new Rectangle(rect.Right - figW, rect.Y, figW, RowH), row.Accent ? Theme.Accent : Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             if (i < _rows.Count - 1) { using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, rect.X, rect.Bottom - 1, rect.Right, rect.Bottom - 1); }
         }
+        ClassicGroup(g, x, y, w, ry + _rows.Count * RowH, _listLabel);
         return ry + _rows.Count * RowH;
     }
 
@@ -417,7 +448,7 @@ internal sealed class HomeView : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { foreach (var s in _strips) foreach (var t in s.Tiles) t.Tween?.Cancel(); _fLabel.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fRow.Dispose(); _fFig.Dispose(); _fCardTitle.Dispose(); }
+        if (disposing) { foreach (var s in _strips) foreach (var t in s.Tiles) t.Tween?.Cancel(); _fLabel.Dispose(); _fGroup.Dispose(); _fTitle.Dispose(); _fSub.Dispose(); _fRow.Dispose(); _fFig.Dispose(); _fCardTitle.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -164,7 +164,7 @@ internal sealed class TrackHeader : Control
         var g = e.Graphics;
         g.Clear(Theme.Classic ? Theme.Face : Theme.Bg);
         g.TextRenderingHint = Theme.TextHint;
-        using var f = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);
+        using var f = Theme.UiFont(Theme.SzLabel, Theme.Classic ? FontStyle.Regular : FontStyle.Bold);   // a 95 header's captions were regular weight
         if (Theme.Classic) { PaintClassic(g, f); return; }
 
         for (int i = 0; i < _grid.Columns.Count; i++)
@@ -219,7 +219,7 @@ internal sealed class TrackHeader : Control
                         | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
             string head = _grid.Columns[i].HeaderText;
             int ai = head.IndexOf("  \u2191", StringComparison.Ordinal); if (ai < 0) ai = head.IndexOf("  \u2193", StringComparison.Ordinal);
-            string caption = ai >= 0 ? Loc.T(head[..ai]) + head[ai..] : Loc.T(head);
+            string caption = ai >= 0 ? Theme.ClassicCase(Loc.T(head[..ai])) + head[ai..] : Theme.ClassicCase(Loc.T(head));   // "Song", not "SONG"
             TextRenderer.DrawText(g, caption, f, pad, Theme.TextCol, flags);
         }
         if (end < Width) Theme.FaceBevel(g, new Rectangle(end, 0, Width - end, Height), raised: true);
