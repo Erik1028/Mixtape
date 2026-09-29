@@ -243,6 +243,6 @@ internal sealed class SmartPlaylistDialog : CardDialog
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
+        try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
     }
 }

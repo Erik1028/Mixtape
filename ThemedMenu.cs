@@ -48,9 +48,9 @@ internal static class MenuStyle
 
     public static readonly RoundMenuRenderer Renderer = new();
 
-    public static Color Surface => Theme.Blend(Theme.PanelBg, Color.White, 0.05);   // a touch elevated off the content
+    public static Color Surface => Theme.Classic ? Theme.Face : Theme.Blend(Theme.PanelBg, Color.White, 0.05);   // a touch elevated off the content
     public static Color BorderCol => Theme.Blend(Surface, Color.White, 0.10);
-    public static Color Hover => Theme.Blend(Surface, Theme.Accent, 0.20);
+    public static Color Hover => Theme.Classic ? Theme.ClassicNavy : Theme.Blend(Surface, Theme.Accent, 0.20);
     public static Color SeparatorCol => Theme.Blend(Surface, Color.White, 0.09);
 
     public static Font Font() => Theme.UiFont(Theme.SzBody);
@@ -66,7 +66,7 @@ internal static class MenuStyle
         d.Renderer = Renderer;     // assigning a renderer implicitly switches RenderMode to Custom
         // Only TOP/BOTTOM breathing room inside the rounded corners — NO left/right window padding, so a
         // submenu sits flush against its parent (horizontal text/pill insets come from the item itself).
-        d.Padding = new Padding(0, 6, 0, 6);
+        d.Padding = Theme.Classic ? new Padding(0, 3, 0, 3) : new Padding(0, 6, 0, 6);   // Classic: the rows start just inside the raised edge
         // Close the gap WinForms leaves between a submenu and its parent. Subscribed on every dropdown;
         // the handler no-ops for the top menu (no OwnerItem) and only repositions actual submenus.
         d.Opened -= FlushToParent;
@@ -114,7 +114,7 @@ internal static class MenuStyle
     public static void StyleItem(ToolStripItem it)
     {
         if (it is not ToolStripMenuItem mi) return;
-        mi.Padding = new Padding(10, 5, 12, 5);   // taller rows + comfortable left text inset
+        mi.Padding = Theme.Classic ? new Padding(10, 2, 12, 2) : new Padding(10, 5, 12, 5);   // taller rows + comfortable left text inset (Classic: the era's tight 18 px rows)
         if (mi.HasDropDownItems && mi.DropDown is ToolStripDropDownMenu sub)
         {
             Apply(sub);
@@ -149,7 +149,7 @@ internal static class MenuGlass
     public static void OnOpened(object? sender, EventArgs e)
     {
         if (sender is not ToolStripDropDown dd) return;
-        if (!Glass.PopupsEnabled) { Drop(dd); return; }
+        if (!Glass.PopupsEnabled || Theme.Classic) { Drop(dd); return; }   // no liquid glass in 1995
         try
         {
             if (dd.OwnerItem is null)   // top-level open → start a session: capture the host window ONCE
@@ -243,6 +243,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
     {
         var g = e.Graphics;
+        if (Theme.Classic) { Theme.Bevel(g, new Rectangle(0, 0, e.ToolStrip.Width, e.ToolStrip.Height), raised: true); return; }   // a 95 menu: a raised window
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using var path = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, e.ToolStrip.Width - 1.5f, e.ToolStrip.Height - 1.5f), Radius() - 0.5f);
         using var pen = new Pen(MenuStyle.BorderCol, 1f);
@@ -253,6 +254,12 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     {
         if (!e.Item.Selected || !e.Item.Enabled) return;   // disabled items never light up
         var g = e.Graphics;                                 // graphics origin is the item's top-left
+        if (Theme.Classic)   // a solid navy band across the row, inside the menu's edge
+        {
+            using var nb = new SolidBrush(Theme.ClassicNavy);
+            g.FillRectangle(nb, 3, 0, e.Item.Width - 6, e.Item.Height);
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var rc = new RectangleF(MenuStyle.PillInsetX, 1, e.Item.Width - MenuStyle.PillInsetX * 2, e.Item.Height - 2);
         using var path = Theme.RoundedRect(rc, MenuStyle.PillRadius);
@@ -263,6 +270,16 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
         e.TextColor = e.Item.Enabled ? Theme.TextCol : Theme.Faint;
+        if (Theme.Classic)
+        {
+            e.TextColor = !e.Item.Enabled ? Theme.FaceShadow : e.Item.Selected ? Color.White : Theme.TextCol;
+            if (!e.Item.Enabled)   // the embossed grey of a disabled command: white one pixel down-right, grey on top
+            {
+                var tr0 = e.TextRectangle;
+                TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont, new Rectangle(tr0.X + 1, 1, tr0.Width, e.Item.Height), Theme.FaceHi,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            }
+        }
         // Re-center the text across the full row height (keeping the laid-out left inset + width) so it
         // can never ride high in a tall row, whatever the layout timing. e.TextRectangle is item-relative.
         var tr = e.TextRectangle;
@@ -277,6 +294,14 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
         var g = e.Graphics;                                 // graphics origin is the item's top-left
         g.SmoothingMode = SmoothingMode.None;
         int y = e.Item.Height / 2;
+        if (Theme.Classic)   // the etched rule of a 95 menu, nearly edge to edge
+        {
+            using var sh = new Pen(Theme.FaceShadow);
+            using var hi = new Pen(Theme.FaceHi);
+            g.DrawLine(sh, 3, y - 1, e.Item.Width - 4, y - 1);
+            g.DrawLine(hi, 3, y, e.Item.Width - 4, y);
+            return;
+        }
         using var pen = new Pen(MenuStyle.SeparatorCol);
         g.DrawLine(pen, 12, y, e.Item.Width - 12, y);
     }
@@ -286,6 +311,14 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var r = e.ArrowRectangle;
+        if (Theme.Classic)   // the solid black (white when highlighted) submenu arrow
+        {
+            g.SmoothingMode = SmoothingMode.None;
+            using var ab = new SolidBrush(e.Item?.Selected == true ? Color.White : Theme.FaceDark);
+            int ax = r.Left + r.Width / 2 - 2, ay = r.Top + r.Height / 2;
+            for (int i = 0; i < 4; i++) g.FillRectangle(ab, ax + i, ay - 3 + i, 1, 7 - 2 * i);
+            return;
+        }
         float cx = r.Left + r.Width * 0.40f;
         float cy = r.Top + r.Height / 2f;
         float h = Math.Min(r.Height, 11) * 0.42f;           // half chevron height
@@ -303,6 +336,17 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
     {
         if (e.Item is not ToolStripMenuItem { Checked: true }) return;
         var g = e.Graphics; var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+        if (Theme.Classic)   // the era's 3-pixel tick, in the text colour
+        {
+            g.SmoothingMode = SmoothingMode.None;
+            using var kb = new SolidBrush(e.Item.Selected ? Color.White : Theme.FaceDark);
+            var ir = e.ImageRectangle;
+            int kx = ir.X + ir.Width / 2 - 3, ky = e.Item.Height / 2 - 3;
+            int[] top = { 2, 3, 4, 3, 2, 1, 0 };
+            for (int i = 0; i < 7; i++) g.FillRectangle(kb, kx + i, ky + top[i], 1, 3);
+            g.SmoothingMode = sm;
+            return;
+        }
         using var pen = new Pen(Theme.Accent, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
         var r = e.ImageRectangle;
         float cx = r.X + r.Width / 2f + 1, cy = e.Item.Height / 2f;
@@ -310,7 +354,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
         g.SmoothingMode = sm;
     }
 
-    private static float Radius() => MenuStyle.Radius;
+    private static float Radius() => Theme.Classic ? 0 : MenuStyle.Radius;   // a 95 menu is a rectangle
 }
 
 /// <summary>Dark colour table — a fallback for any rendering not fully owner-drawn above.</summary>

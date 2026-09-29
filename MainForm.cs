@@ -138,6 +138,7 @@ internal sealed class MainForm : Form, IMessageFilter
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.None; // custom title bar — chrome handled in WndProc/CreateParams
         try { if (Environment.ProcessPath is string p) Icon = System.Drawing.Icon.ExtractAssociatedIcon(p); } catch { }
+        Theme.SetSkin(_settings.ClassicSkin);   // the skin FIRST: it decides what the palette, the radii and the font even are
         Theme.SetAccent(_settings.Accent); // apply saved accent before any control styles bake it in
         Theme.SetThemeVariant(_settings.ThemeVariant); // and the background palette, before controls bake their BackColors
         SeedDefaultSort();
@@ -213,8 +214,11 @@ internal sealed class MainForm : Form, IMessageFilter
         _deviceScroll.Invalidate();
     }
 
-    private const int Gap = 14;        // wallpaper gap around + between the floating cards
-    private const int CardRadius = Theme.RadShell; // rounded card corners
+    private static int Gap => Theme.Classic ? 3 : 14;   // wallpaper gap around + between the floating cards (Classic: a window's panels butt together inside its frame)
+    /// <summary>What the Classic title bar takes off the top of the shell (0 in the modern look, which draws
+    /// its caption INSIDE the deck / the wallpaper strip instead).</summary>
+    private static int CapTop => Theme.Classic ? Theme.ClassicCaptionH + 3 : 0;
+    private static int CardRadius => Theme.RadShell; // rounded card corners (0 in the Classic skin)
     private int CaptionH => _deck ? NowPlayingBar.TopH : 36;   // the custom title-bar strip height (the whole deck, in deck mode)
     private bool _deck;                 // LAB: the player is the window's top deck (AppSettings.BarOnTop / MIX_DECK)
     private CardFoot? _foot;            // deck mode: the content card's bottom strip
@@ -266,7 +270,16 @@ internal sealed class MainForm : Form, IMessageFilter
         // No BOTTOM padding: the song list flows straight into the now-playing bar with no empty strip between them
         // (the bar's top is Theme.Bg so it stays seamless, and the frosted-glass slice can continue the list with no gap).
         // 14 + the cell's own 8 = the 22 px frame every page keeps to the card edge.
-        var gridHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(14, 10, 8, 0) };
+        // Classic insets the list evenly, because the sunken frame drawn round it needs room on all four sides.
+        var gridHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = Theme.Classic ? new Padding(6, 4, 6, 6) : new Padding(14, 10, 8, 0) };
+        if (Theme.Classic)
+            gridHost.Paint += (_, pe) =>
+            {
+                // The client edge of a 95 list view: the header and the rows sit INSIDE one sunken frame.
+                var d = gridHost.DisplayRectangle;
+                int h = _trackHeader.Height + _trackViewport.Height;
+                if (h > 0) Theme.Bevel(pe.Graphics, new Rectangle(d.X - 2, d.Y - 2, d.Width + 4, h + 4), raised: false);
+            };
         _gridHost = gridHost;
         _selBar = new SelectionBar();
         _selBar.PlayNext += () => _queue.PlayNext(SelectedTracks());
@@ -314,7 +327,7 @@ internal sealed class MainForm : Form, IMessageFilter
         };
         // Song list: a fixed custom header on top + a clipping viewport holding the full-height grid,
         // which pixel-scrolls by moving its Top. The themed scrollbar drives it in panel mode.
-        _trackViewport.BackColor = Theme.Bg;
+        _trackViewport.BackColor = Theme.ListBg;
         _trackHeader = new TrackHeader(_tracks) { Dock = DockStyle.Top };
         _trackHeader.SortRequested += DoSort;
         _trackHeader.MenuRequested += ShowColumnMenu;
@@ -513,24 +526,31 @@ internal sealed class MainForm : Form, IMessageFilter
 
         // Both cards start below the caption strip (or the deck), on one baseline.
         int sideW = Theme.SidebarW;
-        int top = _deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH + 8, bottom = h - Gap;
+        int top = CapTop + (_deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH + 8), bottom = h - Gap;
 
         // The deck goes first: the caption buttons ask it which axis to sit on, and its answer follows its width.
         if (_deck)
         {
-            _nowPlaying.RightReserve = Gap + 4 * Theme.TitleBtnW + 38 + 22;   // keep clear of the gear + window buttons (and a visible gap before them)
-            _nowPlaying.SetBounds(0, 0, w, NowPlayingBar.TopH);
+            // Classic keeps its window buttons up in the title bar, so the deck only has to clear the gear.
+            _nowPlaying.RightReserve = Theme.Classic ? 38 + 22 : Gap + 4 * Theme.TitleBtnW + 38 + 22;
+            _nowPlaying.SetBounds(Theme.Classic ? Gap : 0, CapTop, Math.Max(1, Theme.Classic ? w - 2 * Gap : w), NowPlayingBar.TopH);
             _nowPlaying.SendToBack();
         }
 
         // Caption strip: the window buttons right-aligned, the gear just left of them. In deck mode they share the
         // deck's own axis - its TOP utility row while the deck is stacked in two rows, so the corner reads as one
         // line of controls instead of a third row floating between the other two.
-        int by = _deck ? _nowPlaying.CaptionAxis - Theme.TitleBtnH / 2 : Gap + (Theme.TitleStripH - Theme.TitleBtnH) / 2;
-        int bx = w - Gap - 4 * Theme.TitleBtnW;
+        int deckAxis = CapTop + _nowPlaying.CaptionAxis - Theme.TitleBtnH / 2;
+        int btnW = Theme.Classic ? Theme.ClassicBtnW : Theme.TitleBtnW, btnH = Theme.Classic ? Theme.ClassicBtnH : Theme.TitleBtnH;
+        int by = Theme.Classic ? 3 + (Theme.ClassicCaptionH - btnH) / 2
+               : _deck ? deckAxis : Gap + (Theme.TitleStripH - Theme.TitleBtnH) / 2;
+        int bx = Theme.Classic ? w - 5 - 4 * btnW - 2 : w - Gap - 4 * btnW;
         foreach (var b in new Control[] { _btnMini, _btnMin, _btnMax, _btnClose })
-        { b.SetBounds(bx, by, Theme.TitleBtnW, Theme.TitleBtnH); b.BringToFront(); bx += Theme.TitleBtnW; }
-        _gearBtn.SetBounds(w - Gap - 4 * Theme.TitleBtnW - 38, by, 34, Theme.TitleBtnH);
+        {
+            if (Theme.Classic && b == _btnClose) bx += 2;   // 1995 set Close two pixels apart from its neighbours
+            b.SetBounds(bx, by, btnW, btnH); b.BringToFront(); bx += btnW;
+        }
+        _gearBtn.SetBounds(Theme.Classic ? w - Gap - 38 : w - Gap - 4 * Theme.TitleBtnW - 38, _deck ? deckAxis : by, 34, Theme.TitleBtnH);
         _gearBtn.BringToFront();
         _sidebar.Bounds = new Rectangle(Gap, top, sideW, Math.Max(1, bottom - top));
         int cx = Gap + sideW + Gap;
@@ -571,7 +591,9 @@ internal sealed class MainForm : Form, IMessageFilter
         var art = new DataGridViewImageColumn { HeaderText = "", Width = 64, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, ImageLayout = DataGridViewImageCellLayout.Zoom, SortMode = DataGridViewColumnSortMode.NotSortable, Visible = _settings.ListArtwork };
         _tracks.Columns.Add(art);
 
-        var dimSel = Theme.Blend(Theme.Subtle, Color.White, 0.35); // secondary columns stay dimmer even when the row is selected
+        // Secondary columns stay dimmer even when the row is selected - but over the Classic skin's solid navy
+        // band "dimmer" has to mean a LIGHT grey, or the artist and album go unreadable the moment you click.
+        var dimSel = Theme.Classic ? Color.FromArgb(206, 206, 206) : Theme.Blend(Theme.Subtle, Color.White, 0.35);
 
         var song = new DataGridViewTextBoxColumn { HeaderText = "SONG", FillWeight = 32, MinimumWidth = 70, SortMode = DataGridViewColumnSortMode.NotSortable };
         song.DefaultCellStyle.Padding = new Padding(8, 0, 4, 0);          // match the 8px header inset
@@ -686,9 +708,9 @@ internal sealed class MainForm : Form, IMessageFilter
         e.Graphics.PixelOffsetMode = PixelOffsetMode.None;
         // Three stable colours (selected tint / hover / normal). Reuse a cached brush per colour, rebuilt only when
         // the colour changes (theme/accent switch), so a fast scroll's per-row fills don't churn a fresh GDI brush.
-        SolidBrush b = _tracks.Rows[e.RowIndex].Selected ? RowBrush(ref _bRowSel, ref _cRowSel, Theme.Blend(Theme.Bg, Theme.Accent, 0.12))
+        SolidBrush b = _tracks.Rows[e.RowIndex].Selected ? RowBrush(ref _bRowSel, ref _cRowSel, Theme.Classic ? Theme.ClassicNavy : Theme.Blend(Theme.Bg, Theme.Accent, 0.12))
             : e.RowIndex == _hotRow ? RowBrush(ref _bRowHot, ref _cRowHot, Theme.RowHover)
-            : RowBrush(ref _bRowBg, ref _cRowBg, Theme.Bg);
+            : RowBrush(ref _bRowBg, ref _cRowBg, Theme.ListBg);
         e.Graphics.FillRectangle(b, e.RowBounds);
     }
 
@@ -732,9 +754,10 @@ internal sealed class MainForm : Form, IMessageFilter
         // A whisper-faint row divider — just enough to separate tracks without reading as a grid.
         // Draw it FIRST on integer bounds with AA off so it stays a true crisp 1px.
         e.Graphics.SmoothingMode = SmoothingMode.None;   // (a crisp 1 px line; the previous row's post-paint may have left anti-aliasing on)
-        e.Graphics.DrawLine(DividerPen(), x0, b.Bottom - 1, b.Right, b.Bottom - 1);
+        // A 95 list view had no row rules at all, and its selection is the solid navy band itself - not a bar.
+        if (!Theme.Classic) e.Graphics.DrawLine(DividerPen(), x0, b.Bottom - 1, b.Right, b.Bottom - 1);
         // Selection is carried by one crisp, bright accent bar (the row fill itself only whispers a tint).
-        if (e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
+        if (!Theme.Classic && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Selected)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var bar = RowBrush(ref _bBar, ref _cBar, Theme.AccentBright);                 // brush cached on AccentBright
@@ -1468,7 +1491,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private void SetHotRow(int row)
     {
         if (row == _hotRow) return;
-        if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.Bg;
+        if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.ListBg;
         _hotRow = row;
         if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.RowHover;
     }
@@ -6945,7 +6968,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // buttons clear with their parent's colour; the side card's tabs hold three more baked panels.
         _gridHost.BackColor = Theme.Bg;
         _selBar?.Restyle();
-        _trackViewport.BackColor = Theme.Bg;
+        _trackViewport.BackColor = Theme.ListBg;
         _browseView.BackColor = Theme.Bg;
         _photoView.BackColor = Theme.Bg;
         if (_emptyView is not null) _emptyView.BackColor = Theme.Bg;
@@ -6960,7 +6983,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_cfPlaceholder is not null && _coverFlow is not { Visible: true }) { _cfPlaceholder.Dispose(); _cfPlaceholder = null; }
         Theme.StyleGrid(_tracks);
         _tracks.RowTemplate.Height = _settings.RowHeight;
-        var sel = Theme.Blend(Theme.Bg, Theme.Accent, 0.12);
+        var sel = Theme.Classic ? Theme.ClassicNavy : Theme.Blend(Theme.Bg, Theme.Accent, 0.12);
         _tracks.DefaultCellStyle.SelectionBackColor = sel;
         _tracks.AlternatingRowsDefaultCellStyle.SelectionBackColor = sel;
     }
@@ -7137,7 +7160,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (!IsHandleCreated) return;
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }     // DWMWA_USE_IMMERSIVE_DARK_MODE
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { } // DWMWA_WINDOW_CORNER_PREFERENCE = ROUND
+        try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { } // DWMWA_WINDOW_CORNER_PREFERENCE = ROUND
         // Remove the 1px DWM window border entirely (DWMWA_COLOR_NONE). Tinting it to the wallpaper top
         // wasn't enough — that colour is lighter than the darker lower gradient, so a faint line remained.
         try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { } // DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE

@@ -54,7 +54,7 @@ internal abstract class FlyoutForm : Form, IGlassHost
     {
         base.OnHandleCreated(e);
         try { int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)); } catch { }                  // dark mode
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }                // DWMWCP_ROUND
+        try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }                // DWMWCP_ROUND
         try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { } // no DWM border line
         // Glass: set BackColor to the glass base so the rounded-corner antialiasing blends into the glass rather than
         // the darker Theme.Bg (that fringe read as a thin edge at the corners).

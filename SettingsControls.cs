@@ -18,8 +18,26 @@ internal sealed class ToggleSwitch : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         Size = new Size(46, 26);
-        Cursor = Cursors.Hand;
+        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;
         Click += (_, _) => Checked = !Checked;
+    }
+
+    /// <summary>
+    /// 1995 had no switches: an on/off setting was a CHECK BOX - a 13 px sunken white square with the era's
+    /// three-pixel-thick tick in it. It sits at the right of the switch's bounds, where the switch was, so
+    /// every settings row lines up exactly as before.
+    /// </summary>
+    private void PaintClassic(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        g.Clear(Parent?.BackColor ?? Theme.Face);
+        var box = new Rectangle(Width - 13 - 2, (Height - 13) / 2, 13, 13);
+        using (var wb = new SolidBrush(Enabled ? Color.White : Theme.Face)) g.FillRectangle(wb, box);
+        Theme.Bevel(g, box, raised: false);
+        if (!_checked) return;
+        using var br = new SolidBrush(Enabled ? Theme.FaceDark : Theme.FaceShadow);
+        int[] top = { 2, 3, 4, 3, 2, 1, 0 };   // the tick: seven columns, each three pixels tall
+        for (int i = 0; i < 7; i++) g.FillRectangle(br, box.X + 3 + i, box.Y + 3 + top[i], 1, 3);
     }
 
     private void AnimateKnob()
@@ -35,6 +53,7 @@ internal sealed class ToggleSwitch : Control
     {
         _painted = true;
         var g = e.Graphics;
+        if (Theme.Classic) { PaintClassic(g); return; }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         float tc = Math.Clamp(_t, 0f, 1f);
@@ -218,6 +237,7 @@ internal sealed class SettingsNav : Panel
         g.SmoothingMode = SmoothingMode.AntiAlias;
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Theme.SidebarBg);
         _hit.Clear();
+        if (Theme.Classic) { PaintClassic(g); return; }
 
         // A single accent selection pill that slides between categories.
         {
@@ -245,6 +265,24 @@ internal sealed class SettingsNav : Panel
             TextRenderer.DrawText(g, _labels[i], sel ? _fontBold : _font,
                 new Rectangle(iconR.Right + 10, y, row.Right - iconR.Right - 16, RowH), sel ? Color.White : Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    /// <summary>The 95 category list: the chosen row is a solid navy band with white text, and it JUMPS there -
+    /// list selection in 1995 did not glide.</summary>
+    private void PaintClassic(Graphics g)
+    {
+        for (int i = 0; i < _labels.Length; i++)
+        {
+            int y = TopPad + i * (RowH + Gap);
+            var row = new Rectangle(Pad, y, Width - Pad * 2, RowH);
+            _hit.Add(row);
+            bool sel = i == _sel;
+            if (sel) using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, row);
+            var iconR = new Rectangle(row.X + 9, y + (RowH - 18) / 2, 18, 18);
+            DrawCategoryIcon(g, iconR, i, sel ? Color.White : Theme.TextCol);
+            TextRenderer.DrawText(g, _labels[i], _font, new Rectangle(iconR.Right + 10, y, row.Right - iconR.Right - 16, RowH),
+                sel ? Color.White : Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
     }
 
@@ -312,10 +350,12 @@ internal sealed class CardPanel : Panel
     private readonly List<Font> _fonts = new();
     private Font F(float size, FontStyle style = FontStyle.Regular) { var f = Theme.UiFont(size, style); _fonts.Add(f); return f; }
 
+    private bool _finished;
+
     public CardPanel(int width)
     {
         Width = width;
-        Height = 0;
+        Height = Theme.Classic ? 2 : 0;   // Classic: the rows start inside the group box's 2 px etched frame, not on top of it
         BackColor = Theme.PanelBg;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
@@ -328,6 +368,17 @@ internal sealed class CardPanel : Panel
         // Glass card: a uniform sheet of frosted glass, no extra frame — the flyout's own edge plus the row
         // dividers already give structure, so an inner card outline just reads as a redundant box-in-a-box.
         if (Glass.PaintBackground(g, this, Glass.SurfaceTint)) return;
+        if (Theme.Classic)
+        {
+            // a 95 group box: the window face inside an ETCHED frame (a shadow line with a highlight beside it)
+            g.SmoothingMode = SmoothingMode.None;
+            g.Clear(Theme.Face);
+            using var sh = new Pen(Theme.FaceShadow);
+            using var hi = new Pen(Theme.FaceHi);
+            g.DrawRectangle(hi, 1, 1, Width - 2, Height - 2);
+            g.DrawRectangle(sh, 0, 0, Width - 2, Height - 2);
+            return;
+        }
         // Opaque card (non-glass windows, e.g. Settings): rounded PanelBg fill; the transparent corners reveal
         // whatever sits behind the card.
         g.Clear(Parent?.BackColor ?? Theme.Bg);
@@ -343,11 +394,31 @@ internal sealed class CardPanel : Panel
     }
 
     /// <summary>Add a row: a left label (+ optional description) and an optional right-aligned control.</summary>
+    /// <summary>The rule between two rows: a hairline, or in Classic the era's etched line (shadow over highlight).</summary>
+    private void AddRule(int y)
+    {
+        var rule = new Panel { Height = 1, BackColor = Theme.Classic ? Theme.FaceShadow : Theme.HairLine, Left = 16, Width = Width - 32, Top = y };
+        Controls.Add(rule);
+        if (!Theme.Classic) return;
+        // Classic: an etched rule, and it has to sit ABOVE the row labels that are added after it - they start at
+        // the same y, so otherwise only the rule's two ends show, as a pair of stray dots.
+        var light = new Panel { Height = 1, BackColor = Theme.FaceHi, Left = 16, Width = Width - 32, Top = y + 1 };
+        Controls.Add(light);
+        _rules.Add(rule); _rules.Add(light);
+    }
+
+    private readonly List<Control> _rules = new();
+
+    protected override void OnControlAdded(ControlEventArgs e)
+    {
+        base.OnControlAdded(e);
+        foreach (var r in _rules) r.BringToFront();
+    }
+
     public void AddRow(string label, string? desc, Control? ctrl, int rowH = 56)
     {
         int y = Height;
-        if (Controls.Count > 0)
-            Controls.Add(new Panel { Height = 1, BackColor = Theme.HairLine, Left = 16, Width = Width - 32, Top = y });
+        if (Controls.Count > 0) AddRule(y);
 
         // Size the label column from the control's actual left edge (not a fixed 240px reserve), so a
         // wide control (e.g. a 330px segmented control) never sits under the opaque label rectangle.
@@ -398,8 +469,7 @@ internal sealed class CardPanel : Panel
     public void AddInfoRow(string label, string value)
     {
         int y = Height;
-        if (Controls.Count > 0)
-            Controls.Add(new Panel { Height = 1, BackColor = Theme.HairLine, Left = 16, Width = Width - 32, Top = y });
+        if (Controls.Count > 0) AddRule(y);
         Controls.Add(new GlassLabel { Text = label, Font = F(9.5f), ForeColor = Theme.TextCol, BackColor = Theme.PanelBg, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Left = 18, Top = y, Width = 200, Height = 38 });
         Controls.Add(new GlassLabel { Text = value, Font = F(9.5f), ForeColor = Theme.Subtle, BackColor = Theme.PanelBg, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Left = 210, Top = y, Width = Width - 210 - 18, Height = 38 });
         Height = y + 38;
@@ -407,6 +477,8 @@ internal sealed class CardPanel : Panel
 
     public void Finish()
     {
+        if (Theme.Classic && !_finished) Height += 2;   // and end inside it
+        _finished = true;
         // The rounded card is now owner-painted (anti-aliased) in OnPaint — just trigger a repaint at
         // the final size. (Was a Region clip, which hard-aliased the corners.)
         Invalidate();
@@ -442,8 +514,8 @@ internal sealed class SegmentedControl : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         Height = 30;
-        Cursor = Cursors.Hand;
-        Font = Theme.UiFont(9f, FontStyle.Bold);
+        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;
+        Font = Theme.UiFont(9f, Theme.Classic ? FontStyle.Regular : FontStyle.Bold);
         MouseMove += (_, e) => { int h = SegAt(e.X); if (h != _hover) { _hover = h; Invalidate(); } };
         MouseLeave += (_, _) => { _hover = -1; Invalidate(); };
         Click += (_, e) => { if (e is MouseEventArgs me) { int s = SegAt(me.X); if (s >= 0) SelectedIndex = s; } };
@@ -458,10 +530,40 @@ internal sealed class SegmentedControl : Control
     private int SegW => _options.Length == 0 ? Width : Width / _options.Length;
     private int SegAt(int x) { int w = SegW; return w == 0 ? -1 : Math.Min(_options.Length - 1, Math.Max(0, x / w)); }
 
+    /// <summary>A 95 choice of a few: a row of push buttons, the chosen one LATCHED - pushed in over the white
+    /// dither the era used for a button that stays down (the toolbar's Bold / Italic / Underline).</summary>
+    private void PaintClassic(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        g.Clear(Parent?.BackColor ?? Theme.Face);
+        int n = Math.Max(1, _options.Length), w = Width / n;
+        for (int i = 0; i < _options.Length; i++)
+        {
+            var seg = new Rectangle(i * w, 0, i == _options.Length - 1 ? Width - i * w : w, Height);
+            bool on = i == _selected;
+            if (on)
+            {
+                using var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face);
+                g.FillRectangle(dither, seg);
+                Theme.Bevel(g, seg, raised: false);
+            }
+            else
+            {
+                using (var fb = new SolidBrush(i == _hover ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(fb, seg);
+                Theme.Bevel(g, seg, raised: true);
+            }
+            var tr = seg;
+            if (on) tr.Offset(1, 1);
+            TextRenderer.DrawText(g, _options[i], Font, tr, Theme.TextCol,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         _painted = true;
         var g = e.Graphics;
+        if (Theme.Classic) { PaintClassic(g); return; }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         var outer = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);

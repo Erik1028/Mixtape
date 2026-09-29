@@ -27,6 +27,9 @@ internal sealed class MessageDialog : GlassDialog
         return owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
     }
 
+    /// <summary>Render harness: the dialog built but not shown, so it can be captured.</summary>
+    internal static MessageDialog Preview(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon) => new(text, caption, DefsFor(buttons), icon);
+
     private readonly string _caption, _message;
     private readonly MessageBoxIcon _icon;
     private Rectangle _iconRect, _titleRect, _msgRect;
@@ -40,7 +43,7 @@ internal sealed class MessageDialog : GlassDialog
         _message = text;
         _caption = string.IsNullOrWhiteSpace(caption) ? "Mixtape" : caption;
         _icon = icon;
-        _titleFont = Theme.DisplayFont(14f, FontStyle.Bold);
+        _titleFont = Theme.Classic ? Theme.UiFont(Theme.SzTitle, FontStyle.Bold) : Theme.DisplayFont(14f, FontStyle.Bold);   // Classic: the caption goes up into the title bar
         _msgFont = Theme.UiFont(10f);
 
         FormBorderStyle = FormBorderStyle.None;
@@ -59,6 +62,9 @@ internal sealed class MessageDialog : GlassDialog
         var btns = BuildButtons(buttons);
         int btnTotal = btns.Sum(b => b.Width) + Math.Max(0, btns.Count - 1) * BtnGap;
 
+        if (Theme.Classic) LayoutClassic(btns, hasIcon);
+        else
+        {
         // Width adapts to the content (short messages → narrow), capped so long text wraps instead of stretching.
         int maxContentW = MaxW - textX - Pad;
         int titleNat = TextRenderer.MeasureText(_caption, _titleFont, new Size(2000, 999), TextFormatFlags.NoPrefix).Width;
@@ -80,6 +86,7 @@ internal sealed class MessageDialog : GlassDialog
 
         int x = W - Pad - btnTotal;
         foreach (var b in btns) { b.Location = new Point(x, btnTop); x += b.Width + BtnGap; Controls.Add(b); }
+        }
 
         _default = btns.FirstOrDefault(b => b.Primary) ?? btns.LastOrDefault();
         AcceptButton = _default;
@@ -90,6 +97,34 @@ internal sealed class MessageDialog : GlassDialog
         // Let the user drag the card by its body (it has no title bar).
         MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) { try { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } catch { } } };
         Shown += (_, _) => _default?.Focus();
+    }
+
+    /// <summary>
+    /// The 1995 message box: the caption goes up into a navy title bar, a 32 px icon and the text sit on the
+    /// grey face, and the buttons - 75 x 23, the era's own size - are CENTRED under them, not pushed right.
+    /// </summary>
+    private void LayoutClassic(List<ThemedButton> btns, bool hasIcon)
+    {
+        int cap = Theme.ClassicCaptionH + 3;
+        const int pad = 14, icon = 32, bw = 75, bh = 23, gap = 6;
+        foreach (var b in btns) { b.Height = bh; b.Width = Math.Max(bw, TextRenderer.MeasureText(b.Text, b.Font).Width + 18); }
+        int btnTotal = btns.Sum(b => b.Width) + Math.Max(0, btns.Count - 1) * gap;
+        int textX = pad + (hasIcon ? icon + 14 : 0);
+        const TextFormatFlags wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
+        int msgNat = TextRenderer.MeasureText(_message, _msgFont, new Size(2000, 6000), TextFormatFlags.NoPrefix).Width;
+        int capNat = TextRenderer.MeasureText(_caption, _titleFont, new Size(2000, 99), TextFormatFlags.NoPrefix).Width + 48;
+        int contentW = Math.Clamp(Math.Max(msgNat, capNat - textX - pad), 150, 380);
+        int W = Math.Max(textX + contentW + pad, 2 * pad + btnTotal);
+        contentW = W - textX - pad;
+        int msgH = Math.Min(640, TextRenderer.MeasureText(_message, _msgFont, new Size(contentW, 6000), wrap).Height);
+        _iconRect = new Rectangle(pad, cap + pad, icon, icon);
+        _titleRect = new Rectangle(3, 3, W - 6, Theme.ClassicCaptionH);
+        _msgRect = new Rectangle(textX, cap + pad + (hasIcon ? Math.Max(0, (icon - msgH) / 2) : 0), contentW, msgH);
+        int bottom = Math.Max(_msgRect.Bottom, hasIcon ? _iconRect.Bottom : 0);
+        int btnTop = bottom + 16;
+        ClientSize = new Size(W, btnTop + bh + 12);
+        int x = (W - btnTotal) / 2;
+        foreach (var b in btns) { b.Location = new Point(x, btnTop); x += b.Width + gap; Controls.Add(b); }
     }
 
     private static (string, DialogResult, bool)[] DefsFor(MessageBoxButtons buttons) => buttons switch
@@ -121,16 +156,23 @@ internal sealed class MessageDialog : GlassDialog
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }            // dark immersive frame
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }       // DWMWCP_ROUND
-        try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { } // subtle border
+        try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }       // DWMWCP_ROUND
+        try { int bc = Theme.DwmBorder(Theme.Border); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { } // subtle border
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        if (Theme.Classic)
+        {
+            Theme.PaintClassicWindow(g, ClientRectangle, _caption, _titleFont);
+            if (_icon != MessageBoxIcon.None) DrawClassicIcon(g, _iconRect);
+            TextRenderer.DrawText(g, _message, _msgFont, _msgRect, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+            return;
+        }
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(BackColor);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
 
         if (_icon != MessageBoxIcon.None) DrawIcon(g, _iconRect);
 
@@ -138,6 +180,51 @@ internal sealed class MessageDialog : GlassDialog
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         TextRenderer.DrawText(g, _message, _msgFont, _msgRect, Theme.Blend(Theme.TextCol, Theme.Subtle, 0.45),
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>The 95 message icons: a white speech balloon with a navy i or ? in it, a yellow warning
+    /// triangle with a black !, and a red disc with a white cross for an error.</summary>
+    private void DrawClassicIcon(Graphics g, Rectangle r)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var black = new Pen(Theme.FaceDark, 1f);
+        using var f = new Font("Times New Roman", 17f, FontStyle.Bold);
+        var tf = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
+        switch (_icon)
+        {
+            case MessageBoxIcon.Warning:
+            {
+                var tri = new[] { new PointF(r.X + r.Width / 2f, r.Y + 1), new PointF(r.Right - 1, r.Bottom - 2), new PointF(r.X + 1, r.Bottom - 2) };
+                using (var yb = new SolidBrush(Color.FromArgb(255, 255, 0))) g.FillPolygon(yb, tri);
+                g.DrawPolygon(black, tri);
+                TextRenderer.DrawText(g, "!", f, new Rectangle(r.X, r.Y + 6, r.Width, r.Height - 6), Theme.FaceDark, tf);
+                break;
+            }
+            case MessageBoxIcon.Error:
+                using (var rb = new SolidBrush(Color.FromArgb(255, 0, 0))) g.FillEllipse(rb, r.X + 1, r.Y + 1, r.Width - 3, r.Height - 3);
+                g.DrawEllipse(black, r.X + 1, r.Y + 1, r.Width - 3, r.Height - 3);
+                using (var wp = new Pen(Color.White, 3f))
+                {
+                    float c = r.X + (r.Width - 1) / 2f, m = r.Y + (r.Height - 1) / 2f, k = 7f;
+                    g.DrawLine(wp, c - k, m - k, c + k, m + k);
+                    g.DrawLine(wp, c + k, m - k, c - k, m + k);
+                }
+                break;
+            default:   // Information and Question: a speech balloon
+            {
+                var body = new Rectangle(r.X + 1, r.Y + 1, r.Width - 3, r.Height - 9);
+                using var wb = new SolidBrush(Color.White);
+                g.FillEllipse(wb, body);
+                var tail = new[] { new PointF(r.X + 9, body.Bottom - 5), new PointF(r.X + 6, r.Bottom - 1), new PointF(r.X + 16, body.Bottom - 2) };
+                g.FillPolygon(wb, tail);
+                g.DrawEllipse(black, body);
+                g.DrawLines(black, new[] { tail[0], tail[1], tail[2] });
+                TextRenderer.DrawText(g, _icon == MessageBoxIcon.Question ? "?" : "i", f, body, Theme.ClassicNavy, tf);
+                break;
+            }
+        }
+        g.SmoothingMode = sm;
     }
 
     private void DrawIcon(Graphics g, Rectangle r)

@@ -290,8 +290,8 @@ internal sealed class HeaderPanel : Panel
         var g = e.Graphics;
         LayoutButtons(); // keep button positions current (visibility changes per view without a resize)
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Theme.Bg);
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.Clear(Theme.Classic ? Theme.Face : Theme.Bg);   // Classic: the strip above the list is chrome, so it wears the window face
+        g.TextRenderingHint = Theme.TextHint;
 
         int artSize = ArtSize;
         var artRect = new Rectangle(Pad, (Height - artSize) / 2, artSize, artSize);
@@ -393,6 +393,16 @@ internal sealed class HeaderPanel : Panel
         // (The status line is drawn inline on the meta line above; nothing sits under the buttons any more.)
         _statusRect = Rectangle.Empty;
 
+        if (Theme.Classic)
+        {
+            // an etched rule closes the toolbar off, the way every 95 toolbar was separated from its client area
+            using var sh = new Pen(Theme.FaceShadow);
+            using var hi = new Pen(Theme.FaceHi);
+            g.SmoothingMode = SmoothingMode.None;
+            g.DrawLine(sh, 0, Height - 2, Width, Height - 2);
+            g.DrawLine(hi, 0, Height - 1, Width, Height - 1);
+            return;
+        }
         using var pen = new Pen(Theme.Border);
         g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
 

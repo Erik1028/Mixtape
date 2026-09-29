@@ -19,7 +19,7 @@ internal sealed class SearchBox : Panel
         _tb = new TextBox
         {
             BorderStyle = BorderStyle.None,
-            BackColor = Theme.Blend(Theme.Bg, Color.Black, 0.30),
+            BackColor = FieldBg,
             ForeColor = Theme.TextCol,
             Font = Theme.UiFont(10f),
             PlaceholderText = Loc.T("Search…"),   // short on purpose: the rail is ~200 px, the long hint got cut to "albu…" in every language
@@ -40,12 +40,15 @@ internal sealed class SearchBox : Panel
     public void Restyle()
     {
         BackColor = Parent?.BackColor ?? Theme.Bg;   // whatever surface hosts the pill (the rail today)
-        _tb.BackColor = Theme.Blend(Theme.Bg, Color.Black, 0.30);
+        _tb.BackColor = FieldBg;
         _tb.ForeColor = Theme.TextCol;
         Invalidate();
     }
 
     private Rectangle ClearRect => new(Width - 26, (Height - 18) / 2, 18, 18);
+
+    /// <summary>The field's own surface: recessed dark in the modern look, a white edit box in Classic.</summary>
+    private static Color FieldBg => Theme.Classic ? Color.White : Theme.Blend(Theme.Bg, Color.Black, 0.30);
 
     protected override void OnResize(EventArgs e)
     {
@@ -60,9 +63,15 @@ internal sealed class SearchBox : Panel
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.Bg);
+        if (Theme.Classic)
+        {
+            using (var wb = new SolidBrush(FieldBg)) g.FillRectangle(wb, ClientRectangle);
+            Theme.Bevel(g, ClientRectangle, raised: false);
+        }
+        else
         using (var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Theme.RadControl))   // the common control radius, not the last pill
         {
-            using (var b = new SolidBrush(Theme.Blend(Theme.Bg, Color.Black, 0.30))) g.FillPath(b, p); // recessed input surface
+            using (var b = new SolidBrush(FieldBg)) g.FillPath(b, p); // recessed input surface
             using (var pen = new Pen(Theme.Border)) g.DrawPath(pen, p);
         }
 

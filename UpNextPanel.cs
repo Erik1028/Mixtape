@@ -97,7 +97,7 @@ internal sealed class UpNextPanel : Control
         var g = e.Graphics;
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Surface);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
 
         // header
         if (_docked && HeadH == 0) { }   // docked + nothing queued: the tab strip is the header

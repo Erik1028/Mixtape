@@ -40,6 +40,14 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         ClientSize = new Size(NavW + PaneW, PageHeight + DialogTitleBar.H);   // + the custom caption strip; matches the per-page height so there's no open-then-shrink flash
         BackColor = Theme.Bg;
+        if (Theme.Classic)
+        {
+            // A 95 window's raised frame: the docked caption, rail and pane sit two pixels in, and the form paints
+            // the frame in the margin that leaves.
+            Padding = new Padding(2);
+            ClientSize = new Size(ClientSize.Width + 4, ClientSize.Height + 4);
+            Paint += (_, pe) => Theme.Bevel(pe.Graphics, ClientRectangle, raised: true);
+        }
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
 
@@ -197,6 +205,23 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         };
         Row(Loc.T("Language"), Loc.T("Choose the app's language. Mixtape restarts to apply."), lang);
 
+        var look = new SegmentedControl { Options = new[] { Loc.T("Modern"), Loc.T("Windows 95") }, SelectedIndex = _s.ClassicSkin ? 1 : 0, Width = 260 };
+        look.SelectedChanged += () =>
+        {
+            bool classic = look.SelectedIndex == 1;
+            if (classic == _s.ClassicSkin) return;
+            _s.ClassicSkin = classic; _s.Save();
+            PromptRestart(Loc.T("The look changes after a restart. Restart Mixtape now?"));
+        };
+        Row(Loc.T("Look"), Loc.T("Modern is this app's own look. Windows 95 skins the whole window the way a program looked in 1995: grey panels with 3D edges, square corners, navy selection and the era's typeface. Takes effect after a restart."), look);
+
+        if (_s.ClassicSkin)
+        {
+            // The accent and the background belong to the modern look; the 95 skin has exactly one palette.
+            Row(Loc.T("Colours"), Loc.T("The Windows 95 look has one palette of its own \u2014 the accent colour and the background are used by the Modern look."), null);
+        }
+        else
+        {
         var accent = new AccentPicker(_s.Accent);
         accent.AccentChosen += name => { _s.Accent = name; _s.Save(); _applyChanged(); Rebuild(); };
         Row(Loc.T("Accent colour"), Loc.T("Used for highlights, buttons and selection."), accent);
@@ -204,6 +229,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         var theme = new SegmentedControl { Options = Theme.ThemeVariants, SelectedIndex = Math.Max(0, Array.IndexOf(Theme.ThemeVariants, _s.ThemeVariant)), Width = 432 };
         theme.SelectedChanged += () => { _s.ThemeVariant = Theme.ThemeVariants[theme.SelectedIndex]; _s.Save(); _applyChanged(); BackColor = Theme.Bg; _pane.BackColor = Theme.Bg; _paneBody.BackColor = Theme.Bg; _nav.Invalidate(); Rebuild(); };
         Row(Loc.T("Background"), Loc.T("The window's colour palette."), theme);
+        }
 
         var density = new SegmentedControl { Options = new[] { Loc.T("Comfortable"), Loc.T("Compact") }, SelectedIndex = _s.Compact ? 1 : 0, Width = 220 };
         density.SelectedChanged += () => { _s.Compact = density.SelectedIndex == 1; _s.Save(); _applyChanged(); };

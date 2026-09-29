@@ -253,6 +253,9 @@ internal static class Program
         // Resolve the UI language ONCE, before any window is built (a language change restarts the app, so it
         // never changes mid-run). MIX_LANG env overrides for testing/renders without touching saved settings.
         Loc.Lang = Environment.GetEnvironmentVariable("MIX_LANG") is { Length: > 0 } ml ? Loc.Resolve(ml) : Loc.Resolve(AppSettings.Load().Language);
+        // The skin too, and for the same reason: MainForm's FIELD initialisers build controls (the song list's
+        // scrollbar, the rail, their fonts) before its constructor body runs, and they must already see it.
+        Theme.SetSkin(AppSettings.Load().ClassicSkin);
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -1264,6 +1267,7 @@ internal static class Program
         // halfway up or a card halfway faded. MIX_MOTION=1 keeps motion on for deliberate mid-animation shots.
         if (Environment.GetEnvironmentVariable("MIX_MOTION") != "1") Anim.MotionEnabled = false;
         var rset = AppSettings.Load();                  // dialogs rendered on their own also deserve the live palette
+        Theme.SetSkin(rset.ClassicSkin);   // MIX_CLASSIC=1|0 overrides this in AppSettings.Load
         Theme.SetThemeVariant(rset.ThemeVariant);
         Theme.SetAccent(rset.Accent);
         MainForm.TracePath = Environment.GetEnvironmentVariable("MIX_TRACE");   // MIX_TRACE=<file>: step log for stall hunting
@@ -1479,7 +1483,7 @@ internal static class Program
         }
 
         // The small modal windows that now wear the app's own card chrome (title strip + round close).
-        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify")
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn")
         {
             Form dlg = view switch
             {
@@ -1494,6 +1498,8 @@ internal static class Program
                 "identify" => IdentifyPreview(),
                 "tagtidy" => new TagTidyDialog(TagTidy.Scan(ITunesDbReader.Read(File.ReadAllBytes(dbPath)).Tracks.Where(t => MediaType.IsAudio(t.MediaType)).ToList())),
                 "noteeditor" => NotesDialog.PreviewEditor(),
+                "message" => MessageDialog.Preview(Loc.T("The look changes after a restart. Restart Mixtape now?"), Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question),
+                "messagewarn" => MessageDialog.Preview(Loc.T("The iPod was removed while songs were being copied. Plug it back in and try again."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Warning),
                 _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }),
             };
             bool cardLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow = the real window
@@ -2199,6 +2205,7 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         var s = AppSettings.Load();
+        Theme.SetSkin(s.ClassicSkin);
         try { Theme.SetThemeVariant(s.ThemeVariant); } catch { }
         Theme.SetAccent(s.Accent);
 
@@ -2212,7 +2219,7 @@ internal static class Program
         using var bmp = new Bitmap(W + pad * 2, pad + n * (label + barH + gap));
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
         g.Clear(Theme.Bg);
         int y = pad;
         for (int i = 0; i < n; i++)
@@ -2627,6 +2634,7 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
 
         var settings = AppSettings.Load();
+        Theme.SetSkin(settings.ClassicSkin);
         Theme.SetThemeVariant(settings.ThemeVariant); // match the live background (e.g. Forest)
         Theme.SetAccent(settings.Accent);             // and the accent so the hover pill colour is accurate
 

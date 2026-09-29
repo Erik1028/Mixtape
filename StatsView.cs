@@ -137,7 +137,7 @@ internal sealed class StatsView : Panel
         var g = e.Graphics;
         g.Clear(Theme.Bg);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
         _hit.Clear();
 
         int w = Width - BarZone, y = Pad - _scroll;
@@ -199,6 +199,7 @@ internal sealed class StatsView : Panel
     {
         using (var b = new SolidBrush(Theme.PanelBg))
         using (var p = Theme.RoundedRect(r, Theme.RadCard)) g.FillPath(b, p);
+        if (Theme.Classic) Theme.EtchedFrame(g, r);   // on the grey face a tile is a group box, or it is nothing at all
         // A figure is the point of the tile, so it SHRINKS to fit rather than being cut: "3 óra 27 perc" is
         // half again as long as "3 h 27 m", and an ellipsised number says nothing at all.
         int box = r.Width - 32;
@@ -225,6 +226,7 @@ internal sealed class StatsView : Panel
         var card = new Rectangle(r.X, r.Y, r.Width, h);
         using (var b = new SolidBrush(Theme.PanelBg))
         using (var p = Theme.RoundedRect(card, Theme.RadCard)) g.FillPath(b, p);
+        if (Theme.Classic) Theme.EtchedFrame(g, card);
 
         TextRenderer.DrawText(g, sec.Label.ToUpperInvariant(), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
@@ -257,6 +259,14 @@ internal sealed class StatsView : Panel
             double step = Math.Clamp((grow - i * 0.035) / 0.5, 0, 1);
             int bw = (int)Math.Round(barW * Math.Clamp(b.Value / max, 0, 1) * Easings.OutCubic(step));
             var track = new Rectangle(barX, row.Y + RowH / 2 - 4, barW, 8);
+            if (Theme.Classic)
+            {
+                // the bars become the era's progress bar: a sunken trough with navy chunks
+                Theme.ClassicProgress(g, new Rectangle(barX, row.Y + RowH / 2 - 7, barW, 14), bw, hot ? Theme.AccentBright : null);
+                TextRenderer.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
+                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                continue;
+            }
             using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.35)))
             using (var tp = Theme.RoundedRect(track, 4)) g.FillPath(tb, tp);
             if (bw >= 4)
@@ -277,6 +287,7 @@ internal sealed class StatsView : Panel
         int track = Height - 12;
         int th = Math.Max(30, (int)(track * (double)Height / _contentH));
         int ty = 6 + (int)((track - th) * (_scroll / (double)Math.Max(1, _contentH - Height)));
+        if (Theme.Classic) { Theme.PaintClassicPageScroll(g, Width, Height, ty, th); return; }
         using var b = new SolidBrush(Color.FromArgb(_barHover || _barDrag ? 90 : 46, 255, 255, 255));
         using var p = Theme.RoundedRect(new Rectangle(Width - 10, ty, 5, th), 2.5f);
         g.FillPath(b, p);

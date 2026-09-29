@@ -160,7 +160,7 @@ internal sealed class HistoryPanel : Control
         var g = e.Graphics;
         g.Clear(Theme.Bg);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
         if (_items.Count == 0)
         {
             TextRenderer.DrawText(g, Loc.T("Nothing played yet."), _fEmpty, new Rectangle(Pad, Top + 8, Width - 2 * Pad, 60), Theme.Faint,

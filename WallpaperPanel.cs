@@ -51,9 +51,11 @@ internal sealed class WallpaperPanel : Panel
     /// <summary>The app icon, for the title strip's wordmark.</summary>
     public Bitmap? Logo { get; set; }
     private readonly Font _fWordmark = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
+    private readonly Font _fCaption = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
+        if (Theme.Classic) { PaintClassicShell(e.Graphics); return; }
         EnsureWall();
         var g = e.Graphics;
         if (_wall is not null) g.DrawImageUnscaled(_wall, 0, 0);
@@ -74,9 +76,35 @@ internal sealed class WallpaperPanel : Panel
             Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
+    /// <summary>
+    /// The 95 window: a raised frame around the whole thing, and the caption itself - a navy bar with the
+    /// program's icon and its name in white - rather than a wallpaper with cards floating on it. Everything
+    /// else (the rail, the content, the player) simply sits on the window face below it.
+    /// </summary>
+    private void PaintClassicShell(Graphics g)
+    {
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, ClientRectangle);
+        Theme.Bevel(g, ClientRectangle, raised: true);
+        var cap = new Rectangle(3, 3, Math.Max(0, Width - 6), Theme.ClassicCaptionH);
+        if (cap.Width <= 0) return;
+        using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, cap);
+        int tx = cap.X + 3;
+        if (Logo is not null)
+        {
+            var im = g.InterpolationMode;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(Logo, new Rectangle(cap.X + 2, cap.Y + 2, 16, 16));
+            g.InterpolationMode = im;
+            tx = cap.X + 22;
+        }
+        TextRenderer.DrawText(g, "Mixtape", _fCaption, new Rectangle(tx, cap.Y, cap.Width - 80, cap.Height), Color.White,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+    }
+
     protected override void OnResize(EventArgs e) { _wall?.Dispose(); _wall = null; base.OnResize(e); }
 
-    protected override void Dispose(bool disposing) { if (disposing) { _wall?.Dispose(); _fWordmark.Dispose(); Logo?.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { _wall?.Dispose(); _fWordmark.Dispose(); _fCaption.Dispose(); Logo?.Dispose(); } base.Dispose(disposing); }
 
     protected override void WndProc(ref Message m)
     {

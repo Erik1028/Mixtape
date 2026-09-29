@@ -162,9 +162,10 @@ internal sealed class TrackHeader : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.Clear(Theme.Bg);
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.Clear(Theme.Classic ? Theme.Face : Theme.Bg);
+        g.TextRenderingHint = Theme.TextHint;
         using var f = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);
+        if (Theme.Classic) { PaintClassic(g, f); return; }
 
         for (int i = 0; i < _grid.Columns.Count; i++)
         {
@@ -191,5 +192,36 @@ internal sealed class TrackHeader : Control
         if (_grid.RowCount == 0) return;   // an empty list draws its empty state, not a headerless hairline
         using var pen = new Pen(Theme.Border);
         g.DrawLine(pen, 0, Height - 1, Math.Min(Width, _grid.Width) - 1, Height - 1);   // hairline under the header, ending where the rows end (the grid stops short of the scrollbar column; the row dividers do too)
+    }
+
+    /// <summary>
+    /// The header of a 95 list view: every column is its own raised button, edge to edge, and the strip is
+    /// closed off on the right by one more empty button - a header that simply stopped mid-air would give
+    /// the era away. The hovered column is drawn pressed, which is what clicking one to sort felt like.
+    /// </summary>
+    private void PaintClassic(Graphics g, Font f)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        int end = 0;
+        for (int i = 0; i < _grid.Columns.Count; i++)
+        {
+            var r = ColRect(i);
+            if (r.Width <= 0) continue;
+            var cell = new Rectangle(r.X, 0, r.Width, Height);
+            Theme.FaceBevel(g, cell, raised: i != _hoverCol);
+            end = Math.Max(end, cell.Right);
+            bool right = RightAligned(i);
+            var cp = _grid.Columns[i].DefaultCellStyle.Padding;
+            int rp = cp.Right + 4, lp = Math.Max(8, cp.Left);
+            var pad = right ? new Rectangle(cell.X + 4, 0, cell.Width - rp, Height) : new Rectangle(cell.X + lp, 0, cell.Width - lp - 4, Height);
+            if (i == _hoverCol) pad.Offset(1, 1);
+            var flags = (right ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+            string head = _grid.Columns[i].HeaderText;
+            int ai = head.IndexOf("  \u2191", StringComparison.Ordinal); if (ai < 0) ai = head.IndexOf("  \u2193", StringComparison.Ordinal);
+            string caption = ai >= 0 ? Loc.T(head[..ai]) + head[ai..] : Loc.T(head);
+            TextRenderer.DrawText(g, caption, f, pad, Theme.TextCol, flags);
+        }
+        if (end < Width) Theme.FaceBevel(g, new Rectangle(end, 0, Width - end, Height), raised: true);
     }
 }

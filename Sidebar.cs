@@ -409,7 +409,7 @@ internal sealed class Sidebar : Panel
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.SidebarBg);
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
 
         // --- rows (scrollable region) ---
         _hit.Clear();
@@ -492,13 +492,13 @@ internal sealed class Sidebar : Panel
                     // Active = translucent teal wash (a tinted pill, not a solid block);
                     // hover = a faint grey lift. Both rounded, à la Apple Music.
                     Color fill = row.Active
-                        ? Color.FromArgb(48, Theme.Accent)
-                        : Theme.Blend(Theme.SidebarBg, Color.White, 0.06 * hoverT);
+                        ? (Theme.Classic ? Theme.ClassicNavy : Color.FromArgb(48, Theme.Accent))
+                        : Theme.Blend(Theme.SidebarBg, Color.White, (Theme.Classic ? 0.30 : 0.06) * hoverT);
                     using var pb = new SolidBrush(fill);
                     using var pp = Theme.RoundedRect(pill, Theme.RadControl);
                     g.FillPath(pb, pp);
                 }
-                if (row.Active)   // a solid accent bar pinned to the pill's left edge — the persistent "you are here" anchor (distinct from the drop ring below)
+                if (row.Active && !Theme.Classic)   // a solid accent bar pinned to the pill's left edge — the persistent "you are here" anchor (distinct from the drop ring below)
                 {
                     var barRect = new RectangleF(pill.X + 2f, pill.Y + (pill.Height - 18f) / 2f, 3f, 18f);
                     using var ab = new SolidBrush(Theme.AccentBright);
@@ -581,7 +581,7 @@ internal sealed class Sidebar : Panel
                 if (row.Count is { Length: > 0 } cnt)
                 {
                     int cw = TextRenderer.MeasureText(g, cnt, _fSub).Width + 4;
-                    TextRenderer.DrawText(g, cnt, _fSub, new Rectangle(textRight - cw - 2, y, cw, rh), Theme.Faint,
+                    TextRenderer.DrawText(g, cnt, _fSub, new Rectangle(textRight - cw - 2, y, cw, rh), row.Active && Theme.Classic ? Color.FromArgb(210, 210, 210) : Theme.Faint,
                         TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                     textRight -= cw + 8;
                 }

@@ -760,7 +760,7 @@ internal sealed class NowPlayingBar : Panel
         void Allocate()
         {
             l.ShowVol = Take(84 + 10);
-            l.ShowWordmark = Take(8 + _wordW);
+            l.ShowWordmark = !Theme.Classic && Take(8 + _wordW);   // Classic: the navy title bar carries the name
             l.ShowModes = Take(34 + 34);
             l.ShowQueue = Take(24 + 8);
             l.ShowEq = Take(24 + 8);
@@ -774,7 +774,7 @@ internal sealed class NowPlayingBar : Panel
         l.ShowSpeaker = true; l.ShowLyrics = true;
         l.Logo = new Rectangle(24, cy - 10, 20, 20);
         l.Wordmark = new Rectangle(52, cy - 15, _wordW, 30);
-        int leftEdge = (l.ShowWordmark ? l.Wordmark.Right : l.Logo.Right) + 22;
+        int leftEdge = Theme.Classic ? 10 : (l.ShowWordmark ? l.Wordmark.Right : l.Logo.Right) + 22;
         int rightEdge = w - RightReserve;
 
         // Right cluster, right → left.
@@ -857,10 +857,10 @@ internal sealed class NowPlayingBar : Panel
         const int Block = 120;                // the right block: max(speaker 20 + 10 + slider 84, four 24 px glyphs at a 32 px pitch)
         const int CardMin = 300;
         int slack = (w - RightReserve - 8 - Block - 22) - (44 + 22 + 108 + 10 + 26 + 22) - CardMin;
-        l.ShowWordmark = slack >= 8 + _wordW;
+        l.ShowWordmark = !Theme.Classic && slack >= 8 + _wordW;
         l.Logo = new Rectangle(24, cy - 10, 20, 20);
         l.Wordmark = new Rectangle(52, cy - 15, _wordW, 30);
-        int leftEdge = (l.ShowWordmark ? l.Wordmark.Right : l.Logo.Right) + 22;
+        int leftEdge = Theme.Classic ? 10 : (l.ShowWordmark ? l.Wordmark.Right : l.Logo.Right) + 22;
         int rightEdge = w - RightReserve;
 
         // Right block: both rows right-aligned to the same edge.
@@ -951,10 +951,19 @@ internal sealed class NowPlayingBar : Panel
         bool idle = s.Track is null;
         var card = c.Card;
         var cardF = new RectangleF(card.X + 0.5f, card.Y + 0.5f, card.Width - 1, card.Height - 1);
-        using (var fill = new SolidBrush(Color.FromArgb(200, Theme.Blend(Theme.SidebarBg, Color.White, 0.07))))
-        using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.FillPath(fill, cp);
-        using (var line = new Pen(Color.FromArgb(34, 255, 255, 255)))
-        using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.DrawPath(line, cp);
+        if (Theme.Classic)
+        {
+            // the song's display is a sunken white panel - the address bar of the era, not a floating slab
+            using (var wb = new SolidBrush(Color.White)) g.FillRectangle(wb, card);
+            Theme.Bevel(g, card, raised: false);
+        }
+        else
+        {
+            using (var fill = new SolidBrush(Color.FromArgb(200, Theme.Blend(Theme.SidebarBg, Color.White, 0.07))))
+            using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.FillPath(fill, cp);
+            using (var line = new Pen(Color.FromArgb(34, 255, 255, 255)))
+            using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.DrawPath(line, cp);
+        }
 
         DrawCoverTile(g, c.Cover, idle, s.Cover, s.CoverPrev, s.CoverFade, idle ? 0 : (int)(s.Track!.Dbid & 0xffff));
         if (!idle && s.Playing && s.Viz is not null) eq.Draw(g, c.Cover, s.EqPhase, s.Viz, s.Tint);   // animated "now playing" equaliser, bottom-right of the cover
@@ -971,7 +980,7 @@ internal sealed class NowPlayingBar : Panel
             string sub = idle ? Loc.T("Pick a song to start") : CardSubtitle(s.Track!, c.TextW, fSub);
             // A track change: the words fade in with the cover (GDI text has no alpha, so the colour walks from
             // the slab's own tone to the text tone over the same 220 ms the art dissolves).
-            Color slab = Theme.Blend(Theme.SidebarBg, Color.White, 0.07);
+            Color slab = Theme.Classic ? Color.White : Theme.Blend(Theme.SidebarBg, Color.White, 0.07);
             float tf = idle ? 1f : Math.Clamp(s.CoverFade, 0f, 1f);
             // A new song's lines rise the last few pixels into place while its cover dissolves, so the card
             // changes as one thing. A slide and not a fade: GDI text ignores alpha.
@@ -1019,10 +1028,20 @@ internal sealed class NowPlayingBar : Panel
             var sz = TextRenderer.MeasureText(txt, fTime);
             int bw2 = sz.Width + 14, bh2 = 19;
             var bub = new RectangleF(card.Right - 14 - bw2, card.Y + 6, bw2, bh2);
-            using (var bb = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.Black, 0.28)))
-            using (var bp = Theme.RoundedRect(bub, 5f)) g.FillPath(bb, bp);
-            using (var bpen = new Pen(Color.FromArgb(40, 255, 255, 255)))
-            using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
+            if (Theme.Classic)   // a tooltip of the era: pale yellow, a black hairline, square
+            {
+                using var yb = new SolidBrush(Theme.ClassicInfo);
+                using var kp = new Pen(Theme.FaceDark);
+                g.FillRectangle(yb, Rectangle.Round(bub));
+                g.DrawRectangle(kp, (int)bub.X, (int)bub.Y, (int)bub.Width - 1, (int)bub.Height - 1);
+            }
+            else
+            {
+                using (var bb = new SolidBrush(Theme.Blend(Theme.SidebarBg, Color.Black, 0.28)))
+                using (var bp = Theme.RoundedRect(bub, 5f)) g.FillPath(bb, bp);
+                using (var bpen = new Pen(Color.FromArgb(40, 255, 255, 255)))
+                using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
+            }
             TextRenderer.DrawText(g, txt, fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
     }
@@ -1032,6 +1051,25 @@ internal sealed class NowPlayingBar : Panel
     /// the caller's — never disposed here.</summary>
     internal static void DrawCoverTile(Graphics g, Rectangle cr, bool idle, Bitmap? cover, Bitmap? prev, float fade, int seed)
     {
+        if (Theme.Classic)
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            if (idle)
+            {
+                using (var fb = new SolidBrush(Theme.Face)) g.FillRectangle(fb, cr);
+                var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+                Theme.DrawNote(g, cr, Theme.FaceShadow);
+                g.SmoothingMode = sm0;
+            }
+            else
+            {
+                var nv0 = cover ?? Theme.MakeArt(cr.Width, seed);
+                if (prev is not null && fade < 1f) { g.DrawImage(prev, cr); Theme.DrawImageAlpha(g, nv0, new RectangleF(cr.X, cr.Y, cr.Width, cr.Height), fade); }
+                else g.DrawImage(nv0, cr);
+            }
+            Theme.Bevel(g, cr, raised: false, thin: true);
+            return;
+        }
         int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
         // Fill + stroke share a half-pixel-inset rect so every corner antialiases identically (no soft bottom-right edge).
         var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
@@ -1495,7 +1533,7 @@ internal sealed class NowPlayingBar : Panel
 
     private void DrawFlowGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (hover) HoverChip(g, r);
         // The app's own Cover Flow mark, drawn from a box a little larger than the cell: at 24 px it comes out
         // smaller than the line glyphs beside it, and a weaker icon in a row of equals reads as a mistake.
         ThemedButton.DrawIcon(g, new RectangleF(r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6), ThemedButton.Ico.CoverFlow, hover ? Theme.TextCol : Theme.Subtle);
@@ -1504,7 +1542,7 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>Add to playlist: the queue glyph's three lines with a plus where the last one ends.</summary>
     private void DrawAddGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (hover) HoverChip(g, r);
         Color c = hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 5, x2 = r.Right - 5;
@@ -1529,7 +1567,7 @@ internal sealed class NowPlayingBar : Panel
         }
         bool hover = _hover == Hit.Stars;
         int shown = hover && _starHover > 0 ? _starHover : rated;
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (hover) HoverChip(g, r);
         var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
         float cell = r.Width / 5f, cy = r.Y + r.Height / 2f;
         Color on = hover ? Theme.AccentBright : Theme.Accent;
@@ -1603,8 +1641,9 @@ internal sealed class NowPlayingBar : Panel
         var l = Layout();
         bool idle = _track is null;
 
-        // identity
-        if (wp?.Logo is { } logo)
+        // identity (Classic: it is up in the title bar, and the deck is a toolbar with a thin raised edge)
+        if (Theme.Classic) Theme.Bevel(g, ClientRectangle, raised: true, thin: true);
+        else if (wp?.Logo is { } logo)
         {
             var im = g.InterpolationMode; g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.DrawImage(logo, l.Logo);
@@ -1643,6 +1682,7 @@ internal sealed class NowPlayingBar : Panel
 
     internal static void DrawSlider(Graphics g, Rectangle track, double frac, bool knob, Color fill, float knobR = 5f, bool knobHot = false, Color? trackCol = null, bool lift = true)
     {
+        if (Theme.Classic) { DrawClassicSlider(g, track, frac, knob); return; }
         var t = new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1, track.Height - 1);
         using (var tb = new SolidBrush(trackCol ?? Theme.Blend(Theme.PanelBg, Color.Black, 0.1)))
         using (var tp = Theme.RoundedRect(t, t.Height / 2f)) g.FillPath(tb, tp);
@@ -1665,6 +1705,28 @@ internal sealed class NowPlayingBar : Panel
         }
     }
 
+    /// <summary>The 95 trackbar: a sunken white channel and a raised, square thumb. The channel carries a navy
+    /// fill up to the value, so the same drawing serves the seek line (a progress trough) and the volume.</summary>
+    private static void DrawClassicSlider(Graphics g, Rectangle track, double frac, bool knob)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        int cy = track.Y + track.Height / 2;
+        var chan = new Rectangle(track.X, cy - 3, Math.Max(6, track.Width), 6);
+        using (var wb = new SolidBrush(Color.White)) g.FillRectangle(wb, chan);
+        Theme.Bevel(g, chan, raised: false);
+        int inner = chan.Width - 4;
+        int fw = (int)Math.Round(inner * Math.Clamp(frac, 0, 1));
+        if (fw > 0) using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, chan.X + 2, chan.Y + 2, fw, chan.Height - 4);
+        if (knob)
+        {
+            int kx = chan.X + 2 + fw;
+            var thumb = new Rectangle(Math.Clamp(kx - 5, chan.X - 3, chan.Right - 8), cy - 8, 11, 16);
+            Theme.FaceBevel(g, thumb, raised: true);
+        }
+        g.SmoothingMode = sm;
+    }
+
     private void DrawPlayButton(Graphics g, Rectangle r, bool hover, bool dim)
     {
         if (!dim)
@@ -1683,6 +1745,7 @@ internal sealed class NowPlayingBar : Panel
     /// mini player.</summary>
     internal static void DrawPlayDisc(Graphics g, Rectangle r, bool hover, bool dim, float morph)
     {
+        if (Theme.Classic) { DrawClassicPlay(g, r, hover, dim, morph >= 0.5f); return; }
         Color disc = dim ? Theme.Blend(Theme.SidebarBg, Color.White, 0.12)
                          : hover ? Theme.AccentBright : Theme.Accent;
         using (var b = new SolidBrush(disc)) g.FillEllipse(b, r);
@@ -1711,10 +1774,63 @@ internal sealed class NowPlayingBar : Panel
         }
     }
 
+    /// <summary>1995's play button: a square push button with a black triangle, or two bars while playing.
+    /// Idle it is greyed the way a disabled button was - embossed, white under grey.</summary>
+    private static void DrawClassicPlay(Graphics g, Rectangle r, bool hover, bool dim, bool pause)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        var b = Rectangle.Inflate(r, -2, -2);
+        using (var face = new SolidBrush(hover && !dim ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(face, b);
+        Theme.Bevel(g, b, raised: true);
+        int cx = b.X + b.Width / 2, cy = b.Y + b.Height / 2;
+        void Glyph(int ox, int oy, Color c)
+        {
+            using var br = new SolidBrush(c);
+            if (pause && !dim) { g.FillRectangle(br, cx - 5 + ox, cy - 6 + oy, 4, 12); g.FillRectangle(br, cx + 2 + ox, cy - 6 + oy, 4, 12); }
+            else for (int i = 0; i < 7; i++) g.FillRectangle(br, cx - 3 + i + ox, cy - 6 + i + oy, 1, 13 - 2 * i);   // a pixel-stepped triangle, no anti-aliasing
+        }
+        if (dim) { Glyph(1, 1, Theme.FaceHi); Glyph(0, 0, Theme.FaceShadow); }
+        else Glyph(0, 0, Theme.FaceDark);
+        g.SmoothingMode = sm;
+    }
+
     internal static void DrawCircleGlyph(Graphics g, Rectangle r, bool hover, Action<Graphics, Rectangle, Color> glyph, bool dim)
     {
+        if (Theme.Classic)
+        {
+            // a toolbar button: flat until the pointer is on it, then a thin raised edge; greyed when idle
+            if (hover && !dim) Theme.Bevel(g, r, raised: true, thin: true);
+            glyph(g, r, dim ? Theme.FaceShadow : Theme.TextCol);
+            return;
+        }
         if (hover && !dim) { using var hb = new SolidBrush(Theme.RowHover); g.FillEllipse(hb, r); }
         glyph(g, r, dim ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle);
+    }
+
+    /// <summary>The hover chip behind a utility glyph. Classic: a toolbar button's hot-tracking edge.</summary>
+    internal static void HoverChip(Graphics g, Rectangle r)
+    {
+        if (Theme.Classic) { Theme.Bevel(g, r, raised: true, thin: true); return; }
+        using var hb = new SolidBrush(Theme.RowHover);
+        using var hp = Theme.RoundedRect(r, Theme.RadControl);
+        g.FillPath(hb, hp);
+    }
+
+    /// <summary>A utility that is ON (the lyrics or the queue open, shuffle on). Classic: a latched toolbar
+    /// button - pushed in, over the 50 % white dither the era used for "stays down".</summary>
+    internal static void LatchedChip(Graphics g, Rectangle r)
+    {
+        if (Theme.Classic)
+        {
+            using var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face);
+            g.FillRectangle(dither, r);
+            Theme.Bevel(g, r, raised: false, thin: true);
+            return;
+        }
+        using var ob = new SolidBrush(Color.FromArgb(46, Theme.Accent));
+        using var op = Theme.RoundedRect(r, Theme.RadControl);
+        g.FillPath(ob, op);
     }
 
     // Shuffle/repeat glyphs use Windows' designed icon font. The user picked the Segoe MDL2 Assets
@@ -1727,17 +1843,19 @@ internal sealed class NowPlayingBar : Panel
         return null;
     }
 
-    private static Color ModeColor(bool active, bool hover) => active ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+    private static Color ModeColor(bool active, bool hover) => Theme.Classic ? Theme.TextCol : active ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
 
     internal static void DrawShuffle(Graphics g, Rectangle r, bool active, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (Theme.Classic && active) LatchedChip(g, r);
+        else if (hover) HoverChip(g, r);
         DrawModeGlyph(g, r, "\uE8B1", ModeColor(active, hover));   // Shuffle
     }
 
     internal static void DrawRepeat(Graphics g, Rectangle r, RepeatMode mode, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (Theme.Classic && mode != RepeatMode.Off) LatchedChip(g, r);
+        else if (hover) HoverChip(g, r);
         // RepeatAll glyph (greyed when Off), RepeatOne glyph when One.
         DrawModeGlyph(g, r, mode == RepeatMode.One ? "\uE8ED" : "\uE8EE", ModeColor(mode != RepeatMode.Off, hover));
     }
@@ -1815,7 +1933,7 @@ internal sealed class NowPlayingBar : Panel
     /// <summary>"···": the utilities the width folded away live under it.</summary>
     internal static void DrawOverflowGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (hover) HoverChip(g, r);
         using var b = new SolidBrush(hover ? Theme.TextCol : Theme.Subtle);
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
         for (int k = -1; k <= 1; k++) g.FillEllipse(b, cx + k * 6f - 1.7f, cy - 1.7f, 3.4f, 3.4f);
@@ -1826,8 +1944,8 @@ internal sealed class NowPlayingBar : Panel
     /// would read as the same icon.</summary>
     private void DrawLyricsGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (_lyricsOpen) { using var ob = new SolidBrush(Color.FromArgb(46, Theme.Accent)); using var op = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(ob, op); }   // the words are open: the button reads as pressed
-        else if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (_lyricsOpen) LatchedChip(g, r);   // the words are open: the button reads as pressed
+        else if (hover) HoverChip(g, r);
         var c = _lyricsOpen ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle;
         int cx = r.Left + r.Width / 2, cy = r.Top + r.Height / 2;
 
@@ -1852,7 +1970,7 @@ internal sealed class NowPlayingBar : Panel
 
     private void DrawEqGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (hover) HoverChip(g, r);
         Color c = _eqOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var bar = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var dot = new SolidBrush(c);
@@ -1870,7 +1988,7 @@ internal sealed class NowPlayingBar : Panel
     // spark — accent-tinted when any Pro feature is on. Distinct from the EQ bars and the speaker.
     private void DrawProGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (hover) HoverChip(g, r);
         Color c = _proOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         float tipX = r.X + 15.5f, tipY = r.Y + 8f;     // sparkle star at the wand's tip (upper-right)
         using (var pen = new Pen(c, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -1885,8 +2003,8 @@ internal sealed class NowPlayingBar : Panel
     // Up Next icon: a small "list" (three lines, the last shorter) — accent-tinted when the queue is non-empty.
     private void DrawQueueGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (_queueOpen) { using var ob = new SolidBrush(Color.FromArgb(46, Theme.Accent)); using var op = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(ob, op); }   // the side card is open: pressed
-        else if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(hb, hp); }
+        if (_queueOpen) LatchedChip(g, r);   // the side card is open: pressed
+        else if (hover) HoverChip(g, r);
         Color c = _queueOpen ? Theme.AccentBright : _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 6, x2 = r.Right - 6;
