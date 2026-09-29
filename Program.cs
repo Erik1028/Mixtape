@@ -37,6 +37,8 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--tidytest") { RunTidyTest(args[1]); return; }
         // How often a tween actually gets a frame, on both pacers. → the console
         if (args.Length >= 1 && args[0] == "--animbench") { RunAnimBench(); return; }
+        // The Classic skin's pixel icons on one sheet, at 1x and 4x, with any malformed map reported. → the png
+        if (args.Length >= 2 && args[0] == "--icons") { RunIcons(args[1]); return; }
         // What the identifier would offer for a file, printed. → the console
         if (args.Length >= 2 && args[0] == "--identify")
         {
@@ -256,6 +258,7 @@ internal static class Program
         // The skin too, and for the same reason: MainForm's FIELD initialisers build controls (the song list's
         // scrollbar, the rail, their fonts) before its constructor body runs, and they must already see it.
         Theme.SetSkin(AppSettings.Load().ClassicSkin);
+        Theme.DitherCovers = AppSettings.Load().DitherCovers;
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -1268,6 +1271,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_MOTION") != "1") Anim.MotionEnabled = false;
         var rset = AppSettings.Load();                  // dialogs rendered on their own also deserve the live palette
         Theme.SetSkin(rset.ClassicSkin);   // MIX_CLASSIC=1|0 overrides this in AppSettings.Load
+        Theme.DitherCovers = rset.DitherCovers && Environment.GetEnvironmentVariable("MIX_DITHER") != "0";
         Theme.SetThemeVariant(rset.ThemeVariant);
         Theme.SetAccent(rset.Accent);
         MainForm.TracePath = Environment.GetEnvironmentVariable("MIX_TRACE");   // MIX_TRACE=<file>: step log for stall hunting
@@ -2822,6 +2826,29 @@ internal static class Program
         double secs = 0;
         try { using var probe = TagLib.File.Create(f); secs = probe.Properties.Duration.TotalSeconds; } catch { }
         return new IdentifyDialog(Path.GetFileName(f), secs, Identify.Search(f, secs));
+    }
+
+    private static void RunIcons(string outPng)
+    {
+        foreach (var p in ClassicIcons.Problems()) Console.WriteLine("MAP: " + p);
+        var ids = (ClassicIcons.Id[])Enum.GetValues(typeof(ClassicIcons.Id));
+        const int cell = 110, cols = 7;
+        int rows = (ids.Length + cols - 1) / cols;
+        using var bmp = new Bitmap(cols * cell, rows * (cell + 16));
+        using var g = Graphics.FromImage(bmp);
+        g.Clear(Theme.Face);
+        using var f = new Font("Tahoma", 8f);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            int x = (i % cols) * cell, y = (i / cols) * (cell + 16);
+            ClassicIcons.Draw(g, ids[i], x + 6, y + 6, 1);
+            ClassicIcons.Draw(g, ids[i], x + 30, y + 6, 4);
+            using (var w = new SolidBrush(Color.White)) g.FillRectangle(w, x + 6, y + 30, 16, 16);
+            ClassicIcons.Draw(g, ids[i], x + 6, y + 30, 1);
+            TextRenderer.DrawText(g, ids[i].ToString(), f, new Point(x + 4, y + cell - 2), Color.Black);
+        }
+        bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine("icons: " + ids.Length);
     }
 
     private static void RunAnimBench()

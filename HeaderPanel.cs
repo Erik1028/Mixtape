@@ -302,6 +302,20 @@ internal sealed class HeaderPanel : Panel
 
         int artSize = ArtSize;
         var artRect = new Rectangle(Pad, (Height - artSize) / 2, artSize, artSize);
+        if (Theme.Classic)
+        {
+            var a0 = _art ?? Theme.MakeArt(artSize, _seed);
+            if (a0.Width == 32 && a0.Height == 32)   // a category's 32 px icon: its own pixels, centred, nothing round it
+            {
+                var im0 = g.InterpolationMode; var po0 = g.PixelOffsetMode;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImage(a0, new Rectangle(artRect.X + (artSize - 32) / 2, artRect.Y + (artSize - 32) / 2, 32, 32));
+                g.InterpolationMode = im0; g.PixelOffsetMode = po0;
+            }
+            else Theme.PaintClassicPicture(g, artRect, a0);   // a cover: in 256 colours, in a sunken picture box
+        }
+        else
+        {
         // soft shadow under the art
         using (var sh = new SolidBrush(Color.FromArgb(45, 0, 0, 0)))
         using (var sp = Theme.RoundedRect(new RectangleF(artRect.X + 2, artRect.Y + 4, artSize, artSize), artSize * Theme.TileFrac))
@@ -314,6 +328,7 @@ internal sealed class HeaderPanel : Panel
             Theme.DrawImageAlpha(g, artNow, artRect, _artFade);     // incoming dissolves in over it
         }
         else g.DrawImage(artNow, artRect);
+        }
         if (ArtClickable && _artHover)
         {
             using (var ov = new SolidBrush(Color.FromArgb(125, 0, 0, 0)))

@@ -298,6 +298,7 @@ internal sealed class StatsView : Panel
     /// header wears.</summary>
     public static Bitmap HeaderTile(int size)
     {
+        if (Theme.Classic) return Theme.ClassicHeaderIcon(ClassicIcons.Id.Chart);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;

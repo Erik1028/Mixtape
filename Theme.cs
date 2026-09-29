@@ -49,6 +49,77 @@ internal static class Theme
     // buttons, a navy caption) ask Classic and take another path.
     public static bool Classic { get; private set; }
 
+    /// <summary>Classic: show pictures in 256 colours (Settings > Appearance, on by default; see Halftone).</summary>
+    public static bool DitherCovers { get; set; } = true;
+
+    /// <summary>
+    /// Classic: a picture the way the skin shows one - drawn at exactly <paramref name="r"/>'s size (halftoned when
+    /// that is on, pixel for pixel), and set into the page by the sunken edge of a 1995 picture box, two pixels
+    /// outside the picture so none of it is covered.
+    /// </summary>
+    public static void PaintClassicPicture(Graphics g, Rectangle r, Image art, bool frame = true)
+    {
+        var im = g.InterpolationMode; var po = g.PixelOffsetMode;
+        if (DitherCovers)
+        {
+            var shown = Halftone.For(art, r.Size);
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(shown, new Rectangle(r.X, r.Y, shown.Width, shown.Height));
+        }
+        else
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.DrawImage(art, r);
+        }
+        g.InterpolationMode = im; g.PixelOffsetMode = po;
+        if (frame) Bevel(g, Rectangle.Inflate(r, 2, 2), raised: false);
+    }
+
+    /// <summary>
+    /// Classic: one tile of a cover grid, the way a 1995 icon view showed a picture - the cover in its sunken picture
+    /// box at its own size (never lifted, never shadowed), the title under it, and, under the pointer, the title in
+    /// the navy band of a selected icon's label.
+    /// </summary>
+    public static void PaintClassicTile(Graphics g, Rectangle cover, Image art, string title, string subtitle, Font fTitle, Font fSub, bool hot)
+    {
+        PaintClassicPicture(g, cover, art);
+        var tr = new Rectangle(cover.X, cover.Bottom + 6, cover.Width, 18);
+        var flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+        if (hot)
+        {
+            int tw = Math.Min(cover.Width, TextRenderer.MeasureText(g, title, fTitle, new Size(int.MaxValue, 18), flags | TextFormatFlags.NoPadding).Width + 6);
+            using (var nb = new SolidBrush(ClassicNavy)) g.FillRectangle(nb, tr.X - 2, tr.Y + 1, tw, tr.Height - 2);
+            TextRenderer.DrawText(g, title, fTitle, new Rectangle(tr.X, tr.Y, cover.Width, tr.Height), Color.White, flags);
+        }
+        else TextRenderer.DrawText(g, title, fTitle, tr, TextCol, flags);
+        TextRenderer.DrawText(g, subtitle, fSub, new Rectangle(cover.X, cover.Bottom + 24, cover.Width, 16), Subtle, flags);
+    }
+
+    /// <summary>A 32 x 32 category icon for a page header (a copy the caller owns), in the Classic skin.</summary>
+    public static Bitmap ClassicHeaderIcon(ClassicIcons.Id id) => new(ClassicIcons.Get(id, 2));
+
+    private static readonly Dictionary<int, Bitmap> ClassicArtCache = new();
+
+    /// <summary>Classic: what a song with no cover shows - the window face with the Audio CD icon on it, at the
+    /// largest whole multiple of its pixels that leaves the picture box some air. Cache-owned, never disposed.</summary>
+    private static Bitmap ClassicNoCover(int size)
+    {
+        lock (ClassicArtCache)
+        {
+            if (ClassicArtCache.TryGetValue(size, out var hit)) return hit;
+            var bmp = new Bitmap(Math.Max(1, size), Math.Max(1, size));
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Face);
+                ClassicIcons.DrawCentered(g, ClassicIcons.Id.Album, new Rectangle(0, 0, size, size), Math.Max(1, (size - 8) / 32));
+            }
+            ClassicArtCache[size] = bmp;
+            return bmp;
+        }
+    }
+
     // The Windows 95 system colours under their own names, so the paint code reads like the era's docs.
     public static readonly Color Face = Color.FromArgb(192, 192, 192);        // COLOR_3DFACE / BTNFACE
     public static readonly Color FaceLight = Color.FromArgb(223, 223, 223);   // COLOR_3DLIGHT
@@ -440,6 +511,7 @@ internal static class Theme
     /// <see cref="DrawNote"/> mark. Used only by the no-device header (the caller owns/disposes it).</summary>
     public static Bitmap IdleNoteTile(int size)
     {
+        if (Classic) return ClassicHeaderIcon(ClassicIcons.Id.Songs);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -476,6 +548,7 @@ internal static class Theme
     /// <see cref="DrawComputer"/> mark (instead of the music note). The caller owns/disposes it.</summary>
     public static Bitmap LocalMusicTile(int size)
     {
+        if (Classic) return ClassicHeaderIcon(ClassicIcons.Id.Computer);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -515,6 +588,7 @@ internal static class Theme
     /// music note, which read as odd on the Photos page). The caller owns/disposes it.</summary>
     public static Bitmap PhotoTile(int size)
     {
+        if (Classic) return ClassicHeaderIcon(ClassicIcons.Id.Photos);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -832,6 +906,7 @@ internal static class Theme
     /// </summary>
     public static Bitmap MakeArt(int size, int seed, string? initials)
     {
+        if (Classic) return ClassicNoCover(size);   // 1995 had no generated art: a missing picture was an icon
         var key = (size, seed, initials ?? "");
         if (ArtCache.TryGetValue(key, out var cached)) return cached;
 
@@ -886,7 +961,8 @@ internal static class Theme
         if (area.Width < 40 || area.Height < 40) return;
         int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
         var prev = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-        DrawNote(g, new RectangleF(cx - 28, cy - 74, 56, 56), Color.FromArgb(77, Subtle));
+        if (Classic) ClassicIcons.Draw(g, ClassicIcons.Id.Album, cx - 16, cy - 62, 2);   // the 32 px Audio CD icon, not a drawn note
+        else DrawNote(g, new RectangleF(cx - 28, cy - 74, 56, 56), Color.FromArgb(77, Subtle));
         g.SmoothingMode = prev;
         using var ft = UiFont(SzBody);
         using var fh = UiFont(SzCaption);
@@ -1163,6 +1239,12 @@ internal sealed class ThemedButton : Button
     /// <summary>Crisp, perfectly-centred vector icon (symbol-font glyphs sit off-centre at this size).</summary>
     internal static void DrawIcon(Graphics g, RectangleF r, Ico icon, Color c)
     {
+        if (Theme.Classic && icon is Ico.Settings or Ico.CoverFlow)   // the 16 px pixel icons of the Classic skin
+        {
+            var rr = Rectangle.Round(r);
+            ClassicIcons.Draw(g, icon == Ico.Settings ? ClassicIcons.Id.Gear : ClassicIcons.Id.CoverFlow, rr.X + (rr.Width - 16) / 2, rr.Y + (rr.Height - 16) / 2);
+            return;
+        }
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
         using var b = new SolidBrush(c);
         if (icon == Ico.Play)

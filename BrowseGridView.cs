@@ -277,6 +277,7 @@ internal sealed class BrowseGridView : Panel
 
     private void DrawCard(Graphics g, int x, int y, Card c)
     {
+        if (Theme.Classic) { Theme.PaintClassicTile(g, new Rectangle(x, y, CoverW, CoverW), c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), c.Title, c.Subtitle, _fTitle, _fSub, ReferenceEquals(c, _hover)); return; }
         float lift = LiftOf(c);
         int grow = (int)Math.Round(5 * lift);        // the cover grows around its own centre
         var cover = new Rectangle(x - grow, y - grow, CoverW + 2 * grow, CoverW + 2 * grow);

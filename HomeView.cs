@@ -322,6 +322,7 @@ internal sealed class HomeView : Panel
 
     private void DrawTile(Graphics g, int x, int y, int cw, Tile t)
     {
+        if (Theme.Classic) { Theme.PaintClassicTile(g, new Rectangle(x, y, cw, cw), t.Cover ?? Theme.MakeArt(cw, t.Seed, t.Initials), t.Title, t.Subtitle, _fTitle, _fSub, ReferenceEquals(t, _hover)); return; }
         float lift = LiftOf(t);
         int grow = (int)Math.Round(5 * lift);
         var cover = new Rectangle(x - grow, y - grow, cw + 2 * grow, cw + 2 * grow);
@@ -426,6 +427,7 @@ internal sealed class HomeView : Panel
     /// <summary>The header tile for the home page: a house on the accent, at the header's cover size.</summary>
     public static Bitmap HeaderTile(int size)
     {
+        if (Theme.Classic) return Theme.ClassicHeaderIcon(ClassicIcons.Id.Home);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;

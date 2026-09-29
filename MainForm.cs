@@ -139,6 +139,7 @@ internal sealed class MainForm : Form, IMessageFilter
         FormBorderStyle = FormBorderStyle.None; // custom title bar — chrome handled in WndProc/CreateParams
         try { if (Environment.ProcessPath is string p) Icon = System.Drawing.Icon.ExtractAssociatedIcon(p); } catch { }
         Theme.SetSkin(_settings.ClassicSkin);   // the skin FIRST: it decides what the palette, the radii and the font even are
+        Theme.DitherCovers = _settings.DitherCovers;
         Theme.SetAccent(_settings.Accent); // apply saved accent before any control styles bake it in
         Theme.SetThemeVariant(_settings.ThemeVariant); // and the background palette, before controls bake their BackColors
         SeedDefaultSort();
@@ -1060,6 +1061,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (sz > 4)
                 {
                     var dest = new Rectangle(cb0.X + (cb0.Width - sz) / 2, cb0.Y + (cb0.Height - sz) / 2, sz, sz);
+                    if (Theme.Classic) { Theme.PaintClassicPicture(g0, Rectangle.Inflate(dest, -2, -2), cover); e.Handled = true; return; }   // in its picture box, inside the cell
                     var sm = g0.SmoothingMode; var im = g0.InterpolationMode; var po = g0.PixelOffsetMode;
                     g0.SmoothingMode = SmoothingMode.AntiAlias; g0.InterpolationMode = InterpolationMode.HighQualityBicubic; g0.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     float rad = sz * Theme.TileFrac;
@@ -4349,7 +4351,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // The header's meta line: what is on it and what is left — the same two facts the rail's device row shows.
         string cap = total > 0 ? CountNoun(songCount, "song") + "  ·  " + Loc.T("{0} free", CapacityBar.Human(free)) : Loc.T("Connected");
         _header.SetInfo(Loc.T("DEVICE"), p.ModelName ?? p.ModelNumber ?? "iPod", cap, Theme.StableHash(p.ModelName ?? "iPod"));
-        using (var art = IpodArt.Render(p.Generation, 150, p.ModelNumber)) _header.SetArt(art); // a picture of THIS iPod, in its real colour
+        using (var art = Theme.Classic ? Theme.ClassicHeaderIcon(ClassicIcons.Id.IPod) : IpodArt.Render(p.Generation, 150, p.ModelNumber)) _header.SetArt(art); // a picture of THIS iPod, in its real colour (Classic: its icon)
         _header.ArtClickable = false;
 
         _deviceData = (p, total, free, music, video, photoBytes, other, songCount, videoCount, photoCount);   // cache for resize relayout

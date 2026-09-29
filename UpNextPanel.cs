@@ -220,6 +220,7 @@ internal sealed class UpNextPanel : Control
 
     private void DrawArt(Graphics g, Bitmap? art, Rectangle r)
     {
+        if (Theme.Classic) { Theme.PaintClassicPicture(g, Rectangle.Inflate(r, -2, -2), art ?? Theme.MakeArt(r.Width - 4, 0)); return; }
         using var clip = Theme.RoundedRect(new RectangleF(r.X, r.Y, r.Width, r.Height), Math.Max(3, r.Width * Theme.TileFrac));
         using var saved = g.Clip; g.SetClip(clip, CombineMode.Intersect);
         if (art is not null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(art, r); }
