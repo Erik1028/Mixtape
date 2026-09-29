@@ -93,9 +93,15 @@ internal sealed class LyricsStage : Control
     private float _lineSize;
     private Font? _fLine;
     private readonly Dictionary<int, Font> _fontCache = new();   // by size×10, for the sung line's growth
-    private readonly Font _fTime = Theme.UiFont(8.5f);
-    private readonly Font _fSub = Theme.UiFont(10.5f);
-    private readonly Font _fTitle = Theme.DisplayFont(13f, FontStyle.Bold);
+    private readonly Font _fTime = StageFont(8.5f, FontStyle.Regular);
+    private readonly Font _fSub = StageFont(10.5f, FontStyle.Regular);
+    private readonly Font _fTitle = StageFont(13f, FontStyle.Bold);
+
+    /// <summary>The stage's type. In the Classic skin the UI face (MS Sans Serif, which the skin holds to 8 and
+    /// 12 pt) cannot set words at stage size, so it uses the TrueType face Windows shipped from 3.1 on - Arial -
+    /// at the size the stage asks for. Karaoke and screensavers of 1995 looked exactly like that.</summary>
+    private static Font StageFont(float size, FontStyle style) =>
+        Theme.Classic ? new Font("Arial", size, style) : style == FontStyle.Bold ? Theme.DisplayFont(size, style) : Theme.UiFont(size, style);
     private static readonly StringFormat Typo = (StringFormat)StringFormat.GenericTypographic.Clone();
 
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
@@ -379,6 +385,7 @@ internal sealed class LyricsStage : Control
 
     private void DrawWash(Graphics g)
     {
+        if (Theme.Classic) { g.Clear(Color.Black); return; }   // 1995: the stage of a screensaver - black, the words lit on it
         float swap = Swap;
         if (swap >= 1f && _oldWashA is not null) DropOld();
         if (_washA is null && _oldWashA is null) { using var b0 = new SolidBrush(Theme.Bg); g.FillRectangle(b0, ClientRectangle); return; }
@@ -480,14 +487,14 @@ internal sealed class LyricsStage : Control
     private Font FontFor(float size)
     {
         int key = (int)Math.Round(size * 10);
-        if (!_fontCache.TryGetValue(key, out var f)) { f = Theme.DisplayFont(key / 10f, FontStyle.Bold); _fontCache[key] = f; }
+        if (!_fontCache.TryGetValue(key, out var f)) { f = StageFont(key / 10f, FontStyle.Bold); _fontCache[key] = f; }
         return f;
     }
 
     private void DrawLeft(Graphics g, float a)
     {
         var r = CoverRect;
-        int rad = Math.Max(8, (int)Math.Round(r.Width * Theme.TileFrac));
+        int rad = Theme.Classic ? 0 : Math.Max(8, (int)Math.Round(r.Width * Theme.TileFrac));   // Classic: a square picture
         for (int i = 6; i >= 1; i--)   // a deep, soft shadow lifts the cover off the wash
             using (var sh = new SolidBrush(Color.FromArgb((int)(18 * a), 0, 0, 0)))
             using (var sp = Theme.RoundedRect(new RectangleF(r.X - i, r.Y + i + 4, r.Width + i * 2, r.Height + i * 2), rad + i))
@@ -843,7 +850,8 @@ internal sealed class LyricsStage : Control
                 using var hb = new SolidBrush(W(0.10 * reveal * a * edge));
                 g.FillPath(hb, hp);
             }
-            DrawRowLines(g, row, y, W(alpha), scale);
+            // Classic: the sung line in karaoke yellow, the rest white - the era's sing-along screen
+            DrawRowLines(g, row, y, Theme.Classic && isNow ? Color.FromArgb(Math.Clamp((int)Math.Round(alpha * 255), 0, 255), 255, 255, 0) : W(alpha), scale);
         }
         g.ResetClip();
     }

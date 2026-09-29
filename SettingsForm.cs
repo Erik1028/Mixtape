@@ -18,6 +18,16 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     private readonly Panel _paneBody;    // the (taller) content panel, scrolled by its Top
     private readonly ThinScrollBar _paneScroll;
 
+    // ---- the Classic (Windows 95) layout: a property sheet ----
+    private ClassicPropertySheet? _sheet;
+    private ClassicGroupBox? _group;       // the group box rows go into while one is open
+    private int _gy;                       // the layout cursor inside it
+    private int _col;                      // check boxes run two to a line; 1 = the next one takes the right column
+    private GlassLabel? _descLabel;        // the Description box's text
+    private bool _hasDesc;                 // this page has something to describe
+    private const int ClassicW = 540, ClassicH = 500;        // the sheet's client area (inside the window frame)
+    private const int ClassicBodyW = ClassicW - 32, ClassicBodyH = ClassicH - 84;
+
     private int _homeTop;       // resting Top, captured on first show (anchor for the open/close slide)
     private bool _closingAnim;  // true once the dismiss animation has begun
 
@@ -60,12 +70,37 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         _pane.Resize += (_, _) => LayoutPane();
         _nav = new SettingsNav(Array.ConvertAll(Categories, Loc.T)) { Dock = DockStyle.Left, Width = NavW };
         _nav.Selected += ShowCategory;
+        if (Theme.Classic)
+        {
+            // A 1995 property sheet: the tabs across the top, one raised page under them, OK at the bottom right.
+            ClientSize = new Size(ClassicW + 4, ClassicH + DialogTitleBar.H + 4);
+            var sheetHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Face, Padding = new Padding(6, 6, 6, 0) };
+            _sheet = new ClassicPropertySheet(Array.ConvertAll(Categories, Loc.T)) { Dock = DockStyle.Fill };
+            _sheet.Selected += ShowCategory;
+            _pane.Dock = DockStyle.None;
+            _pane.Bounds = new Rectangle(10, ClassicPropertySheet.TabH + 10, ClassicBodyW, ClassicBodyH);
+            _sheet.Resize += (_, _) => { var pr = _sheet.PageRect; _pane.Bounds = new Rectangle(pr.X + 10, pr.Y + 10, Math.Max(1, pr.Width - 20), Math.Max(1, pr.Height - 18)); };
+            _sheet.Controls.Add(_pane);
+            sheetHost.Controls.Add(_sheet);
+            var buttons = new Panel { Dock = DockStyle.Bottom, Height = 40, BackColor = Theme.Face };
+            var ok = new ThemedButton { Text = Loc.T("OK"), Primary = true, Width = 75, Height = 23 };
+            ok.Click += (_, _) => Close();
+            buttons.Controls.Add(ok);
+            buttons.Resize += (_, _) => ok.Location = new Point(buttons.Width - 6 - ok.Width, 9);
+            AcceptButton = ok;
+            Controls.Add(sheetHost);
+            Controls.Add(buttons);
+            Controls.Add(new DialogTitleBar(Loc.T("Settings"), 0));
+        }
+        else
+        {
         Controls.Add(_pane);
         Controls.Add(_nav);
         Controls.Add(new DialogTitleBar(Loc.T("Settings"), NavW));   // added LAST so it docks to the top first; nav+pane fill below it
+        }
         Application.AddMessageFilter(this);   // route the mouse wheel over the pane to the themed scrollbar
         startCategory = Math.Clamp(startCategory, 0, Categories.Length - 1);
-        if (startCategory > 0) _nav.SelectedIndex = startCategory;   // raises Selected → ShowCategory
+        if (startCategory > 0) { if (_sheet is not null) _sheet.SelectedIndex = startCategory; else _nav.SelectedIndex = startCategory; }   // raises Selected → ShowCategory
         else ShowCategory(0);
 
         if (Anim.MotionEnabled) Opacity = 0; // fade up from invisible in OnShown
@@ -103,9 +138,9 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     private int _y;
 
     /// <summary>Render-harness hook: switch to a category by index (used by <c>--render settingsN</c>).</summary>
-    public void RenderCategory(int index) { _nav.SelectedIndex = Math.Clamp(index, 0, Categories.Length - 1); }
+    public void RenderCategory(int index) { int i = Math.Clamp(index, 0, Categories.Length - 1); if (_sheet is not null) _sheet.SelectedIndex = i; else _nav.SelectedIndex = i; }
 
-    private void Rebuild() => ShowCategory(_nav.SelectedIndex);
+    private void Rebuild() => ShowCategory(_sheet?.SelectedIndex ?? _nav.SelectedIndex);
 
     private int _lastCat;
 
@@ -120,7 +155,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         foreach (var c in old) { if (c is Label lbl) lbl.Font.Dispose(); c.Dispose(); }
 
         _y = 6;
-        PageTitle(Loc.T(Categories[index]));
+        _group = null; _hasDesc = false; _descLabel = null; _col = 0;
+        if (!Theme.Classic) PageTitle(Loc.T(Categories[index]));   // Classic: the tab already names the page
         switch (index)
         {
             case 0: BuildAppearance(); break;
@@ -132,21 +168,22 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             case 6: BuildDevice(); break;
             default: BuildAbout(); break;
         }
+        if (Theme.Classic) FinishClassicPage();
 
         // Size the scrollable body to its content and reset it to the top; the themed scrollbar appears
         // only when this exceeds the (screen-clamped) window height.
         _paneBody.Top = 0;
-        _paneBody.Height = _y + 18;
+        _paneBody.Height = Theme.Classic ? _y + 2 : _y + 18;   // Classic: a page that fits must not grow a scrollbar
 
         // Fixed, compact window height for EVERY category (no jiggle when switching, no ballooning toward
         // full-screen on the dense Library page) — content taller than the viewport scrolls via the themed
         // ThinScrollBar. Capped to the screen so it never opens taller than the desktop.
         int desired = Math.Min(PageHeight, Screen.FromControl(this).WorkingArea.Height - 72);
-        if (ClientSize.Height != desired) ClientSize = new Size(ClientSize.Width, desired);
+        if (!Theme.Classic && ClientSize.Height != desired) ClientSize = new Size(ClientSize.Width, desired);   // Classic: a property sheet keeps one size
 
         // Re-lay-out the themed scrollbar for the (rare) case content still exceeds the screen-capped window.
         LayoutPane();
-        if (categoryChanged) AnimatePaneIn();
+        if (categoryChanged && !Theme.Classic) AnimatePaneIn();   // 1995 switched pages at once
     }
 
     /// <summary>Settle the freshly-built page in with a small upward slide.</summary>
@@ -196,6 +233,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildAppearance()
     {
+        Group(Loc.T("Language"));
         var langNames = Array.ConvertAll(Loc.Languages, l => l.Native);
         var lang = new SegmentedControl { Options = langNames, SelectedIndex = Math.Max(0, Array.FindIndex(Loc.Languages, l => l.Code == Loc.Lang)), Width = 220 };
         lang.SelectedChanged += () =>
@@ -207,6 +245,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         };
         Row(Loc.T("Language"), Loc.T("Choose the app's language. Mixtape restarts to apply."), lang);
 
+        Group(Loc.T("Look"));
         var look = new SegmentedControl { Options = new[] { Loc.T("Modern"), Loc.T("Windows 95") }, SelectedIndex = _s.ClassicSkin ? 1 : 0, Width = 260 };
         look.SelectedChanged += () =>
         {
@@ -235,11 +274,13 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Row(Loc.T("Background"), Loc.T("The window's colour palette."), theme);
         }
 
+        Group(Loc.T("Song list"));
         var density = new SegmentedControl { Options = new[] { Loc.T("Comfortable"), Loc.T("Compact") }, SelectedIndex = _s.Compact ? 1 : 0, Width = 220 };
         density.SelectedChanged += () => { _s.Compact = density.SelectedIndex == 1; _s.Save(); _applyChanged(); };
         Row(Loc.T("Row density"), Loc.T("How tall the song rows are."), density);
 
         Row(Loc.T("Show artwork"), Loc.T("Show album/photo covers in lists."), Toggle(_s.ShowArtwork, v => { _s.ShowArtwork = v; _s.Save(); _applyChanged(); }));
+        Group(Loc.T("Player"));
         Row(Loc.T("Player at the top"), Loc.T("The transport and the playing song live in the window's top strip instead of under the list. Takes effect after a restart."),
             Toggle(_s.BarOnTop, v => { _s.BarOnTop = v; _s.Save(); PromptRestart(Loc.T("The player moves after a restart. Restart Mixtape now?")); }));
     }
@@ -265,19 +306,23 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildLibrary()
     {
+        Group(Loc.T("Sorting"));
         string[] sorts = { "Playlist", "Song", "Artist", "Album", "Added", "Time" };   // stored values (English) — translate only the display
         var sort = new SegmentedControl { Options = Array.ConvertAll(sorts, Loc.T), SelectedIndex = Math.Max(0, Array.IndexOf(sorts, _s.DefaultSort)), Width = 396 };
         sort.SelectedChanged += () => { _s.DefaultSort = sorts[sort.SelectedIndex]; _s.Save(); _applyChanged(); };
         Row(Loc.T("Default sort"), Loc.T("Column a list is sorted by when it opens."), sort);
         Row(Loc.T("Sort descending"), Loc.T("Reverse the default sort order."), Toggle(_s.DefaultSortDescending, v => { _s.DefaultSortDescending = v; _s.Save(); _applyChanged(); }));
+        Group(Loc.T("Libraries"));
         Row(Loc.T("Show Videos"), Loc.T("List the Videos library (video-capable iPods)."), Toggle(_s.ShowVideos, v => { _s.ShowVideos = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Show Photos"), Loc.T("List the Photos library (colour-screen iPods)."), Toggle(_s.ShowPhotos, v => { _s.ShowPhotos = v; _s.Save(); _applyChanged(); }));
+        Group(Loc.T("Song list columns"));
         Row(Loc.T("Artist column"), Loc.T("Show the Artist column in the song list."), Toggle(_s.ShowArtist, v => { _s.ShowArtist = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Album column"), Loc.T("Show the Album column in the song list."), Toggle(_s.ShowAlbum, v => { _s.ShowAlbum = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Star rating column"), Loc.T("Show your star ratings in the song list."), Toggle(_s.ShowRating, v => { _s.ShowRating = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Play count column"), Loc.T("Show how many times each song has been played."), Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Date added column"), Loc.T("Show when each song was added to the iPod."), Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Time column"), Loc.T("Show the Time column in the song list."), Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
+        Group(Loc.T("Internet"));
         Row(Loc.T("Online lyrics"), Loc.T("When a song has no lyrics of its own, look up time-synced lyrics from the public LRCLIB database. Only the artist, title and length are sent, and only while the lyrics panel is open."),
             Toggle(_s.OnlineLyrics, v => { _s.OnlineLyrics = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Missing covers from the internet"), Loc.T("When a file has no cover of its own, look one up by artist and album in Apple's public music search and the MusicBrainz Cover Art Archive. Only the artist and the album are sent, and a cover is used only when it clearly matches."),
@@ -288,6 +333,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildVideo()
     {
+        Group(Loc.T("Conversion"));
         var quality = new SegmentedControl { Options = new[] { Loc.T("iPod-safe"), Loc.T("High (Classic)") }, SelectedIndex = string.Equals(_s.VideoQuality, "High", StringComparison.OrdinalIgnoreCase) ? 1 : 0, Width = 230 };
         quality.SelectedChanged += () => { _s.VideoQuality = quality.SelectedIndex == 1 ? "High" : "Safe"; _s.Save(); _applyChanged(); };
         Row(Loc.T("Quality"), Loc.T("iPod-safe (320×240) plays on every model; High (640×480) is Classic/5.5G only."), quality);
@@ -305,6 +351,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildPhotos()
     {
+        Group(Loc.T("Photos"));
         Row(Loc.T("Store full-screen image"), Loc.T("Also write the 320×240 image so photos look sharp on the iPod (uses more space)."),
             Toggle(_s.PhotoStoreFullResolution, v => { _s.PhotoStoreFullResolution = v; _s.Save(); }));
     }
@@ -313,6 +360,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     /// default and inert without an Application ID — nothing is published until BOTH are set.</summary>
     private void BuildDiscord()
     {
+        Group(Loc.T("Rich Presence"));
         Row(Loc.T("Show on Discord"), Loc.T("Put the song you're playing on your Discord profile, with a live progress bar. Talks only to the Discord app on this PC."),
             Toggle(_s.DiscordRichPresence, v => { _s.DiscordRichPresence = v; _s.Save(); _applyChanged(); }));
 
@@ -339,10 +387,12 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildSafety()
     {
+        Group(Loc.T("Writing to the iPod"));
         Row(Loc.T("Confirm before writing"), Loc.T("Show a reminder before the first change each session."), Toggle(_s.ConfirmWrites, v => { _s.ConfirmWrites = v; _s.Save(); }));
         Row(Loc.T("Auto device-ID recovery"), Loc.T("When a hash58 iPod with no stored ID is plugged in, offer to read its hardware ID automatically (a safe, read-only query) so music can be written — no hunting for the “Read device ID” button."), Toggle(_s.AutoGuidRecovery, v => { _s.AutoGuidRecovery = v; _s.Save(); }));
         if (_device is not null)
         {
+            Group(Loc.T("Backup"));
             var restore = new ThemedButton { Text = Loc.T("Restore…"), Pill = true, Width = 110, Height = 30 };
             restore.Click += (_, _) => RestoreBackup();
             Row(Loc.T("Database backup"), Loc.T("Mixtape backs up before every change and verifies the result. Restore rolls back to the previous state."), restore);
@@ -377,6 +427,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildAbout()
     {
+        if (Theme.Classic) { BuildClassicAbout(); return; }
         Row("Mixtape", Loc.T("Version {0}", AppVersion), null);
         Row(Loc.T("A friendly manager for classic iPods"), Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes."), null);
     }
@@ -393,6 +444,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void Row(string title, string? subtitle, Control? control, int height = 0)
     {
+        if (Theme.Classic) { ClassicRow(title, subtitle, control); return; }
         int rowH = height > 0 ? height : (subtitle is null ? 52 : MeasureRowHeight(subtitle, control));
         var card = new CardPanel(CardW) { Left = ContentLeft, Top = _y };
         card.AddRow(title, subtitle, control, rowH);
@@ -416,11 +468,215 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     /// <summary>A single grouped card of read-only "label … value" rows with internal hairline dividers.</summary>
     private void InfoGroup(List<(string Label, string Value)> rows)
     {
+        if (Theme.Classic)
+        {
+            Group(Loc.T("Details"));
+            foreach (var (l, v) in rows)
+            {
+                Host.Controls.Add(ClassicText(l + ":", 12, Y, 150, 16));
+                Host.Controls.Add(ClassicText(v, 166, Y, HostW - 178, 16));
+                Y += 18;
+            }
+            EndGroup();
+            return;
+        }
         var card = new CardPanel(CardW) { Left = ContentLeft, Top = _y };
         foreach (var (l, v) in rows) card.AddInfoRow(l, v);
         card.Finish();
         _paneBody.Controls.Add(card);
         _y += card.Height + 10;
+    }
+
+    // ---- the Classic property sheet's layout ----
+
+    private Control Host => (Control?)_group ?? _paneBody;
+    private int HostW => _group?.Width ?? ClassicBodyW;
+    private int Y { get => _group is null ? _y : _gy; set { if (_group is null) _y = value; else _gy = value; } }
+
+    /// <summary>Open a captioned group box (Classic only; the modern page has no groups). Rows go into it until the
+    /// next group or the end of the page.</summary>
+    private void Group(string caption)
+    {
+        if (!Theme.Classic) return;
+        EndGroup();
+        _group = new ClassicGroupBox { Text = caption, Left = 0, Top = _y, Width = ClassicBodyW };
+        _paneBody.Controls.Add(_group);
+        _gy = 20; _col = 0;
+    }
+
+    private void EndGroup()
+    {
+        if (_group is null) return;
+        if (_col == 1) { _gy += 20; _col = 0; }
+        _group.Height = _gy + 6;
+        _y = _group.Bottom + 8;
+        _group = null;
+    }
+
+    private static GlassLabel ClassicText(string text, int x, int y, int w, int h, bool wrap = false) => new()
+    {
+        Text = text, Left = x, Top = y, Width = Math.Max(10, w), Height = h, AutoSize = false,
+        Font = Theme.UiFont(Theme.SzBody), ForeColor = Theme.TextCol, BackColor = Theme.Face,
+        TextAlign = wrap ? ContentAlignment.TopLeft : ContentAlignment.MiddleLeft, AutoEllipsis = !wrap,
+    };
+
+    /// <summary>Show <paramref name="text"/> in the page's Description box while the pointer is on the control.</summary>
+    private void Describe(Control c, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _hasDesc = true;
+        c.MouseEnter += (_, _) => { if (_descLabel is not null) _descLabel.Text = text; };
+    }
+
+    private static int TextHeight(string text, int width)
+    {
+        using var f = Theme.UiFont(Theme.SzBody);
+        return TextRenderer.MeasureText(text, f, new Size(Math.Max(10, width), 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+    }
+
+    /// <summary>
+    /// One setting on a 1995 property page. A switch is a check box with its label on the right (two to a line
+    /// while they run together); a choice is its caption over a row of radio buttons; a button stands at the right
+    /// of its label with any status text under the label; a plain note is a wrapped paragraph. What a setting DOES
+    /// goes into the Description box, not onto the page - the way the era's dialogs kept a page readable.
+    /// </summary>
+    private void ClassicRow(string title, string? subtitle, Control? control)
+    {
+        int x = 12, w = HostW - 24;
+        switch (control)
+        {
+            case ToggleSwitch t:
+            {
+                int colW = w / 2;
+                t.ClassicLabel = title;
+                var sz = t.ClassicLabelSize();
+                bool right = _col == 1 && sz.Width <= colW;
+                if (_col == 1 && !right) { Y += 20; _col = 0; }
+                t.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+                t.Location = new Point(right ? x + colW : x, Y);
+                t.Size = new Size(Math.Min(sz.Width, right ? colW : w), 18);
+                Host.Controls.Add(t);
+                Describe(t, subtitle);
+                if (right || sz.Width > colW) { Y += 20; _col = 0; } else _col = 1;
+                return;
+            }
+            case SegmentedControl s:
+            {
+                if (_col == 1) { Y += 20; _col = 0; }
+                bool captioned = _group is not null && string.Equals(_group.Text, title, StringComparison.CurrentCulture);
+                if (!captioned) { var cap = ClassicText(title + ":", x, Y, w, 16); Host.Controls.Add(cap); Describe(cap, subtitle); Y += 18; }
+                int avail = w - 8;
+                s.ClassicWrap = true;
+                var (_, rows) = s.ClassicGrid(avail);
+                s.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+                s.Location = new Point(x + 4, Y);
+                s.Size = new Size(Math.Min(avail, s.ClassicRadioWidth()), rows * 18);
+                if (rows > 1) s.Width = avail;
+                Host.Controls.Add(s);
+                Describe(s, subtitle);
+                Y += rows * 18 + 6;
+                return;
+            }
+            case ThemedButton b:
+            {
+                if (_col == 1) { Y += 20; _col = 0; }
+                b.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+                b.Size = new Size(Math.Max(75, b.NeededWidth), 23);
+                b.Location = new Point(HostW - 12 - b.Width, Y);
+                int tw = w - b.Width - 12;
+                Host.Controls.Add(ClassicText(title, x, Y, tw, 18));
+                int th = 0;
+                if (!string.IsNullOrWhiteSpace(subtitle))
+                {
+                    th = TextHeight(subtitle, tw);
+                    var st = ClassicText(subtitle, x, Y + 18, tw, th, wrap: true);
+                    st.ForeColor = Theme.Subtle;
+                    Host.Controls.Add(st);
+                }
+                Host.Controls.Add(b);
+                Y += Math.Max(28, 18 + th + 6);
+                return;
+            }
+            case null:
+            {
+                if (_col == 1) { Y += 20; _col = 0; }
+                bool captioned = _group is not null && string.Equals(_group.Text, title, StringComparison.CurrentCulture);
+                if (!captioned) { Host.Controls.Add(ClassicText(title, x, Y, w, 16)); Y += 18; }
+                if (!string.IsNullOrWhiteSpace(subtitle))
+                {
+                    int th = TextHeight(subtitle, w);
+                    var st = ClassicText(subtitle, x, Y, w, th, wrap: true);
+                    st.ForeColor = captioned ? Theme.TextCol : Theme.Subtle;
+                    Host.Controls.Add(st);
+                    Y += th + 6;
+                }
+                return;
+            }
+            default:
+            {
+                if (_col == 1) { Y += 20; _col = 0; }
+                Host.Controls.Add(ClassicText(title, x, Y, w - control.Width - 12, 18));
+                control.Location = new Point(HostW - 12 - control.Width, Y);
+                Host.Controls.Add(control);
+                Describe(control, subtitle);
+                Y += Math.Max(24, control.Height + 6);
+                return;
+            }
+        }
+    }
+
+    /// <summary>Close the page: the last group, then the Description box, pinned to the bottom of the page.</summary>
+    private void FinishClassicPage()
+    {
+        EndGroup();
+        if (!_hasDesc) return;
+        const int h = 66;
+        int top = Math.Max(_y, ClassicBodyH - h - 2);
+        var box = new ClassicGroupBox { Text = Loc.T("Description"), Left = 0, Top = top, Width = ClassicBodyW, Height = h };
+        _descLabel = ClassicText(Loc.T("Point at a setting to see what it does."), 12, 20, ClassicBodyW - 24, h - 26, wrap: true);
+        box.Controls.Add(_descLabel);
+        _paneBody.Controls.Add(box);
+        _y = top + h;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MEMORYSTATUSEX { public uint dwLength, dwMemoryLoad; public ulong ullTotalPhys, ullAvailPhys, ullTotalPageFile, ullAvailPageFile, ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual; }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX m);
+
+    /// <summary>
+    /// The About page as a 1995 About box: the program's icon, name and version, then who the copy is licensed
+    /// to and what the machine has free - the two lines every Windows 95 About box ended with.
+    /// </summary>
+    private void BuildClassicAbout()
+    {
+        Group(Loc.T("About Mixtape"));
+        var icon = new PictureBox { Left = 14, Top = Y + 2, Size = new Size(32, 32), SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Theme.Face };
+        try { if (Environment.ProcessPath is string pth) icon.Image = System.Drawing.Icon.ExtractAssociatedIcon(pth)?.ToBitmap(); } catch { }
+        Host.Controls.Add(icon);
+        int tx = 58, tw = HostW - tx - 12;
+        var name = ClassicText("Mixtape", tx, Y, tw, 16);
+        name.Font = Theme.UiFont(Theme.SzBody, FontStyle.Bold);
+        Host.Controls.Add(name);
+        Host.Controls.Add(ClassicText(Loc.T("Version {0}", AppVersion), tx, Y + 16, tw, 16));
+        Y += 40;
+        string blurb = Loc.T("A friendly manager for classic iPods") + ". " + Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes.");
+        int bh = TextHeight(blurb, tw);
+        Host.Controls.Add(ClassicText(blurb, tx, Y, tw, bh, wrap: true));
+        Y += bh + 8;
+        EndGroup();
+
+        Group(Loc.T("This copy"));
+        Host.Controls.Add(ClassicText(Loc.T("This product is licensed to:"), 12, Y, HostW - 24, 16)); Y += 16;
+        Host.Controls.Add(ClassicText(Environment.UserName, 28, Y, HostW - 40, 16)); Y += 22;
+        var m = new MEMORYSTATUSEX { dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<MEMORYSTATUSEX>() };
+        if (GlobalMemoryStatusEx(ref m))
+        {
+            Host.Controls.Add(ClassicText(Loc.T("Physical memory available to Windows:"), 12, Y, 250, 16));
+            Host.Controls.Add(ClassicText(Loc.T("{0} KB", (m.ullAvailPhys / 1024).ToString("N0")), 266, Y, HostW - 278, 16)); Y += 18;
+            Host.Controls.Add(ClassicText(Loc.T("System resources:"), 12, Y, 250, 16));
+            Host.Controls.Add(ClassicText(Loc.T("{0}% free", 100 - m.dwMemoryLoad), 266, Y, HostW - 278, 16)); Y += 18;
+        }
+        EndGroup();
     }
 
     private static ToggleSwitch Toggle(bool initial, Action<bool> onChange)
