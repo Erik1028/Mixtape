@@ -169,6 +169,38 @@ internal sealed class MainForm : Form, IMessageFilter
         WireDragDrop(); // drop music/video/photo files (or folders) anywhere on the window to add them
 
         if (_autoDetect) Shown += (_, _) => RefreshDevices();
+        // MIX_TEST_RESTART=1|play|busy (test harness): open Settings the way the gear does, and SettingsForm then
+        // restarts the app. "play" first starts a PC song (muted), so there is a live audio engine to shut down;
+        // "busy" fakes a write in flight, so the restart must be refused - the message is dismissed, then Settings.
+        string? testMode = Environment.GetEnvironmentVariable("MIX_TEST_RESTART");
+        if (testMode is "1" or "play" or "busy") Shown += async (_, _) =>
+        {
+            TracePath ??= Environment.GetEnvironmentVariable("MIX_TRACE");
+            if (testMode == "play")
+            {
+                for (int i = 0; i < 200 && _localTracks.Count == 0; i++) await Task.Delay(50);   // the folder scan is async
+                Trace("restart-test play: " + (PreviewPlayLocal("0") ? "ok" : "NOT FOUND"));
+                await Task.Delay(1500);
+                Trace("restart-test playing: " + _nowPlaying.Playing + " at " + _nowPlaying.PositionSeconds.ToString("0.0") + " s");
+            }
+            if (testMode == "busy")
+            {
+                _bgWriteRunning = true;
+                var t = new System.Windows.Forms.Timer { Interval = 2500 };
+                t.Tick += (_, _) =>
+                {
+                    var open = Application.OpenForms.Cast<Form>().ToList();
+                    Trace("restart-test busy: open = " + string.Join(" | ", open.Select(f => f.GetType().Name + (f.Visible ? "" : " (hidden)"))));
+                    if (open.OfType<MessageDialog>().FirstOrDefault() is { } msg) { msg.Close(); return; }   // the refusal, then Settings next tick
+                    t.Dispose();
+                    _bgWriteRunning = false;
+                    open.OfType<SettingsForm>().FirstOrDefault()?.Close();
+                };
+                t.Start();
+            }
+            OpenSettings();
+            Trace("restart-test: Settings closed, the app is still running");
+        };
 
         Application.AddMessageFilter(this); // route the mouse wheel to the device page's custom scroll
         _deviceChangeTimer.Tick += (_, _) => { _deviceChangeTimer.Stop(); AutoDetectDevices(); };
@@ -3135,22 +3167,26 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     /// <summary>Eject reminder: the user wrote to the iPod and is closing without ejecting. Gated to
-    /// user-initiated closes only — the language-change relaunch (ApplicationExitCall waits on the
-    /// single-instance mutex) and Windows shutdown must never be blocked by a modal prompt.</summary>
+    /// user-initiated closes only — "Restart now" (ApplicationExitCall: the new copy opens the iPod straight
+    /// back up) and Windows shutdown must never be held up by it. A write still running blocks a restart as
+    /// well as a close, though: this copy's worker would be cut off mid-write when the process ends.</summary>
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         FlushLyricSync();
         SaveResume(persist: false);   // the "Continue listening" bookmark rides the volume write
         SaveVolume();
-        if (e.CloseReason != CloseReason.UserClosing || e.Cancel) { base.OnFormClosing(e); return; }
+        bool restart = e.CloseReason == CloseReason.ApplicationExitCall;   // only Program.Restart exits the app that way
+        if ((e.CloseReason != CloseReason.UserClosing && !restart) || e.Cancel) { base.OnFormClosing(e); return; }
 
         if (_bgWriteRunning)
         {
             MessageDialog.Show(this,
-                Loc.T("Mixtape is still writing to the iPod. Please wait for it to finish before closing."),
+                restart ? Loc.T("Mixtape is still writing to the iPod, so it can't restart yet. Your change is saved and takes effect the next time Mixtape starts.")
+                        : Loc.T("Mixtape is still writing to the iPod. Please wait for it to finish before closing."),
                 Loc.T("Writing to the iPod"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             e.Cancel = true; base.OnFormClosing(e); return;
         }
+        if (restart) { base.OnFormClosing(e); return; }
 
         // Every iPod we wrote to that is still plugged in on its own drive letter. Folder mounts are
         // excluded on purpose: they share a volume with unrelated data, so ejecting by drive letter

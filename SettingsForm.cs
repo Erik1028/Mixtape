@@ -111,6 +111,16 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     {
         base.OnShown(e);
         _homeTop = Top;
+        // MIX_TEST_RESTART (test harness, see MainForm): "Restart now" exactly as a page takes it - this window open,
+        // modal, once its entrance has played - minus only the Yes/No prompt. Cleared first, so the relaunched copy
+        // doesn't repeat it.
+        if (Environment.GetEnvironmentVariable("MIX_TEST_RESTART") is "1" or "play" or "busy")
+        {
+            Environment.SetEnvironmentVariable("MIX_TEST_RESTART", null);
+            var t = new System.Windows.Forms.Timer { Interval = 700 };
+            t.Tick += (_, _) => { t.Dispose(); RestartSoon(); };
+            t.Start();
+        }
         if (!Anim.MotionEnabled) { Opacity = 1; return; }
         Top = _homeTop + 16;
         Anim.Run(190, v =>
@@ -121,10 +131,12 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         }, () => { if (!IsDisposed) { Opacity = 1; Top = _homeTop; } }, Easings.OutCubic);
     }
 
-    /// <summary>Fade + settle down on dismiss before the window actually closes.</summary>
+    /// <summary>Fade + settle down on dismiss before the window actually closes. Only a close the user asked for
+    /// fades: the fade works by refusing the first close, and refusing an APP exit - "Restart now", Windows shutting
+    /// down - refuses the whole exit. That is how "Restart now" used to leave the app open with nothing restarted.</summary>
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (_closingAnim || !Anim.MotionEnabled) { base.OnFormClosing(e); return; }
+        if (_closingAnim || !Anim.MotionEnabled || e.CloseReason is not (CloseReason.UserClosing or CloseReason.None)) { base.OnFormClosing(e); return; }
         e.Cancel = true;
         _closingAnim = true;
         Anim.Run(130, v =>
@@ -285,24 +297,20 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             Toggle(_s.BarOnTop, v => { _s.BarOnTop = v; _s.Save(); PromptRestart(Loc.T("The player moves after a restart. Restart Mixtape now?")); }));
     }
 
-    /// <summary>Offer to relaunch so the new language takes effect. "Restart now" starts a fresh instance with
-    /// <c>--relaunch</c> (which waits for this one's single-instance lock to release) and exits this one.</summary>
+    /// <summary>Offer to relaunch so a change that needs one (language, look, where the player sits) takes effect.
+    /// "Restart now" closes this copy and starts a fresh one - see <see cref="Program.Restart"/>.</summary>
     private void PromptLanguageRestart() => PromptRestart(Loc.T("The language changes after a restart. Restart Mixtape now?"));
 
     private void PromptRestart(string question)
     {
         if (MessageDialog.Show(this, question,
                 Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        try
-        {
-            if (Environment.ProcessPath is string exe)
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "--relaunch") { UseShellExecute = true });
-                Application.Exit();
-            }
-        }
-        catch { }
+        RestartSoon();
     }
+
+    /// <summary>Posted rather than called: the switch or radio button that asked is still inside its own click, and
+    /// the restart closes every window - so it runs once that click is over, from the dialog's message loop.</summary>
+    private void RestartSoon() => BeginInvoke(new Action(Program.Restart));
 
     private void BuildLibrary()
     {

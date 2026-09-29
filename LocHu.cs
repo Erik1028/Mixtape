@@ -393,6 +393,8 @@ internal static partial class LocHu
             "A Mixtape {0} csatlakoztatott iPodra írt, amelyek még nincsenek leválasztva.\n\nHa kihúzás előtt leválasztod őket, a Windows biztosan mindent kiír rájuk.",
         ["Mixtape is still writing to the iPod. Please wait for it to finish before closing."] =
             "A Mixtape még ír az iPodra. Várd meg, amíg befejezi, mielőtt bezárod.",
+        ["Mixtape is still writing to the iPod, so it can't restart yet. Your change is saved and takes effect the next time Mixtape starts."] =
+            "A Mixtape még ír az iPodra, ezért most nem tud újraindulni. A változtatás el van mentve, és a Mixtape következő indításakor lép életbe.",
         ["Close anyway"] = "Bezárás így is",
         // identifying a file, and the PC's own play counts
         ["Identify song"] = "Dal felismerése",
