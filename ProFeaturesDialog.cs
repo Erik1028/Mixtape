@@ -16,7 +16,7 @@ internal sealed class DurationSlider : Control
         DoubleBuffered = true;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
-        Cursor = Cursors.Hand;
+        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;
         Size = new Size(200, 30);
         _value = Math.Clamp(seconds, Min, Max);
         MouseDown += (_, e) => { _drag = true; SetFromX(e.X); };
@@ -49,6 +49,13 @@ internal sealed class DurationSlider : Control
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         var t = Track;
         float frac = (float)((_value - Min) / (Max - Min));
+        if (Theme.Classic)
+        {
+            Theme.ClassicTrackbar(g, t, frac);
+            TextRenderer.DrawText(g, $"{(int)_value}s", _fVal, new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            return;
+        }
         using (var bp = Theme.RoundedRect(new RectangleF(t.X, t.Y, t.Width, t.Height), t.Height / 2f))
         using (var bb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.White, 0.16))) g.FillPath(bb, bp);
         float fw = t.Width * frac;

@@ -20,6 +20,13 @@ internal sealed class ThemedProgressBar : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        if (Theme.Classic)
+        {
+            g.Clear(Parent?.BackColor ?? Theme.Face);
+            float f0 = Maximum > 0 ? Math.Min(1f, (float)_value / Maximum) : 0;
+            Theme.ClassicProgress(g, new Rectangle(0, 0, Width, Height), (int)Math.Round((Width - 4) * f0));
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.PanelBg);
         float r = Height / 2f;
@@ -45,7 +52,7 @@ internal sealed class ThemedProgressBar : Control
 /// </summary>
 internal sealed class CopyProgressDialog : CardDialog
 {
-    private readonly ThemedProgressBar _bar = new() { Dock = DockStyle.Top, Height = 8, Margin = new Padding(0) };
+    private readonly ThemedProgressBar _bar = new() { Dock = DockStyle.Top, Height = Theme.Classic ? 18 : 8, Margin = new Padding(0) };   // Classic: the era's 18 px bar
     private readonly Label _status = new() { Dock = DockStyle.Top, Height = 22, ForeColor = Theme.Subtle, AutoEllipsis = true };
     private readonly ThemedButton _cancel = new() { Text = Loc.T("Cancel"), Width = 96, Height = 30, Pill = true };
     private readonly Action<Action<int, string>, Func<bool>> _work;

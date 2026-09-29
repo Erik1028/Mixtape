@@ -106,8 +106,9 @@ internal sealed class TagTidyDialog : CardDialog
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = Theme.TextHint;
             g.Clear(Parent?.BackColor ?? Theme.Bg);
-            using (var b = new SolidBrush(Theme.PanelBg))
+            using (var b = new SolidBrush(Theme.Classic ? Color.White : Theme.PanelBg))   // Classic: a list box's white client area
             using (var p = Theme.RoundedRect(new Rectangle(0, 0, Width, Height), Theme.RadCard)) g.FillPath(b, p);
+            if (Theme.Classic) Theme.Bevel(g, new Rectangle(0, 0, Width, Height), raised: false);
 
             if (_g.Count == 0)
             {
@@ -132,7 +133,7 @@ internal sealed class TagTidyDialog : CardDialog
                 DrawTick(g, new Rectangle(row.X + 10, row.Y + (row.Height - 18) / 2, 18, 18), _on[i]);
 
                 var gr = _g[i];
-                TextRenderer.DrawText(g, TagTidy.Label(gr.What).ToUpperInvariant(), _fField, new Rectangle(row.X + 38, row.Y, 84, row.Height), Theme.Faint,
+                TextRenderer.DrawText(g, Theme.Caps(TagTidy.Label(gr.What)), _fField, new Rectangle(row.X + 38, row.Y, 84, row.Height), Theme.Faint,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
                 int x = row.X + 126, right = row.Right - 56;
@@ -163,6 +164,7 @@ internal sealed class TagTidyDialog : CardDialog
 
         private static void DrawTick(Graphics g, Rectangle r, bool on)
         {
+            if (Theme.Classic) { Theme.ClassicCheckBox(g, new Rectangle(r.X + (r.Width - 13) / 2, r.Y + (r.Height - 13) / 2, 13, 13), on); return; }
             using var p = Theme.RoundedRect(r, 5);
             if (on)
             {

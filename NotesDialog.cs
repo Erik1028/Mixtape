@@ -224,7 +224,7 @@ internal sealed class NotesDialog : CardDialog
             _name.Width = ClientSize.Width - 108;
             Controls.Add(ThemedField.Wrap(_name));
 
-            var frame = new RoundPanel { BackColor = Theme.RowBg, Location = new Point(22, 58), Size = new Size(ClientSize.Width - 44, 190) };
+            var frame = new RoundPanel { BackColor = Theme.RowBg, Location = new Point(22, 58), Size = new Size(ClientSize.Width - 44, 190), Sunken = true };
             _body.SetBounds(8, 8, frame.Width - 16, frame.Height - 16);
             frame.Controls.Add(_body);
             Controls.Add(frame);

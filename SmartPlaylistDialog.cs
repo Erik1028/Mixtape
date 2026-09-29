@@ -11,6 +11,9 @@ namespace iPodCommander;
 /// <summary>A panel that paints its background as a rounded band instead of a hard rectangle.</summary>
 internal sealed class RoundPanel : Panel
 {
+    /// <summary>Classic: draw the 95 sunken edge round it (it holds an edit area rather than a row of controls).</summary>
+    public bool Sunken { get; set; }
+
     public RoundPanel()
     {
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
@@ -24,6 +27,7 @@ internal sealed class RoundPanel : Panel
         using var p = Theme.RoundedRect(new RectangleF(0, 0, Width, Height), Theme.RadControl);
         using var b = new SolidBrush(BackColor);
         g.FillPath(b, p);
+        if (Theme.Classic && Sunken) Theme.Bevel(g, ClientRectangle, raised: false);
     }
 }
 
@@ -189,7 +193,7 @@ internal sealed class SmartPlaylistDialog : CardDialog
             _field = rule.Field; _op = rule.Op;
             // 506 wide, not 500: ThemedButton widens itself to fit its label, so the remove button really
             // ends at 500 - the band needs the extra 6 px for its rounded corner to show beside it.
-            Host = new RoundPanel { Size = new Size(506, 32), BackColor = Theme.RowBg };
+            Host = new RoundPanel { Size = new Size(506, 32), BackColor = Theme.Classic ? Theme.Face : Theme.RowBg };   // Classic: a rule's controls sit on the face
 
             _fieldBtn = new ThemedButton { Location = new Point(6, 2), Width = 135, Height = 28 };
             _fieldBtn.Click += (_, _) => ShowMenu(_fieldBtn, SmartPlaylist.Fields.Select(f => (Loc.T(f.Label), (Action)(() => SetField(f.Key)))));
@@ -197,7 +201,7 @@ internal sealed class SmartPlaylistDialog : CardDialog
             _opBtn = new ThemedButton { Location = new Point(147, 2), Width = 128, Height = 28 };
             _opBtn.Click += (_, _) => ShowMenu(_opBtn, SmartPlaylist.OpsFor(SmartPlaylist.Field(_field).Type).Select(o => (Loc.T(o.Label), (Action)(() => SetOp(o.Key)))));
 
-            _value = new TextBox { Text = rule.Value, Location = new Point(281, 4), Width = 138, BackColor = Theme.PanelBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
+            _value = new TextBox { Text = rule.Value, Location = new Point(281, 4), Width = 138, BackColor = Theme.Classic ? Color.White : Theme.PanelBg, ForeColor = Theme.TextCol, BorderStyle = Theme.Classic ? BorderStyle.Fixed3D : BorderStyle.FixedSingle };
             _value.TextChanged += (_, _) => Changed?.Invoke();
 
             _suffix = new Label { ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(423, 2), Size = new Size(34, 28) };

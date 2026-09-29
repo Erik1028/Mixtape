@@ -181,10 +181,29 @@ internal static class Theme
     {
         var sm = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.None;
-        using (var dither = new HatchBrush(HatchStyle.Percent50, FaceHi, Face)) g.FillRectangle(dither, width - 16, 0, 16, height);
-        FaceBevel(g, new Rectangle(width - 16, Math.Max(0, thumbY), 16, Math.Max(10, thumbH)), raised: true);
+        using (var dither = new HatchBrush(HatchStyle.Percent50, FaceHi, Face)) g.FillRectangle(dither, width - 16, 16, 16, Math.Max(0, height - 32));
+        var up = new Rectangle(width - 16, 0, 16, 16);
+        var dn = new Rectangle(width - 16, height - 16, 16, 16);
+        FaceBevel(g, up, raised: true);
+        FaceBevel(g, dn, raised: true);
+        using (var br = new SolidBrush(FaceDark))
+        {
+            int cx = width - 9;
+            for (int i = 0; i < 4; i++) g.FillRectangle(br, cx - i, up.Y + 6 + i, 1 + 2 * i, 1);
+            for (int i = 0; i < 4; i++) g.FillRectangle(br, cx - 3 + i, dn.Y + 6 + i, 7 - 2 * i, 1);
+        }
+        FaceBevel(g, new Rectangle(width - 16, Math.Max(16, thumbY), 16, Math.Max(10, thumbH)), raised: true);
         g.SmoothingMode = sm;
     }
+
+    /// <summary>Where an owner-drawn page's scrollbar track starts: under the Classic up-arrow button (16 px), else
+    /// at the top. With <see cref="PageTrackLen"/> this is the only geometry the pages' thumb maths needs - and in the
+    /// modern look both reduce to exactly the numbers the pages used before.</summary>
+    public static int PageTrackTop => Classic ? 16 : 0;
+    /// <summary>The length of that track: the page's height, less the two Classic arrow buttons.</summary>
+    public static int PageTrackLen(int height) => Classic ? Math.Max(1, height - 32) : height;
+    /// <summary>Classic: which arrow button a point on the page scrollbar is on (-1 up, +1 down, 0 neither).</summary>
+    public static int PageArrowAt(int y, int height) => !Classic ? 0 : y < 16 ? -1 : y >= height - 16 ? 1 : 0;
 
     /// <summary>A 95 group box's etched frame: a shadow line with a highlight line one pixel inside-right of it.</summary>
     public static void EtchedFrame(Graphics g, Rectangle r)
@@ -210,6 +229,68 @@ internal static class Theme
         using var cb = new SolidBrush(chunk ?? ClassicNavy);
         while (x < end) { g.FillRectangle(cb, x, track.Y + 2, Math.Min(cw, end - x), inner); x += cw + 2; }
         g.SmoothingMode = sm;
+    }
+
+    /// <summary>
+    /// The 95 trackbar: a sunken channel four pixels wide and a raised, square-cornered thumb that stands across
+    /// it. <paramref name="frac"/> is 0 at the left (or the BOTTOM of a vertical one) and 1 at the right / top.
+    /// No fill - a trackbar of the era only showed where the thumb was. Returns the thumb, for hit-testing.
+    /// </summary>
+    public static Rectangle ClassicTrackbar(Graphics g, Rectangle track, double frac, bool vertical = false)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        frac = Math.Clamp(frac, 0, 1);
+        Rectangle thumb;
+        if (vertical)
+        {
+            int cx = track.X + track.Width / 2;
+            var chan = new Rectangle(cx - 2, track.Y, 4, track.Height);
+            Bevel(g, chan, raised: false);
+            int ty = track.Bottom - (int)Math.Round(frac * track.Height);
+            thumb = new Rectangle(cx - 10, Math.Clamp(ty - 5, track.Y - 5, track.Bottom - 6), 21, 11);
+        }
+        else
+        {
+            int cy = track.Y + track.Height / 2;
+            var chan = new Rectangle(track.X, cy - 2, track.Width, 4);
+            Bevel(g, chan, raised: false);
+            int tx = track.X + (int)Math.Round(frac * track.Width);
+            thumb = new Rectangle(Math.Clamp(tx - 5, track.X - 5, track.Right - 6), cy - 10, 11, 21);
+        }
+        FaceBevel(g, thumb, raised: true);
+        g.SmoothingMode = sm;
+        return thumb;
+    }
+
+    /// <summary>The 95 check box: a 13 px sunken white square and the era's three-pixel-thick tick.</summary>
+    public static void ClassicCheckBox(Graphics g, Rectangle box, bool on, bool enabled = true)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var wb = new SolidBrush(enabled ? Color.White : Face)) g.FillRectangle(wb, box);
+        Bevel(g, box, raised: false);
+        if (on)
+        {
+            using var br = new SolidBrush(enabled ? FaceDark : FaceShadow);
+            int[] top = { 2, 3, 4, 3, 2, 1, 0 };   // seven columns, each three pixels tall
+            for (int i = 0; i < 7; i++) g.FillRectangle(br, box.X + 3 + i, box.Y + 3 + top[i], 1, 3);
+        }
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>A section or field caption. The modern look sets them in small capitals; 1995 wrote them the way
+    /// they are spelled ("Recently added", not "RECENTLY ADDED").</summary>
+    public static string Caps(string s) => Classic ? s : s.ToUpperInvariant();
+
+    /// <summary>A caption that arrives ALREADY in capitals (a column's "SONG" key): 1995 set it in title case.</summary>
+    public static string ClassicCase(string s)
+    {
+        if (!Classic || string.IsNullOrEmpty(s)) return s;
+        var lower = s.ToLower(System.Globalization.CultureInfo.CurrentCulture);
+        var t = char.ToUpper(lower[0], System.Globalization.CultureInfo.CurrentCulture) + lower[1..];
+        // an acronym stays one ("On this PC", not "On this pc")
+        return System.Text.RegularExpressions.Regex.Replace(t, @"\bpc\b", "PC");
     }
 
     /// <summary>The close button of a 95 caption, drawn in place (for chrome that is painted, not a control).</summary>
@@ -503,6 +584,7 @@ internal static class Theme
     public const int TitleStripH = 30;   // the one caption strip, on the wallpaper, above both cards
     public const int TitleBtnW = 38, TitleBtnH = 26;
     public const int ClassicCaptionH = 20;             // the title bar of 1995 (18 px at 96 dpi, plus a pixel of air)
+    public const int ClassicMenuH = 20;                // and the menu bar under it
     public const int ClassicBtnW = 16, ClassicBtnH = 14;   // and its window buttons, at their real size
     public const int BarH = 56;          // the content card's working bar — a row at the 40 px scale
     public const int SidebarW = 220;

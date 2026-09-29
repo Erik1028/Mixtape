@@ -353,7 +353,7 @@ internal sealed class CoverFlowView : Control
             using var bgg = Graphics.FromImage(_bg);
             bgg.SmoothingMode = SmoothingMode.AntiAlias;
             // Backdrop in the app's own theme colour (a touch lighter at top, darker "floor" at the bottom).
-            using (var br = new LinearGradientBrush(new Rectangle(0, 0, _bg.Width, _bg.Height), Theme.Blend(Theme.Bg, Color.White, 0.04), Theme.Blend(Theme.Bg, Color.Black, 0.22), 90f))
+            using (var br = new LinearGradientBrush(new Rectangle(0, 0, _bg.Width, _bg.Height), Theme.Blend(Stage, Color.White, 0.04), Theme.Blend(Stage, Color.Black, 0.22), 90f))
                 bgg.FillRectangle(br, 0, 0, _bg.Width, _bg.Height);
             // Soft center spotlight behind the covers for depth/focus.
             using (var gp = new GraphicsPath())
@@ -361,7 +361,7 @@ internal sealed class CoverFlowView : Control
                 var er = new RectangleF(_bg.Width * 0.06f, -_bg.Height * 0.25f, _bg.Width * 0.88f, _bg.Height * 1.05f);
                 gp.AddEllipse(er);
                 using var pgb = new PathGradientBrush(gp)
-                { CenterColor = Theme.Blend(Theme.Bg, Color.White, 0.10), SurroundColors = new[] { Color.FromArgb(0, Theme.Bg) }, CenterPoint = new PointF(_bg.Width / 2f, _bg.Height * 0.40f) };
+                { CenterColor = Theme.Blend(Stage, Color.White, 0.10), SurroundColors = new[] { Color.FromArgb(0, Stage) }, CenterPoint = new PointF(_bg.Width / 2f, _bg.Height * 0.40f) };
                 bgg.FillPath(pgb, gp);
             }
         }
@@ -435,7 +435,7 @@ internal sealed class CoverFlowView : Control
             _vignette?.Dispose();
             _vignette = new Bitmap(Math.Max(1, Width), Math.Max(1, H), PixelFormat.Format32bppPArgb);
             using var vg = Graphics.FromImage(_vignette);
-            Color edge = Theme.Blend(Theme.Bg, Color.Black, 0.6);
+            Color edge = Theme.Blend(Stage, Color.Black, 0.6);
             // NOTE: the gradient-brush rect is 1px WIDER than the fill on each end: a LinearGradientBrush renders
             // its very first column at the WRAPPED (end) colour - here that put a hard dark line where the right
             // vignette starts. Pushing the brush edges outside the fill region hides that buggy column.
@@ -500,6 +500,34 @@ internal sealed class CoverFlowView : Control
         int[] w = new int[3]; int total = 0;
         for (int i = 0; i < 3; i++) { w[i] = TextRenderer.MeasureText(g, Loc.T(ModeLabels[i]), f).Width + padX * 2; total += w[i]; }
         int x = (Width - total) / 2, y = 14;
+        if (Theme.Classic)
+        {
+            // three push buttons, the chosen one latched (pushed in over the white dither)
+            if (_intro < 0.05f) return;
+            g.SmoothingMode = SmoothingMode.None;
+            int bx = x;
+            for (int i = 0; i < 3; i++)
+            {
+                var seg = new Rectangle(bx, y, w[i], 24);
+                _modeRects[i] = seg;
+                bool on = (int)_mode == i;
+                if (on)
+                {
+                    using var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face);
+                    g.FillRectangle(dither, seg);
+                    Theme.Bevel(g, seg, raised: false);
+                }
+                else
+                {
+                    using (var fb = new SolidBrush(_modeHover == i ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(fb, seg);
+                    Theme.Bevel(g, seg, raised: true);
+                }
+                var tr = seg; if (on) tr.Offset(1, 1);
+                TextRenderer.DrawText(g, Loc.T(ModeLabels[i]), f, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                bx += w[i];
+            }
+            return;
+        }
 
         using (var b = new SolidBrush(Color.FromArgb((int)(40 * _intro), Color.White)))
         using (var cp = Theme.RoundedRect(new Rectangle(x, y, total, h), h / 2f)) g.FillPath(b, cp);
@@ -538,7 +566,21 @@ internal sealed class CoverFlowView : Control
         var f = _fNpChip;
         string txt = Loc.T("Now Playing");
         int tw = TextRenderer.MeasureText(g, txt, f).Width;
-        _npChip = new Rectangle(16, 14, 16 + 16 + 8 + tw + 14, 30);
+        _npChip = new Rectangle(16, 14, 16 + 16 + 8 + tw + 14, Theme.Classic ? 24 : 30);
+        if (Theme.Classic)   // a raised push button with the equaliser in navy
+        {
+            if (_intro < 0.05f) return;
+            Theme.FaceBevel(g, _npChip, raised: true);
+            using (var nb = new SolidBrush(Theme.ClassicNavy))
+            {
+                float bx0 = _npChip.X + 14, by0 = _npChip.Y + _npChip.Height / 2f + 6;
+                float[] hs0 = { 8, 12, 6 };
+                for (int k = 0; k < 3; k++) g.FillRectangle(nb, bx0 + k * 4, by0 - hs0[k], 3, hs0[k]);
+            }
+            TextRenderer.DrawText(g, txt, f, new Rectangle(_npChip.X + 34, _npChip.Y, tw + 10, _npChip.Height), Theme.TextCol,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            return;
+        }
         using (var b = new SolidBrush(Color.FromArgb((int)((_npChipHover ? 64 : 38) * _intro), Color.White)))
         using (var cp = Theme.RoundedRect(_npChip, 15)) g.FillPath(b, cp);
         // three little accent equaliser bars
@@ -759,7 +801,7 @@ internal sealed class CoverFlowView : Control
     private static void WarpInto(Bitmap dst, int bufW, int coverH, int reflH, SrcMips src, float theta, bool nearRight, float phase)
     {
         float sinT = (float)Math.Sin(theta), dv = coverH * ViewerDist;
-        Color floor = Theme.Blend(Theme.Bg, Color.Black, 0.22);   // the backdrop's bottom colour (see OnPaint's gradient)
+        Color floor = Theme.Blend(Stage, Color.Black, 0.22);   // the backdrop's bottom colour (see OnPaint's gradient)
         var job = new WarpJob
         {
             BufW = bufW, CoverH = coverH, ReflH = reflH, Src = src,
@@ -948,13 +990,24 @@ internal sealed class CoverFlowView : Control
         TextRenderer.DrawText(g, it.Title, tf, rect, Color.FromArgb(alpha, Color.White),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (!string.IsNullOrEmpty(it.Subtitle))
-            TextRenderer.DrawText(g, it.Subtitle, sf, new Rectangle(0, y + 26, Width, 22), Color.FromArgb((int)(alpha * 0.8f), Theme.Subtle),
+            TextRenderer.DrawText(g, it.Subtitle, sf, new Rectangle(0, y + 26, Width, 22), Color.FromArgb((int)(alpha * 0.8f), Theme.Classic ? Theme.Face : Theme.Subtle),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
+
+    /// <summary>The stage behind the covers: the app's own surface, or - Classic - black, the stage of every 1995
+    /// screensaver, so the covers and their reflections keep their depth instead of turning on window grey.</summary>
+    private static Color Stage => Theme.Classic ? Color.Black : Theme.Bg;
 
     private void DrawCloseButton(Graphics g)
     {
         const int sz = 30, m = 14;
+        if (Theme.Classic)   // a raised push button with the pixel cross
+        {
+            _closeRect = new Rectangle(Width - 24 - m, m, 24, 22);
+            if (_intro < 0.05f) return;
+            Theme.PaintClassicClose(g, _closeRect, _closeHover && MouseButtons == MouseButtons.Left);
+            return;
+        }
         _closeRect = new Rectangle(Width - sz - m, m, sz, sz);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using (var b = new SolidBrush(Color.FromArgb((int)((_closeHover ? 70 : 40) * _intro), Color.White)))

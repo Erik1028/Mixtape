@@ -116,7 +116,8 @@ internal sealed class WallpaperPanel : Panel
             bool edge = p.X < ResizeBorder || p.X >= Width - ResizeBorder || p.Y < ResizeBorder || p.Y >= Height - ResizeBorder;
             // The caption strip (minus the window buttons, which are child windows that intercept their
             // own area) and the resize edges fall through to the Form so it can move/snap/resize natively.
-            if (edge || p.Y < CaptionHeight) m.Result = (IntPtr)HTTRANSPARENT;
+            bool grip = Theme.Classic && p.X >= Width - 19 && p.Y >= Height - 19;   // the Classic status bar's size grip: the form resizes from it
+            if (edge || grip || p.Y < CaptionHeight) m.Result = (IntPtr)HTTRANSPARENT;
         }
     }
 }

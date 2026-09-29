@@ -69,11 +69,17 @@ internal sealed class HeaderPanel : Panel
     /// <summary>Raised when the (clickable) warning badge is clicked — wired to show the DB warnings.</summary>
     public event Action? StatusClicked;
 
+    /// <summary>What the meta line says right now (the subtitle and any status), for the Classic status bar.</summary>
+    public string MetaLine => string.IsNullOrEmpty(_status) ? _subtitle : string.IsNullOrEmpty(_subtitle) ? _status : _subtitle + "  ·  " + _status;
+    /// <summary>Raised when <see cref="MetaLine"/> may have changed.</summary>
+    public event Action? MetaChanged;
+
     public void SetStatus(string text, bool clickable)
     {
         text ??= "";
         if (_status == text && _statusClickable == clickable) return;
         _status = text; _statusClickable = clickable;
+        MetaChanged?.Invoke();
         Invalidate();
     }
 
@@ -162,6 +168,7 @@ internal sealed class HeaderPanel : Panel
     {
         bool moved = title != _title || subtitle != _subtitle;
         _kicker = kicker; _title = title; _subtitle = subtitle; _seed = seed;
+        MetaChanged?.Invoke();
         if (moved) SlideText();
         // keepArt: hold the CURRENT cover on screen instead of reverting to the seed gradient — the caller then
         // cross-dissolves straight to the new cover (or a null-fallback gradient), so switching playlists fades

@@ -55,6 +55,20 @@ internal sealed class EqBandsControl : Control
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(BackColor);
         var ta = TrackArea;
         int w = ColW, midY = ta.Top + ta.Height / 2;
+        if (Theme.Classic)
+        {
+            // 1995's graphic EQ (the Sound Blaster mixer's): a vertical trackbar per band, an etched 0 dB rule
+            using (var sh = new Pen(Theme.FaceShadow)) g.DrawLine(sh, 6, midY, Width - 6, midY);
+            using (var hi = new Pen(Theme.FaceHi)) g.DrawLine(hi, 6, midY + 1, Width - 6, midY + 1);
+            for (int i = 0; i < Cols; i++)
+            {
+                int bx = X0 + i * w + w / 2;
+                Theme.ClassicTrackbar(g, new Rectangle(bx - 10, ta.Top, 21, ta.Height), (_gains[i] / Range + 1f) / 2f, vertical: true);
+                TextRenderer.DrawText(g, Labels[i], _fLabel, new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.TextCol,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
+            }
+            return;
+        }
         using (var cp = new Pen(Theme.Blend(Theme.PanelBg, Color.White, 0.12f))) g.DrawLine(cp, 6, midY, Width - 6, midY); // 0 dB line
         for (int i = 0; i < Cols; i++)
         {

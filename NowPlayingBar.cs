@@ -1518,16 +1518,21 @@ internal sealed class NowPlayingBar : Panel
     private void DrawExtras(Graphics g, in Lo l)
     {
         if (_track is null) return;
+        if (Theme.Classic) { ClassicToolButton(g, l.Flow); ClassicToolButton(g, l.AddTo); }   // the same raised buttons as the rest of the deck
         DrawFlowGlyph(g, l.Flow, _hover == Hit.Flow);
         DrawAddGlyph(g, l.AddTo, _hover == Hit.AddTo);
         if (!CanRate) return;
-        using (var rule = new Pen(Color.FromArgb(32, 255, 255, 255)))   // the two actions and the rating are two things
+        var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.None;
+        int rx = (l.AddTo.Right + l.StarsR.Left) / 2;
+        if (Theme.Classic)   // an etched separator between the buttons and the rating, as between toolbar groups
         {
-            var sm0 = g.SmoothingMode; g.SmoothingMode = SmoothingMode.None;
-            int rx = (l.AddTo.Right + l.StarsR.Left) / 2;
-            g.DrawLine(rule, rx, l.AddTo.Y + 5, rx, l.AddTo.Bottom - 5);
-            g.SmoothingMode = sm0;
+            using var sh = new Pen(Theme.FaceShadow); using var hi = new Pen(Theme.FaceHi);
+            g.DrawLine(sh, rx, l.AddTo.Y + 2, rx, l.AddTo.Bottom - 2);
+            g.DrawLine(hi, rx + 1, l.AddTo.Y + 2, rx + 1, l.AddTo.Bottom - 2);
         }
+        else using (var rule = new Pen(Color.FromArgb(32, 255, 255, 255)))   // the two actions and the rating are two things
+            g.DrawLine(rule, rx, l.AddTo.Y + 5, rx, l.AddTo.Bottom - 5);
+        g.SmoothingMode = sm0;
         DrawStars(g, l.StarsR);
     }
 
@@ -1536,14 +1541,15 @@ internal sealed class NowPlayingBar : Panel
         if (hover) HoverChip(g, r);
         // The app's own Cover Flow mark, drawn from a box a little larger than the cell: at 24 px it comes out
         // smaller than the line glyphs beside it, and a weaker icon in a row of equals reads as a mistake.
-        ThemedButton.DrawIcon(g, new RectangleF(r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6), ThemedButton.Ico.CoverFlow, hover ? Theme.TextCol : Theme.Subtle);
+        ThemedButton.DrawIcon(g, Theme.Classic ? new RectangleF(r.X, r.Y, r.Width, r.Height) : new RectangleF(r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6),
+            ThemedButton.Ico.CoverFlow, Theme.Classic ? Theme.FaceDark : hover ? Theme.TextCol : Theme.Subtle);
     }
 
     /// <summary>Add to playlist: the queue glyph's three lines with a plus where the last one ends.</summary>
     private void DrawAddGlyph(Graphics g, Rectangle r, bool hover)
     {
         if (hover) HoverChip(g, r);
-        Color c = hover ? Theme.TextCol : Theme.Subtle;
+        Color c = Theme.Classic ? Theme.FaceDark : hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 5, x2 = r.Right - 5;
         g.DrawLine(pen, x, r.Y + 8, x2 - 8, r.Y + 8);
@@ -1651,6 +1657,17 @@ internal sealed class NowPlayingBar : Panel
         }
         if (l.ShowWordmark)
             TextRenderer.DrawText(g, "Mixtape", _fWordmark, l.Wordmark, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+        // Classic: the always-raised buttons go down first; each glyph drawer lights / latches its own on top
+        if (Theme.Classic)
+        {
+            if (l.ShowModes) { ClassicToolButton(g, l.Shuffle); ClassicToolButton(g, l.Repeat); }
+            if (l.ShowLyrics) ClassicToolButton(g, l.Lyrics);
+            if (l.ShowQueue) ClassicToolButton(g, l.Queue);
+            if (l.ShowPro) ClassicToolButton(g, l.Pro);
+            if (l.ShowEq) ClassicToolButton(g, l.Eq);
+            if (l.ShowOverflow) ClassicToolButton(g, l.Overflow);
+        }
 
         // transport
         if (l.ShowModes) DrawShuffle(g, l.Shuffle, _shuffle, _hover == Hit.Shuffle);
@@ -1799,19 +1816,48 @@ internal sealed class NowPlayingBar : Panel
     {
         if (Theme.Classic)
         {
-            // a toolbar button: flat until the pointer is on it, then a thin raised edge; greyed when idle
-            if (hover && !dim) Theme.Bevel(g, r, raised: true, thin: true);
-            glyph(g, r, dim ? Theme.FaceShadow : Theme.TextCol);
+            var b = Centered(r, 26, 26);
+            ClassicToolButton(g, b, hover: hover && !dim);
+            if (dim) { glyph(g, new Rectangle(b.X + 1, b.Y + 1, b.Width, b.Height), Theme.FaceHi); glyph(g, b, Theme.FaceShadow); }   // embossed, like a disabled button's label
+            else glyph(g, b, Theme.FaceDark);
             return;
         }
         if (hover && !dim) { using var hb = new SolidBrush(Theme.RowHover); g.FillEllipse(hb, r); }
         glyph(g, r, dim ? Theme.Faint : hover ? Theme.TextCol : Theme.Subtle);
     }
 
-    /// <summary>The hover chip behind a utility glyph. Classic: a toolbar button's hot-tracking edge.</summary>
+    /// <summary>
+    /// Classic: the push button every control of the deck sits on. 1995's players (CD Player, Media Player) were
+    /// rows of ALWAYS-raised square buttons - a toolbar button that only appears under the pointer arrived a
+    /// year later - so the deck draws them all, lightens the one under the pointer, and pushes a mode that is ON
+    /// in, over the white dither of a button that stays down.
+    /// </summary>
+    internal static void ClassicToolButton(Graphics g, Rectangle r, bool hover = false, bool latched = false)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        if (latched)
+        {
+            using var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face);
+            g.FillRectangle(dither, r);
+            Theme.Bevel(g, r, raised: false);
+        }
+        else
+        {
+            using (var fb = new SolidBrush(hover ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(fb, r);
+            Theme.Bevel(g, r, raised: true);
+        }
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>A w x h square centred in <paramref name="r"/> (the transport's hit rects differ in size; the
+    /// buttons drawn in them do not).</summary>
+    internal static Rectangle Centered(Rectangle r, int w, int h) => new(r.X + (r.Width - w) / 2, r.Y + (r.Height - h) / 2, w, h);
+
+    /// <summary>The hover chip behind a utility glyph. Classic: the raised button, lit.</summary>
     internal static void HoverChip(Graphics g, Rectangle r)
     {
-        if (Theme.Classic) { Theme.Bevel(g, r, raised: true, thin: true); return; }
+        if (Theme.Classic) { ClassicToolButton(g, r, hover: true); return; }
         using var hb = new SolidBrush(Theme.RowHover);
         using var hp = Theme.RoundedRect(r, Theme.RadControl);
         g.FillPath(hb, hp);
@@ -1821,13 +1867,7 @@ internal sealed class NowPlayingBar : Panel
     /// button - pushed in, over the 50 % white dither the era used for "stays down".</summary>
     internal static void LatchedChip(Graphics g, Rectangle r)
     {
-        if (Theme.Classic)
-        {
-            using var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face);
-            g.FillRectangle(dither, r);
-            Theme.Bevel(g, r, raised: false, thin: true);
-            return;
-        }
+        if (Theme.Classic) { ClassicToolButton(g, r, latched: true); return; }
         using var ob = new SolidBrush(Color.FromArgb(46, Theme.Accent));
         using var op = Theme.RoundedRect(r, Theme.RadControl);
         g.FillPath(ob, op);
@@ -1872,7 +1912,7 @@ internal sealed class NowPlayingBar : Panel
         if (_modeGlyphFont is null || _modeGlyphSize != sz) { _modeGlyphFont?.Dispose(); _modeGlyphFont = new Font(ModeFont, sz, FontStyle.Regular, GraphicsUnit.Pixel); _modeGlyphSize = sz; }
         using var b = new SolidBrush(c);
         var savedHint = g.TextRenderingHint;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+        g.TextRenderingHint = Theme.Classic ? System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit : System.Drawing.Text.TextRenderingHint.AntiAlias;
         g.DrawString(glyph, _modeGlyphFont, b, r, ModeGlyphFormat);
         g.TextRenderingHint = savedHint;
     }
@@ -1884,6 +1924,27 @@ internal sealed class NowPlayingBar : Panel
     /// off-centre inside the hover disc.</summary>
     private static void SkipGlyph(Graphics g, Rectangle r, Color c, float s, float bw, float gap, bool next)
     {
+        if (Theme.Classic)
+        {
+            // the CD Player's |<< and >>| : a two-pixel bar and two 5 x 9 triangles, placed pixel by pixel
+            var sm = g.SmoothingMode; g.SmoothingMode = SmoothingMode.None;
+            using var pb = new SolidBrush(c);
+            int px0 = r.X + (r.Width - 13) / 2, py0 = r.Y + (r.Height - 9) / 2;
+            if (!next)
+            {
+                g.FillRectangle(pb, px0, py0, 2, 9);
+                for (int t = 0; t < 2; t++)
+                    for (int i = 0; i < 5; i++) g.FillRectangle(pb, px0 + 3 + t * 5 + i, py0 + 4 - i, 1, 2 * i + 1);
+            }
+            else
+            {
+                for (int t = 0; t < 2; t++)
+                    for (int i = 0; i < 5; i++) g.FillRectangle(pb, px0 + t * 5 + i, py0 + i, 1, 9 - 2 * i);
+                g.FillRectangle(pb, px0 + 11, py0, 2, 9);
+            }
+            g.SmoothingMode = sm;
+            return;
+        }
         var m = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
         using var b = new SolidBrush(c);
         float w = s + gap + bw, x0 = m.X - w / 2f;
@@ -1946,7 +2007,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (_lyricsOpen) LatchedChip(g, r);   // the words are open: the button reads as pressed
         else if (hover) HoverChip(g, r);
-        var c = _lyricsOpen ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle;
+        var c = Theme.Classic ? Theme.FaceDark : _lyricsOpen ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle;
         int cx = r.Left + r.Width / 2, cy = r.Top + r.Height / 2;
 
         var bubble = new Rectangle(cx - 8, cy - 8, 16, 12);
@@ -1962,7 +2023,7 @@ internal sealed class NowPlayingBar : Panel
             g.DrawLines(pen, new[] { new Point(cx - 4, bubble.Bottom), new Point(cx - 5, cy + 7), new Point(cx, bubble.Bottom) });
         }
 
-        using (var accent = new Pen(hover ? Theme.Accent : Theme.Blend(c, Theme.Accent, 0.6), 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        using (var accent = new Pen(Theme.Classic ? Theme.ClassicNavy : hover ? Theme.Accent : Theme.Blend(c, Theme.Accent, 0.6), 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             g.DrawLine(accent, cx - 5, cy - 4, cx + 3, cy - 4);   // the line being sung
         using (var pen = new Pen(c, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             g.DrawLine(pen, cx - 5, cy - 1, cx + 5, cy - 1);
@@ -1970,8 +2031,9 @@ internal sealed class NowPlayingBar : Panel
 
     private void DrawEqGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) HoverChip(g, r);
-        Color c = _eqOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+        if (Theme.Classic && _eqOn) LatchedChip(g, r);
+        else if (hover) HoverChip(g, r);
+        Color c = Theme.Classic ? Theme.FaceDark : _eqOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var bar = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var dot = new SolidBrush(c);
         float[] xs = { r.X + 7, r.X + 12, r.X + 17 };
@@ -1988,8 +2050,9 @@ internal sealed class NowPlayingBar : Panel
     // spark — accent-tinted when any Pro feature is on. Distinct from the EQ bars and the speaker.
     private void DrawProGlyph(Graphics g, Rectangle r, bool hover)
     {
-        if (hover) HoverChip(g, r);
-        Color c = _proOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+        if (Theme.Classic && _proOn) LatchedChip(g, r);
+        else if (hover) HoverChip(g, r);
+        Color c = Theme.Classic ? Theme.FaceDark : _proOn ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         float tipX = r.X + 15.5f, tipY = r.Y + 8f;     // sparkle star at the wand's tip (upper-right)
         using (var pen = new Pen(c, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             g.DrawLine(pen, r.X + 6.5f, r.Bottom - 6.5f, tipX - 2.2f, tipY + 2.2f);   // shaft: lower-left → just below the tip
@@ -2005,7 +2068,7 @@ internal sealed class NowPlayingBar : Panel
     {
         if (_queueOpen) LatchedChip(g, r);   // the side card is open: pressed
         else if (hover) HoverChip(g, r);
-        Color c = _queueOpen ? Theme.AccentBright : _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
+        Color c = Theme.Classic ? Theme.FaceDark : _queueOpen ? Theme.AccentBright : _queueCount > 0 ? Theme.Accent : hover ? Theme.TextCol : Theme.Subtle;
         using var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float x = r.X + 6, x2 = r.Right - 6;
         g.DrawLine(pen, x, r.Y + 8, x2, r.Y + 8);

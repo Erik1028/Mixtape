@@ -217,7 +217,10 @@ internal sealed class MainForm : Form, IMessageFilter
     private static int Gap => Theme.Classic ? 3 : 14;   // wallpaper gap around + between the floating cards (Classic: a window's panels butt together inside its frame)
     /// <summary>What the Classic title bar takes off the top of the shell (0 in the modern look, which draws
     /// its caption INSIDE the deck / the wallpaper strip instead).</summary>
-    private static int CapTop => Theme.Classic ? Theme.ClassicCaptionH + 3 : 0;
+    private static int CapTop => Theme.Classic ? Theme.ClassicCaptionH + 3 + Theme.ClassicMenuH : 0;
+    private MenuStrip? _menuBar;              // Classic only: File · Edit · View · Play · Help
+    private ClassicStatusBar? _statusBar;     // Classic only: the sunken panels along the bottom
+    private string _statusDevice = "";
     private static int CardRadius => Theme.RadShell; // rounded card corners (0 in the Classic skin)
     private int CaptionH => _deck ? NowPlayingBar.TopH : 36;   // the custom title-bar strip height (the whole deck, in deck mode)
     private bool _deck;                 // LAB: the player is the window's top deck (AppSettings.BarOnTop / MIX_DECK)
@@ -485,6 +488,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // The window buttons and the gear sit in the caption strip, not inside a card. Settings is
         // app-level, not navigation-level — it never belonged in the nav rail.
         _root!.Controls.Add(_btnMini); _root.Controls.Add(_btnMin); _root.Controls.Add(_btnMax); _root.Controls.Add(_btnClose);
+        if (Theme.Classic) BuildClassicChrome();
         _gearBtn.Click += (_, _) => OpenSettings();
         Deactivate += (_, _) => Tip.Disarm();           // alt-tab with the pointer parked on a button must not leave a chip on top of the other app
         Tip.Attach(_gearBtn, () => Loc.T("Settings"));   // the app's own tooltip chip, not the system's yellow box
@@ -526,7 +530,9 @@ internal sealed class MainForm : Form, IMessageFilter
 
         // Both cards start below the caption strip (or the deck), on one baseline.
         int sideW = Theme.SidebarW;
-        int top = CapTop + (_deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH + 8), bottom = h - Gap;
+        int top = CapTop + (_deck ? NowPlayingBar.TopH : Gap + Theme.TitleStripH + 8), bottom = h - Gap - (_statusBar is not null ? ClassicStatusBar.H + 2 : 0);
+        _menuBar?.SetBounds(3, 3 + Theme.ClassicCaptionH, Math.Max(1, w - 6), Theme.ClassicMenuH);
+        _statusBar?.SetBounds(3, h - 3 - ClassicStatusBar.H, Math.Max(1, w - 6), ClassicStatusBar.H);
 
         // The deck goes first: the caption buttons ask it which axis to sit on, and its answer follows its width.
         if (_deck)
@@ -2253,6 +2259,13 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private void BuildSidebar()
     {
+        if (_statusBar is not null)   // the status bar's device panel follows the rail (it runs on every device change)
+        {
+            _statusDevice = _device is { } sd
+                ? (sd.Profile.ModelName ?? sd.Profile.ModelNumber ?? "iPod") + (FreeSpaceLine(sd) is { } fs ? "  ·  " + fs : "")
+                : Loc.T("Not connected");
+            _statusBar.Invalidate();
+        }
         _sidebar.Begin();
         _sidebar.AddItem(SidebarRowKind.Home, Loc.T("Home"), "home", _viewKind == SidebarRowKind.Home);   // the front door, above everything
         // The device is the first ROW, not a section: its picture, its name, its free space — the same 40 px
@@ -4371,7 +4384,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int y = 18;
         void SectionLabel(string t)
         {
-            _deviceScrollPanel.Controls.Add(new Label { Text = t, Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
+            _deviceScrollPanel.Controls.Add(new Label { Text = Theme.ClassicCase(t), Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
             y += 24;
         }
         void Add(Control c) { c.Left = x; c.Top = y; _deviceScrollPanel.Controls.Add(c); y += c.Height + 18; }
@@ -6802,10 +6815,121 @@ internal sealed class MainForm : Form, IMessageFilter
 
     // ---- customization ----
 
-    private void OpenSettings()
+    private void OpenSettings() => OpenSettings(0);
+
+    private void OpenSettings(int category)
     {
-        using var f = new SettingsForm(_settings, _device, ApplyAllSettings, ReloadCurrentDevice);
+        using var f = new SettingsForm(_settings, _device, ApplyAllSettings, ReloadCurrentDevice, category);
         f.ShowDialog(this);
+    }
+
+    /// <summary>
+    /// The Windows 95 look's menu bar and status bar: the two strips every program of 1995 had and the modern
+    /// look does without. Every menu item calls a command the app already has - the handler its button uses -
+    /// and each menu refreshes its labels, greyed items and ticks as it opens, so it always matches the view.
+    /// </summary>
+    private void BuildClassicChrome()
+    {
+        var bar = _menuBar = new MenuStrip
+        {
+            Renderer = MenuStyle.Renderer, BackColor = Theme.Face, ForeColor = Theme.TextCol, Font = MenuStyle.Font(),
+            Dock = DockStyle.None, AutoSize = false, GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(1, 0, 0, 0), CanOverflow = false,
+        };
+        ToolStripMenuItem Menu(string text)
+        {
+            var m = new ToolStripMenuItem(text) { Padding = new Padding(5, 0, 5, 0) };
+            if (m.DropDown is ToolStripDropDownMenu dd) MenuStyle.Apply(dd);
+            bar.Items.Add(m);
+            return m;
+        }
+        ToolStripMenuItem Item(ToolStripMenuItem parent, string text, Action run, string? keys = null)
+        {
+            var it = new ToolStripMenuItem(text) { ShortcutKeyDisplayString = keys };
+            it.Click += (_, _) => run();
+            MenuStyle.StyleItem(it);
+            parent.DropDownItems.Add(it);
+            return it;
+        }
+        void Sep(ToolStripMenuItem parent) => parent.DropDownItems.Add(new ToolStripSeparator());
+        Rectangle Anchor(ToolStripMenuItem m) => bar.RectangleToScreen(m.Bounds);
+
+        var file = Menu(Loc.T("&File"));
+        var add = Item(file, Loc.T("Add music") + "…", OnAddClicked);
+        Item(file, Loc.T("Open folder") + "…", OpenFolder);
+        Item(file, Loc.T("Refresh"), RefreshDevices);
+        Sep(file);
+        Item(file, Loc.T("Settings") + "…", OpenSettings);
+        Sep(file);
+        Item(file, Loc.T("Exit"), Close);
+        file.DropDownOpening += (_, _) =>
+        {
+            add.Text = _header.AddButton.Text + "…";
+            add.Enabled = _header.AddButton.Visible && _header.AddButton.BlockedReason is null;
+        };
+
+        var edit = Menu(Loc.T("&Edit"));
+        var selAll = Item(edit, Loc.T("Select all"), () => { if (_gridHost.Visible) { _tracks.Focus(); _tracks.SelectAll(); } }, "Ctrl+A");
+        var del = Item(edit, Loc.T("Delete"), OnDeleteClicked);
+        Sep(edit);
+        var tidy = Item(edit, Loc.T("Tidy tags…"), OpenTagTidy);
+        var doctor = Item(edit, Loc.T("Library Doctor") + "…", OpenLibraryDoctor);
+        edit.DropDownOpening += (_, _) =>
+        {
+            selAll.Enabled = _gridHost.Visible && _tracks.Rows.Count > 0;
+            del.Text = _header.DeleteButton.Text;
+            del.Enabled = _header.DeleteButton.Visible && _header.DeleteButton.BlockedReason is null;
+            tidy.Enabled = doctor.Enabled = _device is not null;
+        };
+
+        var view = Menu(Loc.T("&View"));
+        Item(view, Loc.T("Home"), () => OnSidebarActivated(SidebarRowKind.Home, "home"));
+        Item(view, Loc.T("Listening"), () => OnSidebarActivated(SidebarRowKind.Stats, "stats"));
+        Sep(view);
+        Item(view, Loc.T("Cover Flow"), OpenCoverFlow);
+        var lyr = Item(view, Loc.T("Lyrics"), OpenLyricsStage);
+        Item(view, Loc.T("Up Next"), () => OpenUpNext(Anchor(view)));
+        Sep(view);
+        Item(view, Loc.T("Mini player"), OpenMiniPlayer);
+        view.DropDownOpening += (_, _) => lyr.Enabled = _playingTrack is not null;
+
+        var play = Menu(Loc.T("&Play"));
+        var pp = Item(play, Loc.T("Play"), () => _nowPlaying.TogglePlayback());
+        var prev = Item(play, Loc.T("Previous"), () => PlayRelative(-1));
+        var next = Item(play, Loc.T("Next"), () => PlayRelative(+1));
+        Sep(play);
+        var shuf = Item(play, Loc.T("Shuffle"), () => _nowPlaying.ToggleShuffle());
+        var rep = Item(play, Loc.T("Repeat"), () => _nowPlaying.CycleRepeat());
+        Sep(play);
+        Item(play, Loc.T("Equalizer") + "…", () => OpenEqualizer(Anchor(play)));
+        Item(play, Loc.T("Pro Features") + "…", () => OpenProFeatures(Anchor(play)));
+        MenuStyle.Checkable(play.DropDown);
+        play.DropDownOpening += (_, _) =>
+        {
+            bool has = _playingTrack is not null;
+            pp.Text = _nowPlaying.Playing ? Loc.T("Pause") : Loc.T("Play");
+            pp.Enabled = prev.Enabled = next.Enabled = has;
+            shuf.Checked = _nowPlaying.Shuffle;
+            rep.Checked = _nowPlaying.Repeat != NowPlayingBar.RepeatMode.Off;
+            rep.Text = _nowPlaying.Repeat == NowPlayingBar.RepeatMode.One ? Loc.T("Repeat one") : Loc.T("Repeat");
+        };
+
+        var help = Menu(Loc.T("&Help"));
+        Item(help, Loc.T("About Mixtape"), () => OpenSettings(7));
+
+        _root!.Controls.Add(bar);
+        MainMenuStrip = bar;
+
+        _statusBar = new ClassicStatusBar(StatusText);
+        _root.Controls.Add(_statusBar);
+        _header.MetaChanged += () => _statusBar?.Invalidate();
+        _nowPlaying.Changed += () => _statusBar?.Invalidate();
+    }
+
+    /// <summary>The status bar's three panels: what the header's meta line says, the iPod, the player.</summary>
+    private (string, string, string) StatusText()
+    {
+        string play = _playingTrack is null ? Loc.T("Stopped") : _nowPlaying.Playing ? Loc.T("Playing") : Loc.T("Paused");
+        return (_header.MetaLine, _statusDevice, play);
     }
 
     private void OpenEqualizer(Rectangle anchor)
@@ -7124,6 +7248,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (WindowState == FormWindowState.Maximized)
             return p.Y < CaptionH ? HTCAPTION : HTCLIENT; // a maximized window can't edge-resize
         bool l = p.X < b, r = p.X >= w - b, t = p.Y < b, bot = p.Y >= h - b;
+        if (_statusBar is not null && p.X >= w - 19 && p.Y >= h - 19) return HTBOTTOMRIGHT;   // the Classic status bar's size grip
         if (t && l) return HTTOPLEFT;
         if (t && r) return HTTOPRIGHT;
         if (bot && l) return HTBOTTOMLEFT;

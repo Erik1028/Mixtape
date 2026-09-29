@@ -152,8 +152,9 @@ internal sealed class PhotoGridView : Panel
     {
         int max = MaxScroll();
         if (max <= 0 || ContentHeight <= 0) return (0, 0, 0);
-        int barH = Math.Max(30, (int)(Height * ((float)Height / ContentHeight)));
-        int barY = (int)((Height - barH) * (_scroll / (float)max));
+        int track = Theme.PageTrackLen(Height);   // Classic: between the arrow buttons
+        int barH = Math.Max(30, (int)(track * ((float)Height / ContentHeight)));
+        int barY = Theme.PageTrackTop + (int)((track - barH) * (_scroll / (float)max));
         return (max, barH, barY);
     }
 
@@ -170,7 +171,7 @@ internal sealed class PhotoGridView : Panel
             var (max, barH, _) = Bar();
             if (max > 0)
             {
-                double perPx = max / (double)Math.Max(1, Height - barH);
+                double perPx = max / (double)Math.Max(1, Theme.PageTrackLen(Height) - barH);
                 SetScroll((int)Math.Round(_barDragStartScroll + (e.Y - _barDragStartY) * perPx));
             }
             return;
@@ -188,6 +189,7 @@ internal sealed class PhotoGridView : Panel
         var (max, barH, barY) = Bar();
         if (e.Button == MouseButtons.Left && max > 0 && e.X >= Width - BarZone)
         {
+            if (Theme.PageArrowAt(e.Y, Height) is int arrow && arrow != 0) { SetScroll(_scroll + arrow * 48); return; }
             if (e.Y >= barY && e.Y <= barY + barH) { _barDragging = true; _barDragStartY = e.Y; _barDragStartScroll = _scroll; }
             else SetScroll(_scroll + (e.Y < barY ? -1 : 1) * (int)(Height * 0.9));
             return;
@@ -254,7 +256,7 @@ internal sealed class PhotoGridView : Panel
         {
             float frac = (float)Height / ContentHeight;
             int barH = Math.Max(30, (int)(Height * frac));
-            int barY = (int)((Height - barH) * (_scroll / (float)max));
+            int barY = Theme.PageTrackTop + (int)((Theme.PageTrackLen(Height) - barH) * (_scroll / (float)max));
             bool active = _barDragging || _barHover;
             if (Theme.Classic) Theme.PaintClassicPageScroll(g, Width, Height, barY, barH);
             else
