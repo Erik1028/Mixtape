@@ -117,8 +117,9 @@ internal sealed class SelectionBar : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        if (Theme.Classic) { PaintClassic(g); return; }
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
         var pill = new RectangleF(0.5f, 0.5f, Width - 1, H - 1);
         // a soft lift under the bar (the list is dark; three rings of low alpha read as a shadow, not a halo)
         for (int i = 3; i >= 1; i--)
@@ -139,6 +140,23 @@ internal sealed class SelectionBar : Control
         float cx = cr.X + cr.Width / 2f, cy = cr.Y + cr.Height / 2f, k = 3.6f;
         g.DrawLine(pen, cx - k, cy - k, cx + k, cy + k);
         g.DrawLine(pen, cx + k, cy - k, cx - k, cy + k);
+    }
+
+    /// <summary>The 95 version: a raised toolbar panel, square, with an etched divider and a plain close cross
+    /// that pushes in under the pointer like a toolbar button - no floating pill, no shadow.</summary>
+    private void PaintClassic(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        var r = new Rectangle(0, 0, Width, H);
+        Theme.FaceBevel(g, r, raised: true);
+        TextRenderer.DrawText(g, _label, _fLabel, new Rectangle(Pad, 0, _labelW + 4, H), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        using (var sh = new Pen(Theme.FaceShadow)) g.DrawLine(sh, _divX, H / 2 - 9, _divX, H / 2 + 8);
+        using (var hi = new Pen(Theme.FaceHi)) g.DrawLine(hi, _divX + 1, H / 2 - 9, _divX + 1, H / 2 + 8);
+        var cr = CloseRect;
+        if (_closeHover) Theme.Bevel(g, cr, raised: true, thin: true);
+        using var br = new SolidBrush(Theme.FaceDark);
+        int cx = cr.X + cr.Width / 2, cy = cr.Y + cr.Height / 2;
+        for (int i = 0; i < 6; i++) { g.FillRectangle(br, cx - 3 + i, cy - 3 + i, 2, 1); g.FillRectangle(br, cx + 2 - i, cy - 3 + i, 2, 1); }
     }
 
     protected override void Dispose(bool disposing)

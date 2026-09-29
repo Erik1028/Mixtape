@@ -261,10 +261,14 @@ internal sealed class HomeView : Panel
         if (max > 0)
         {
             bool active = _barDragging || _barHover;
-            using var b = new SolidBrush(Color.FromArgb(active ? 165 : 90, 255, 255, 255));
-            float bw = active ? 6 : 4;
-            using var p = Theme.RoundedRect(new RectangleF(Width - 5 - bw, barY + 2, bw, barH - 4), bw / 2f);
-            g.FillPath(b, p);
+            if (Theme.Classic) Theme.PaintClassicPageScroll(g, Width, Height, barY, barH);
+            else
+            {
+                using var b = new SolidBrush(Color.FromArgb(active ? 165 : 90, 255, 255, 255));
+                float bw = active ? 6 : 4;
+                using var p = Theme.RoundedRect(new RectangleF(Width - 5 - bw, barY + 2, bw, barH - 4), bw / 2f);
+                g.FillPath(b, p);
+            }
         }
     }
 
@@ -335,10 +339,12 @@ internal sealed class HomeView : Panel
         _hit.Add((card, r));
         bool hover = ReferenceEquals(r, _hover);
         var cardF = new RectangleF(card.X + 0.5f, card.Y + 0.5f, card.Width - 1, card.Height - 1);
-        var cardCol = Theme.Blend(Theme.Bg, Color.White, hover ? 0.08 : 0.05);
+        var cardCol = Theme.Classic ? Theme.Face : Theme.Blend(Theme.Bg, Color.White, hover ? 0.08 : 0.05);   // Classic: a group box on the face, not a lighter slab
         using (var fill = new SolidBrush(cardCol))
         using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.FillPath(fill, cp);
         _resumeBtn.Surface = cardCol;   // the button clears its corners to the CARD, not to the page behind it
+        if (Theme.Classic) Theme.EtchedFrame(g, card);
+        else
         using (var line = new Pen(Color.FromArgb(28, 255, 255, 255)))
         using (var cp = Theme.RoundedRect(cardF, Theme.RadShell)) g.DrawPath(line, cp);
         var art = new Rectangle(card.X + 8, card.Y + 8, CardH - 16, CardH - 16);

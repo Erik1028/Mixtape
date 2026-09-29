@@ -205,7 +205,7 @@ internal sealed class MiniPlayerForm : Form
     {
         base.OnHandleCreated(e);
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
+        try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
         try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { }
     }
 
@@ -416,6 +416,7 @@ internal sealed class MiniPlayerForm : Form
         EnsureWall();
         if (_wall is not null) Theme.BlitExact(g, _wall, new Rectangle(0, 0, _wall.Width, _wall.Height));
         else Theme.PaintWallpaper(g, ClientRectangle);
+        if (Theme.Classic) Theme.Bevel(g, ClientRectangle, raised: true);   // the mini player is a small 95 window
 
         var l = Layout();
         bool idle = _track is null;
@@ -447,6 +448,12 @@ internal sealed class MiniPlayerForm : Form
     // ×: back to the full window. The main window's close glyph, on a red chip while hovered (Windows' own cue).
     private static void DrawClose(Graphics g, Rectangle r, bool hover)
     {
+        if (Theme.Classic)
+        {
+            var cb = new Rectangle(r.X + (r.Width - Theme.ClassicBtnW) / 2, r.Y + (r.Height - Theme.ClassicBtnH) / 2, Theme.ClassicBtnW, Theme.ClassicBtnH);
+            Theme.PaintClassicClose(g, cb, down: false);
+            return;
+        }
         if (hover)
         {
             using var hb = new SolidBrush(Color.FromArgb(232, 17, 35));

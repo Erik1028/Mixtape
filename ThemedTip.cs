@@ -18,7 +18,7 @@ internal static class Tip
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            BackColor = Theme.Blend(Theme.PanelBg, Color.White, 0.08);
+            BackColor = Theme.Classic ? Theme.ClassicInfo : Theme.Blend(Theme.PanelBg, Color.White, 0.08);   // Classic: the pale yellow of a 95 tooltip
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
         }
 
@@ -33,17 +33,17 @@ internal static class Tip
         {
             base.OnHandleCreated(e);
             try { int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)); } catch { }
-            try { int round = 3; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }   // DWMWCP_ROUNDSMALL
-            try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
+            try { int round = Theme.DwmCorner(3); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }   // DWMWCP_ROUNDSMALL
+            try { int bc = Theme.DwmBorder(Theme.Border); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
         }
 
         /// <summary>Re-read the palette. The window is created once and kept, so a theme change would
         /// otherwise leave the tooltip painted in the old colours until the app restarts.</summary>
         public void Restyle()
         {
-            BackColor = Theme.Blend(Theme.PanelBg, Color.White, 0.08);
+            BackColor = Theme.Classic ? Theme.ClassicInfo : Theme.Blend(Theme.PanelBg, Color.White, 0.08);   // Classic: the pale yellow of a 95 tooltip
             if (IsHandleCreated)
-                try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
+                try { int bc = Theme.DwmBorder(Theme.Border); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
             Invalidate();
         }
 
@@ -57,6 +57,7 @@ internal static class Tip
         {
             var g = e.Graphics;
             g.Clear(BackColor);
+            if (Theme.Classic) using (var k = new Pen(Theme.FaceDark)) g.DrawRectangle(k, 0, 0, Width - 1, Height - 1);   // and its black hairline
             TextRenderer.DrawText(g, Caption, _f, ClientRectangle, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
     }

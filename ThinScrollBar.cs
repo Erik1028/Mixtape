@@ -20,9 +20,12 @@ internal sealed class ThinScrollBar : Control
     private int _dragStartY;
     private int _dragStartFirst;
 
+    /// <summary>Classic: the arrow buttons at each end, and the real 16 px width of a 1995 scrollbar.</summary>
+    private static int Arrow => Theme.Classic ? 16 : 0;
+
     public ThinScrollBar()
     {
-        Width = 12;
+        Width = Theme.Classic ? 16 : 12;
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         BackColor = Theme.Bg;
@@ -104,17 +107,52 @@ internal sealed class ThinScrollBar : Control
 
     private (int Y, int H) Thumb()
     {
-        int track = Math.Max(1, Height - 8);
-        int h = Total <= Visible ? track : Math.Max(28, (int)(track * (double)Visible / Total));
+        int pad = Theme.Classic ? Arrow : 4;   // Classic: the thumb runs between the two arrow buttons
+        int track = Math.Max(1, Height - 2 * pad);
+        int h = Total <= Visible ? track : Math.Max(Theme.Classic ? 10 : 28, (int)(track * (double)Visible / Total));
         int max = Math.Max(0, Total - Visible);
-        int y = 4 + (max == 0 ? 0 : (int)((track - h) * (double)First / max));
+        int y = pad + (max == 0 ? 0 : (int)((track - h) * (double)First / max));
         return (y, h);
     }
+
+    /// <summary>
+    /// The 1995 scrollbar: an arrow button at each end, a trough of 50 % white dither between them, and a
+    /// raised thumb. Held arrows go in. It keeps the modern bar's one liberty - it still disappears when
+    /// there is nothing to scroll - because a disabled bar down the side of every short list is not worth
+    /// the authenticity.
+    /// </summary>
+    private void PaintClassic(Graphics g)
+    {
+        g.Clear(Theme.Face);
+        if (Total <= Visible) return;
+        g.SmoothingMode = SmoothingMode.None;
+        int w = Width;
+        using (var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face))
+            g.FillRectangle(dither, 0, Arrow, w, Math.Max(0, Height - 2 * Arrow));
+        var up = new Rectangle(0, 0, w, Arrow);
+        var dn = new Rectangle(0, Height - Arrow, w, Arrow);
+        Theme.FaceBevel(g, up, raised: _held != -1);
+        Theme.FaceBevel(g, dn, raised: _held != 1);
+        using (var br = new SolidBrush(Theme.FaceDark))
+        {
+            int cx = w / 2 - 1, o = _held == -1 ? 1 : 0, o2 = _held == 1 ? 1 : 0;
+            for (int i = 0; i < 4; i++) g.FillRectangle(br, cx - i + o, up.Y + 6 + i + o, 1 + 2 * i, 1);          // up: a 7-pixel triangle
+            for (int i = 0; i < 4; i++) g.FillRectangle(br, cx - 3 + i + o2, dn.Y + 6 + i + o2, 7 - 2 * i, 1);    // down
+        }
+        var (y, h) = Thumb();
+        Theme.FaceBevel(g, new Rectangle(0, y, w, h), raised: true);
+    }
+
+    private int _held;   // Classic: -1 = the up arrow is held, +1 = the down arrow, 0 = neither
+
+    /// <summary>One click on an arrow: a row of the list, or ~40 px of a scrolled page.</summary>
+    private int LineStep => _grid is not null && !PanelMode && _cTotal is null ? 1 : 40;
 
     protected override void OnPaint(PaintEventArgs e)
     {
         // Paint the track live from the current theme (not the BackColor baked at field-init,
         // which would still be the default variant if a non-default theme was saved). Glass-aware in a glass dialog.
+        if (Theme.Classic) { PaintClassic(e.Graphics); return; }
         if (!Glass.PaintBackground(e.Graphics, this, Glass.SurfaceTint)) e.Graphics.Clear(SidebarTrack ? Theme.SidebarBg : Theme.Bg);
         if (Total <= Visible) return; // nothing to scroll → no thumb
         var (y, h) = Thumb();
@@ -130,6 +168,14 @@ internal sealed class ThinScrollBar : Control
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
+        if (Theme.Classic && Total > Visible && (e.Y < Arrow || e.Y >= Height - Arrow))
+        {
+            _held = e.Y < Arrow ? -1 : 1;
+            SetFirst(First + _held * LineStep);
+            Invalidate();
+            base.OnMouseDown(e);
+            return;
+        }
         var (y, h) = Thumb();
         if (e.Y >= y && e.Y <= y + h) { _dragging = true; _dragStartY = e.Y; _dragStartFirst = First; }
         else SetFirst(First + (e.Y < y ? -Visible : Visible)); // page up/down
@@ -142,7 +188,7 @@ internal sealed class ThinScrollBar : Control
         if (_dragging && Total > Visible)
         {
             var (_, h) = Thumb();
-            int track = Math.Max(1, Height - 8);
+            int track = Math.Max(1, Height - 2 * (Theme.Classic ? Arrow : 4));
             int max = Math.Max(0, Total - Visible);
             double perPx = max / (double)Math.Max(1, track - h);
             SetFirst((int)Math.Round(_dragStartFirst + (e.Y - _dragStartY) * perPx));
@@ -150,6 +196,6 @@ internal sealed class ThinScrollBar : Control
         base.OnMouseMove(e);
     }
 
-    protected override void OnMouseUp(MouseEventArgs e) { _dragging = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { _dragging = false; _held = 0; Invalidate(); base.OnMouseUp(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
 }

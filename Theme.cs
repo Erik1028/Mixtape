@@ -41,6 +41,37 @@ internal static class Theme
     /// so they never go stale, yet cost nothing on the steady-state paint loop.</summary>
     public static int Revision { get; private set; }
 
+    // ---- the Classic (Windows 95) skin ------------------------------------------------------------
+    // Settings > Appearance > Look. This is a SKIN, not a seventh background palette: it swaps the whole
+    // token layer at once - surfaces, text, accent, corner radii, typeface - so the 214 RoundedRect call
+    // sites and the 300-odd colour reads across the app need no branch of their own. Only the places that
+    // draw a SHAPE the period did differently (a raised button, a sunken field, a scrollbar with arrow
+    // buttons, a navy caption) ask Classic and take another path.
+    public static bool Classic { get; private set; }
+
+    // The Windows 95 system colours under their own names, so the paint code reads like the era's docs.
+    public static readonly Color Face = Color.FromArgb(192, 192, 192);        // COLOR_3DFACE / BTNFACE
+    public static readonly Color FaceLight = Color.FromArgb(223, 223, 223);   // COLOR_3DLIGHT
+    public static readonly Color FaceHi = Color.White;                        // COLOR_3DHIGHLIGHT
+    public static readonly Color FaceShadow = Color.FromArgb(128, 128, 128);  // COLOR_3DSHADOW
+    public static readonly Color FaceDark = Color.Black;                      // COLOR_3DDKSHADOW
+    public static readonly Color ClassicNavy = Color.FromArgb(0, 0, 128);     // COLOR_HIGHLIGHT + active caption
+    public static readonly Color ClassicInfo = Color.FromArgb(255, 255, 225); // COLOR_INFOBK (tooltip yellow)
+    public static readonly Color ClassicDesk = Color.FromArgb(0, 128, 128);   // COLOR_BACKGROUND (the teal desktop)
+
+    private static string _variant = "Graphite";
+    private static string _accentSpec = "Teal";
+
+    /// <summary>Turn the Windows 95 look on or off. Re-applies the stored background + accent, so the modern
+    /// palette comes back exactly as it was.</summary>
+    public static void SetSkin(bool classic)
+    {
+        Classic = classic;
+        SetRadii(classic);
+        SetThemeVariant(_variant);
+        SetAccent(_accentSpec);
+    }
+
     public static void SetAccent(Color c)
     {
         Accent = c;
@@ -48,26 +79,41 @@ internal static class Theme
         AccentDim = Color.FromArgb((int)(c.R * 0.55), (int)(c.G * 0.55), (int)(c.B * 0.55));
         // Pick legible pill text per accent luminance: dark text on bright accents, white on dark ones.
         OnAccent = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) > 130 ? Color.FromArgb(12, 16, 18) : Color.White;
+        if (Classic)
+        {
+            // One accent only: selection navy. A Win95 program had no accent colour to choose.
+            Accent = ClassicNavy;
+            AccentBright = Color.FromArgb(16, 132, 208);   // the hot blue of a selected caption / a progress fill
+            AccentDim = Color.FromArgb(0, 0, 80);
+            OnAccent = Color.White;
+        }
         Revision++;
     }
 
     public static void SetAccent(string nameOrHex)
     {
+        _accentSpec = nameOrHex;
         if (nameOrHex.StartsWith('#') && AppSettings.TryParseHex(nameOrHex, out var custom)) { SetAccent(custom); return; }
         foreach (var p in AccentPresets) if (p.Name == nameOrHex) { SetAccent(p.Color); return; }
         SetAccent(AccentPresets[0].Color);
     }
-    public static readonly Color TextCol = Color.FromArgb(242, 242, 243);
-    public static readonly Color Subtle = Color.FromArgb(168, 172, 176);
-    public static readonly Color Faint = Color.FromArgb(138, 143, 152);
+    public static Color TextCol { get; private set; } = Color.FromArgb(242, 242, 243);
+    public static Color Subtle { get; private set; } = Color.FromArgb(168, 172, 176);
+    public static Color Faint { get; private set; } = Color.FromArgb(138, 143, 152);
     public static Color Border { get; private set; } = Color.FromArgb(44, 47, 49);
-    public static readonly Color ErrorCol = Color.FromArgb(255, 120, 110);
+    public static Color ErrorCol { get; private set; } = Color.FromArgb(255, 120, 110);
 
     /// <summary>The selectable background palettes (the "Background" customization). Text stays light on all.</summary>
     public static readonly string[] ThemeVariants = { "Graphite", "Midnight", "Carbon", "Mocha", "Forest", "Plum" };
 
     public static void SetThemeVariant(string name)
     {
+        _variant = name;
+        if (Classic) { ApplyClassicSurfaces(); return; }
+        TextCol = Color.FromArgb(242, 242, 243);
+        Subtle = Color.FromArgb(168, 172, 176);
+        Faint = Color.FromArgb(138, 143, 152);
+        ErrorCol = Color.FromArgb(255, 120, 110);
         (Bg, SidebarBg, PanelBg, RowHover, HairLine, Border) = name switch
         {
             "Midnight" => (Color.FromArgb(19, 24, 43), Color.FromArgb(13, 16, 32), Color.FromArgb(32, 40, 64), Color.FromArgb(28, 35, 58), Color.FromArgb(30, 37, 60), Color.FromArgb(38, 47, 76)),
@@ -80,7 +126,103 @@ internal static class Theme
         RowBg = Blend(PanelBg, Color.White, 0.05); // a touch lighter than PanelBg so secondary buttons read as raised
         Revision++;   // background colours changed → theme-colour-baked caches (e.g. the bar gradient) must rebuild
     }
+    /// <summary>The 95 surfaces: a grey window face for every piece of chrome, a WHITE inset surface for the
+    /// things that were list views (the song list, the browse pages), black text on both.</summary>
+    private static void ApplyClassicSurfaces()
+    {
+        Bg = Face;                   // pages and dialogs = the window face; only the list views are white (ListBg)
+        SidebarBg = Face;            // the rail = window face
+        PanelBg = Face;              // cards, bars, dialogs = window face
+        RowBg = Color.White;
+        RowHover = Color.FromArgb(230, 230, 230);   // 95 lists had no hover at all; the faintest grey keeps the app's row affordances
+        HairLine = Color.FromArgb(206, 206, 206);   // the column rules of a details view
+        Border = FaceShadow;
+        TextCol = Color.Black;                      // COLOR_WINDOWTEXT / BTNTEXT
+        Subtle = Color.FromArgb(56, 56, 56);
+        Faint = Color.FromArgb(104, 104, 104);
+        ErrorCol = Color.FromArgb(128, 0, 0);       // maroon, the era's red
+        Revision++;
+    }
+
     public static Color OnAccent { get; private set; } = Color.FromArgb(8, 14, 13);
+
+    /// <summary>The surface of a LIST - the song grid - which 1995 drew white inside a grey window
+    /// (COLOR_WINDOW). In the modern look it is simply the content surface.</summary>
+    public static Color ListBg => Classic ? Color.White : Bg;
+
+    /// <summary>DWMWA_WINDOW_CORNER_PREFERENCE for a window that asks for <paramref name="modern"/>: Classic
+    /// asks Windows 11 NOT to round it (DWMWCP_DONOTROUND), since a 95 window was a rectangle.</summary>
+    public static int DwmCorner(int modern) => Classic ? 1 : modern;
+
+    /// <summary>The DWM border line for a borderless window: none in Classic, where the window draws its own
+    /// raised frame and a grey line round it would sit on top of the frame's white outer edge.</summary>
+    public static int DwmBorder(Color modern) => Classic ? unchecked((int)0xFFFFFFFE) : modern.R | (modern.G << 8) | (modern.B << 16);
+
+    /// <summary>A 95 window's frame + navy caption across the top of <paramref name="client"/>, with the title in
+    /// white. Returns the caption's rectangle so the caller can put its buttons in it.</summary>
+    public static Rectangle PaintClassicWindow(Graphics g, Rectangle client, string title, Font font)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var face = new SolidBrush(Face)) g.FillRectangle(face, client);
+        Bevel(g, client, raised: true);
+        var cap = new Rectangle(client.X + 3, client.Y + 3, Math.Max(0, client.Width - 6), ClassicCaptionH);
+        using (var nb = new SolidBrush(ClassicNavy)) g.FillRectangle(nb, cap);
+        TextRenderer.DrawText(g, title, font, new Rectangle(cap.X + 4, cap.Y, Math.Max(0, cap.Width - 26), cap.Height), Color.White,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        g.SmoothingMode = sm;
+        return cap;
+    }
+
+    /// <summary>The scrollbar of an owner-drawn page (Home, Browse, Photos, Listening) in Classic: the 95 dither
+    /// trough down the right edge and a raised thumb, drawn at the page's OWN thumb geometry - so each page's
+    /// 16 px grab zone and drag maths work exactly as before.</summary>
+    public static void PaintClassicPageScroll(Graphics g, int width, int height, int thumbY, int thumbH)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var dither = new HatchBrush(HatchStyle.Percent50, FaceHi, Face)) g.FillRectangle(dither, width - 16, 0, 16, height);
+        FaceBevel(g, new Rectangle(width - 16, Math.Max(0, thumbY), 16, Math.Max(10, thumbH)), raised: true);
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>A 95 group box's etched frame: a shadow line with a highlight line one pixel inside-right of it.</summary>
+    public static void EtchedFrame(Graphics g, Rectangle r)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using var hi = new Pen(FaceHi);
+        using var sh = new Pen(FaceShadow);
+        g.DrawRectangle(hi, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
+        g.DrawRectangle(sh, r.X, r.Y, r.Width - 2, r.Height - 2);
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>The 95 progress bar: a thin sunken trough and navy CHUNKS with a gap between each - the
+    /// segmented fill everyone who copied a file in 1995 watched crawl across.</summary>
+    public static void ClassicProgress(Graphics g, Rectangle track, int fillPx, Color? chunk = null)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var fb = new SolidBrush(Face)) g.FillRectangle(fb, track);
+        Bevel(g, track, raised: false, thin: true);
+        int inner = track.Height - 4, cw = Math.Max(4, inner * 2 / 3), x = track.X + 2, end = track.X + 2 + Math.Min(fillPx, track.Width - 4);
+        using var cb = new SolidBrush(chunk ?? ClassicNavy);
+        while (x < end) { g.FillRectangle(cb, x, track.Y + 2, Math.Min(cw, end - x), inner); x += cw + 2; }
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>The close button of a 95 caption, drawn in place (for chrome that is painted, not a control).</summary>
+    public static void PaintClassicClose(Graphics g, Rectangle r, bool down)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        FaceBevel(g, r, raised: !down);
+        int o = down ? 1 : 0, cx = r.X + r.Width / 2 + o, cy = r.Y + r.Height / 2 + o;
+        using var br = new SolidBrush(FaceDark);
+        for (int i = 0; i < 6; i++) { g.FillRectangle(br, cx - 3 + i, cy - 3 + i, 2, 1); g.FillRectangle(br, cx + 2 - i, cy - 3 + i, 2, 1); }
+        g.SmoothingMode = sm;
+    }
 
     /// <summary>A legible foreground (near-black or near-white) for content drawn ON an arbitrary fill colour —
     /// so e.g. a white pictogram doesn't vanish on a light accent tile.</summary>
@@ -102,19 +244,77 @@ internal static class Theme
     private static readonly string DisplayFamily = FirstInstalled("Segoe UI Variable Display") ?? "Segoe UI";
     private static readonly string? DisplaySemibold = FirstInstalled("Segoe UI Variable Display Semib");
 
+    // 1995's UI typeface: MS Sans Serif 8pt. It is a BITMAP face (.FON), which GDI+ does not enumerate, so
+    // it is named directly rather than looked up - the GDI font mapper resolves it, and where it is missing
+    // falls through to its TrueType twin, Microsoft Sans Serif. A bitmap face draws unsmoothed through
+    // TextRenderer, which is exactly the look; no hinting setting can fake it.
+    private const string ClassicFamily = "MS Sans Serif";
+    /// <summary>1995 had ONE text size. The app's five-step ramp collapses onto the era's two: 8pt for
+    /// everything, and 12pt for the single big heading a page is allowed.</summary>
+    private static float ClassicSize(float size) => size >= 13f ? 12f : 8f;
+
     public static Font UiFont(float size, FontStyle style = FontStyle.Regular) =>
-        style.HasFlag(FontStyle.Bold) && TextSemibold != null
+        Classic ? new Font(ClassicFamily, ClassicSize(size), style)
+        : style.HasFlag(FontStyle.Bold) && TextSemibold != null
             ? new Font(TextSemibold, size, style & ~FontStyle.Bold)
             : new Font(TextFamily, size, style);
 
     public static Font DisplayFont(float size, FontStyle style = FontStyle.Regular) =>
-        style.HasFlag(FontStyle.Bold) && DisplaySemibold != null
+        Classic ? new Font(ClassicFamily, ClassicSize(size), style)
+        : style.HasFlag(FontStyle.Bold) && DisplaySemibold != null
             ? new Font(DisplaySemibold, size, style & ~FontStyle.Bold)
             : new Font(DisplayFamily, size, style);
+
+    /// <summary>How text is smoothed. Classic asks GDI+ for the aliased path; the bitmap face carries the
+    /// rest on its own. (Every paint site reads this instead of naming ClearType directly.)</summary>
+    public static System.Drawing.Text.TextRenderingHint TextHint => Classic
+        ? System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit
+        : System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+    // ---- the 3D edge of 1995 ----------------------------------------------------------------------
+    /// <summary>
+    /// The bevel every Windows 95 control was built from: two 1-pixel rings, light from the top-left and
+    /// shade to the bottom-right (raised), or the reverse (sunken - what a text field, a list or a status
+    /// panel wore). <paramref name="thin"/> draws the single-ring version, which is a toolbar button and a
+    /// separator. Never anti-aliased: these are pixels, not curves.
+    /// </summary>
+    public static void Bevel(Graphics g, Rectangle r, bool raised, bool thin = false)
+    {
+        if (r.Width < 2 || r.Height < 2) return;
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        if (thin) BevelRing(g, r, raised ? FaceHi : FaceShadow, raised ? FaceShadow : FaceHi);
+        else
+        {
+            BevelRing(g, r, raised ? FaceHi : FaceShadow, raised ? FaceDark : FaceHi);
+            BevelRing(g, Rectangle.Inflate(r, -1, -1), raised ? FaceLight : FaceDark, raised ? FaceShadow : FaceLight);
+        }
+        g.SmoothingMode = sm;
+    }
+
+    private static void BevelRing(Graphics g, Rectangle r, Color topLeft, Color bottomRight)
+    {
+        if (r.Width < 1 || r.Height < 1) return;
+        using var a = new Pen(topLeft);
+        using var b = new Pen(bottomRight);
+        g.DrawLine(a, r.Left, r.Bottom - 1, r.Left, r.Top);               // left
+        g.DrawLine(a, r.Left, r.Top, r.Right - 1, r.Top);                 // top
+        g.DrawLine(b, r.Right - 1, r.Top, r.Right - 1, r.Bottom - 1);     // right
+        g.DrawLine(b, r.Right - 1, r.Bottom - 1, r.Left, r.Bottom - 1);   // bottom
+    }
+
+    /// <summary>Fill with the window face and put a raised (or sunken) edge round it - the two lines that
+    /// turn any rectangle into a 95 control.</summary>
+    public static void FaceBevel(Graphics g, Rectangle r, bool raised, bool thin = false)
+    {
+        using (var b = new SolidBrush(Face)) g.FillRectangle(b, r);
+        Bevel(g, r, raised, thin);
+    }
 
     public static GraphicsPath RoundedRect(RectangleF r, float radius)
     {
         var path = new GraphicsPath();
+        if (radius < 0.05f) { path.AddRectangle(r); return path; }   // Classic: square, and GDI+ cannot arc a zero-size box
         float d = radius * 2;
         path.AddArc(r.X, r.Y, d, d, 180, 90);
         path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
@@ -284,9 +484,11 @@ internal static class Theme
     }
 
     // ---- corner-radius scale (one language across the whole UI) ----
-    public const int RadControl = 8;       // non-pill buttons, selection/hover pills, segmented outer track, hover chips
-    public const int RadChipInset = 6;     // pills nested inside the segmented track only (= RadControl - 2)
-    public const int RadCard = 10;         // inner content cards (CardPanel: Settings + device ABOUT/BACKUPS/OPTIONS)
+    // Runtime properties rather than consts because the Classic skin sets every one of them to ZERO: 1995 had
+    // no rounded corner anywhere, and squaring the scale here squares all 214 RoundedRect call sites at once.
+    public static int RadControl { get; private set; } = 8;       // non-pill buttons, selection/hover pills, segmented outer track, hover chips
+    public static int RadChipInset { get; private set; } = 6;     // pills nested inside the segmented track only (= RadControl - 2)
+    public static int RadCard { get; private set; } = 10;         // inner content cards (CardPanel: Settings + device ABOUT/BACKUPS/OPTIONS)
     // ---- the type ramp ------------------------------------------------------------------------------
     // Five sizes, each with one job. Before this the app used thirteen (7, 8, 8.25, 8.5, 8.75, 9, 9.5, 9.75,
     // 10, 11, 11.5, 12.5, 13, 21), so no two surfaces agreed on what a "label" or a "value" looked like and
@@ -300,12 +502,25 @@ internal static class Theme
     // ---- shell metrics ------------------------------------------------------------------------------
     public const int TitleStripH = 30;   // the one caption strip, on the wallpaper, above both cards
     public const int TitleBtnW = 38, TitleBtnH = 26;
+    public const int ClassicCaptionH = 20;             // the title bar of 1995 (18 px at 96 dpi, plus a pixel of air)
+    public const int ClassicBtnW = 16, ClassicBtnH = 14;   // and its window buttons, at their real size
     public const int BarH = 56;          // the content card's working bar — a row at the 40 px scale
     public const int SidebarW = 220;
 
-    public const int RadShell = 10;        // top-level floating sidebar/content shells — kept close to the OS window's ~8px corner so the inner cards don't look rounder than the window framing them
-    public const float TileFrac = 0.12f;   // cover-tile radius as a fraction of size (round(TileFrac*size))
-    public const int RadTileSmall = 4;     // the tiny 18px sidebar mini-cover only
+    public static int RadShell { get; private set; } = 10;        // top-level floating sidebar/content shells — kept close to the OS window's ~8px corner so the inner cards don't look rounder than the window framing them
+    public static float TileFrac { get; private set; } = 0.12f;   // cover-tile radius as a fraction of size (round(TileFrac*size))
+    public static int RadTileSmall { get; private set; } = 4;     // the tiny 18px sidebar mini-cover only
+
+    /// <summary>Square every corner (Classic) or restore the modern scale.</summary>
+    private static void SetRadii(bool square)
+    {
+        RadControl = square ? 0 : 8;
+        RadChipInset = square ? 0 : 6;
+        RadCard = square ? 0 : 10;
+        RadShell = square ? 0 : 10;
+        RadTileSmall = square ? 0 : 4;
+        TileFrac = square ? 0f : 0.12f;
+    }
     public const float ArtAngle = 60f;     // single light direction for all diagonally-lit generated art
 
     /// <summary>Copy <paramref name="src"/>'s pixels at <paramref name="srcRect"/> to (0,0) 1:1 — GDI+'s default
@@ -367,6 +582,9 @@ internal static class Theme
     public static void PaintWallpaper(Graphics g, Rectangle r)
     {
         if (r.Width <= 0 || r.Height <= 0) return;
+        // Classic: the window's own face, flat. No gradient, no accent glow - the cards that float on it
+        // become the panels of one grey window, which is what the era's programs looked like.
+        if (Classic) { using var face = new SolidBrush(Face); g.FillRectangle(face, r); return; }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color a0 = WallpaperTop;                                              // deep near-black base
         Color a1 = Blend(SidebarBg, Color.Black, 0.42);
@@ -389,6 +607,7 @@ internal static class Theme
     /// Kept subtle + tight so it hugs the rounded corner rather than reading as a halo behind it.</summary>
     public static void PaintCardShadow(Graphics g, Rectangle card, int radius)
     {
+        if (Classic) return;   // 1995 had no drop shadow anywhere
         if (card.Width <= 0 || card.Height <= 0) return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         for (int i = 5; i >= 1; i--)
@@ -440,6 +659,7 @@ internal static class Theme
     /// the card's own OnPaint, for whichever corners sit on the card's outer edge. No-op outside the shell.</summary>
     public static void CarveCardCorners(Graphics g, Control card, float radius, bool tl, bool tr, bool br, bool bl)
     {
+        if (Classic) return;   // square corners have nothing to carve
         // Sum offsets up to the wallpaper root (robust whether or not the window is shown — PointToScreen can
         // misreport during a headless render).
         Point off = Point.Empty;
@@ -539,7 +759,7 @@ internal static class Theme
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            g.TextRenderingHint = Theme.TextHint;
             double h = AccentHue() - 60 + (Math.Abs(seed) % 120);   // one band, 120° wide, around the accent
             Color c1 = HsvToColor((h + 360) % 360, 0.40, 0.44);
             Color c2 = HsvToColor((h + 18 + 360) % 360, 0.46, 0.30);
@@ -599,24 +819,26 @@ internal static class Theme
     public static void StyleGrid(DataGridView g)
     {
         g.EnableHeadersVisualStyles = false;
-        g.BackgroundColor = Bg;
-        g.GridColor = Bg;
+        g.BackgroundColor = ListBg;
+        g.GridColor = ListBg;
         g.BorderStyle = BorderStyle.None;
         g.CellBorderStyle = DataGridViewCellBorderStyle.None;
         g.Font = UiFont(SzTitle);
         g.RowHeadersVisible = false;
         g.ColumnHeadersHeight = 34;
         g.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
-        g.ColumnHeadersDefaultCellStyle.BackColor = Bg;
-        g.ColumnHeadersDefaultCellStyle.ForeColor = Faint;   // recede headers into the tertiary tier (was Subtle)
+        // Classic: the header is a row of raised grey buttons over a white list (drawn in OnColumnHeaderPaint),
+        // so it takes the window face and black text instead of receding into the content surface.
+        g.ColumnHeadersDefaultCellStyle.BackColor = Classic ? Face : Bg;
+        g.ColumnHeadersDefaultCellStyle.ForeColor = Classic ? TextCol : Faint;   // recede headers into the tertiary tier (was Subtle)
         g.ColumnHeadersDefaultCellStyle.Font = UiFont(SzLabel, FontStyle.Bold);
-        g.ColumnHeadersDefaultCellStyle.SelectionBackColor = Bg;
+        g.ColumnHeadersDefaultCellStyle.SelectionBackColor = Classic ? Face : Bg;
         g.ColumnHeadersDefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
 
         // No alternating band — Apple uses hairline separators (drawn in RowPostPaint) instead.
-        g.DefaultCellStyle.BackColor = Bg;
+        g.DefaultCellStyle.BackColor = ListBg;
         g.DefaultCellStyle.ForeColor = TextCol;
-        g.DefaultCellStyle.SelectionBackColor = Blend(Bg, Accent, 0.12);   // whisper-tint; the accent bar carries selection
+        g.DefaultCellStyle.SelectionBackColor = Classic ? ClassicNavy : Blend(Bg, Accent, 0.12);   // Classic: the era's solid navy band; otherwise a whisper-tint and the accent bar carries selection
         g.DefaultCellStyle.SelectionForeColor = Color.White;
         g.DefaultCellStyle.Padding = new Padding(8, 0, 4, 0);
         // NO AlternatingRowsDefaultCellStyle. It resolves BEFORE the column's own style, so setting ForeColor
@@ -681,8 +903,8 @@ internal sealed class ThemedButton : Button
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         ForeColor = Theme.TextCol;
-        Cursor = Cursors.Hand;
-        Font = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
+        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;   // 1995 pointed at a button with an arrow
+        Font = Theme.UiFont(Theme.SzTitle, Theme.Classic ? FontStyle.Regular : FontStyle.Bold);   // a 95 button's label was regular weight
         Height = 34;
         MouseEnter += (_, _) => { if (Enabled && !IsBlocked) AnimHover(1f); };
         MouseLeave += (_, _) => { AnimHover(0f); AnimPress(0f); };
@@ -760,6 +982,8 @@ internal sealed class ThemedButton : Button
 
         bool disabled = !Enabled || IsBlocked;
 
+        if (Theme.Classic) { PaintClassic(g, disabled, h, press); return; }
+
         if (Ghost)
         {
             if (h > 0.001f) { using var hb = new SolidBrush(Color.FromArgb((int)(h * 255), Theme.RowHover)); g.FillPath(hb, path); }
@@ -804,6 +1028,54 @@ internal sealed class ThemedButton : Button
         string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
         TextRenderer.DrawText(g, label, Font, textRect, text,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    /// <summary>
+    /// The 1995 button: a grey slab with a 3D edge, sunken while it is held down, and the label moving the
+    /// same pixel with it. A Primary button is a dialog's DEFAULT button, which the era marked with an extra
+    /// black frame around the bevel; a Ghost button is a toolbar button - flat until the pointer is on it;
+    /// and a disabled label is embossed (white underneath, grey on top) rather than simply dimmed.
+    /// </summary>
+    private void PaintClassic(Graphics g, bool disabled, float hover, float press)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        var full = new Rectangle(0, 0, Width, Height);
+        bool held = press > 0.5f;
+        var flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+
+        if (Ghost)
+        {
+            if (!disabled && (hover > 0.35f || held)) Theme.FaceBevel(g, full, raised: !held, thin: true);
+            var gr = full;
+            if (held) gr.Offset(1, 1);
+            Color gi = disabled ? Theme.FaceShadow : Theme.TextCol;
+            if (Icon != Ico.None) { g.SmoothingMode = SmoothingMode.AntiAlias; DrawIcon(g, gr, Icon, gi); }
+            else TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, gr, gi, flags);
+            return;
+        }
+
+        var face = full;
+        if (Primary)   // the default button's extra frame
+        {
+            using var dk = new Pen(Theme.FaceDark);
+            g.DrawRectangle(dk, full.X, full.Y, full.Width - 1, full.Height - 1);
+            face = Rectangle.Inflate(full, -1, -1);
+        }
+        using (var b = new SolidBrush(hover > 0.01f && !disabled && !held ? Theme.Blend(Theme.Face, Color.White, 0.22 * hover) : Theme.Face))
+            g.FillRectangle(b, face);
+        Theme.Bevel(g, face, raised: !held);
+
+        var tr = face;
+        if (held) tr.Offset(1, 1);
+        if (CompactIcon && Icon != Ico.None) { g.SmoothingMode = SmoothingMode.AntiAlias; DrawIcon(g, tr, Icon, disabled ? Theme.FaceShadow : Theme.TextCol); return; }
+        string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
+        if (disabled)
+        {
+            TextRenderer.DrawText(g, label, Font, new Rectangle(tr.X + 1, tr.Y + 1, tr.Width, tr.Height), Theme.FaceHi, flags);
+            TextRenderer.DrawText(g, label, Font, tr, Theme.FaceShadow, flags);
+            return;
+        }
+        TextRenderer.DrawText(g, label, Font, tr, Danger ? Theme.ErrorCol : Theme.TextCol, flags);
     }
 
     /// <summary>Crisp, perfectly-centred vector icon (symbol-font glyphs sit off-centre at this size).</summary>

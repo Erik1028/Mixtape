@@ -12,15 +12,20 @@ namespace iPodCommander;
 /// </summary>
 internal class CardDialog : GlassDialog
 {
-    public const int TitleH = 52;
+    /// <summary>The strip the dialog's content is moved down by: the app's 52 px title card, or the 95 caption.</summary>
+    public static int TitleH => Theme.Classic ? Theme.ClassicCaptionH + 5 : 52;
     private const int CloseD = 28, ClosePad = 16;
+    private bool _closeDown;   // Classic: the caption's close button goes in while held
+    private readonly Font _fCaption = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
     private bool _adopted, _closeHover;
     private readonly Font _fTitle = Theme.DisplayFont(14f, FontStyle.Bold);
 
     /// <summary>False for a dialog that must run to completion (no close button; it closes itself).</summary>
     protected bool ShowClose { get; set; } = true;
 
-    private Rectangle CloseRect => new(ClientSize.Width - ClosePad - CloseD, (TitleH - CloseD) / 2, CloseD, CloseD);
+    private Rectangle CloseRect => Theme.Classic
+        ? new(ClientSize.Width - 3 - 2 - Theme.ClassicBtnW, 3 + (Theme.ClassicCaptionH - Theme.ClassicBtnH) / 2, Theme.ClassicBtnW, Theme.ClassicBtnH)
+        : new(ClientSize.Width - ClosePad - CloseD, (TitleH - CloseD) / 2, CloseD, CloseD);
 
     public void AdoptCard()
     {
@@ -49,7 +54,11 @@ internal class CardDialog : GlassDialog
     private void OnChromeDown(object? s, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left || e.Y >= TitleH) return;
-        if (ShowClose && CloseRect.Contains(e.Location)) { DialogResult = DialogResult.Cancel; Close(); return; }
+        if (ShowClose && CloseRect.Contains(e.Location))
+        {
+            if (Theme.Classic) { _closeDown = true; Invalidate(CloseRect); Update(); }   // show it go in before the dialog goes
+            DialogResult = DialogResult.Cancel; Close(); return;
+        }
         try { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } catch { }   // WM_NCLBUTTONDOWN / HTCAPTION: drag by the strip
     }
 
@@ -62,7 +71,7 @@ internal class CardDialog : GlassDialog
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);   // dark frame + DWMWCP_ROUND + the caption colour (GlassDialog)
-        try { int bc = Theme.Border.R | (Theme.Border.G << 8) | (Theme.Border.B << 16); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }   // a subtle border, like MessageDialog
+        try { int bc = Theme.DwmBorder(Theme.Border); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }   // a subtle border, like MessageDialog
     }
 
     /// <summary>Every card dialog arrives the same way: a short rise and fade, the motion Settings and the
@@ -83,8 +92,21 @@ internal class CardDialog : GlassDialog
         base.OnPaint(e);
         if (!_adopted) return;
         var g = e.Graphics;
+        if (Theme.Classic)
+        {
+            // The 95 dialog: a raised frame and a navy caption; the body under it is the face the form cleared to.
+            var cap = Theme.PaintClassicWindow(g, new Rectangle(0, 0, ClientSize.Width, TitleH), Text, _fCaption);
+            if (ShowClose) Theme.PaintClassicClose(g, CloseRect, _closeDown);
+            // the frame continues down the sides and bottom of the whole dialog
+            Theme.Bevel(g, ClientRectangle, raised: true);
+            using var face = new Pen(Theme.Face);
+            g.DrawLine(face, 2, TitleH - 2, ClientSize.Width - 3, TitleH - 2);   // no seam where the caption block meets the body
+            g.DrawLine(face, 2, TitleH - 1, ClientSize.Width - 3, TitleH - 1);
+            _ = cap;
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
         int right = ShowClose ? ClosePad + CloseD + 12 : 22;
         TextRenderer.DrawText(g, Text, _fTitle, new Rectangle(22, 0, Math.Max(10, ClientSize.Width - 22 - right), TitleH), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
@@ -104,7 +126,7 @@ internal class CardDialog : GlassDialog
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _fTitle.Dispose();
+        if (disposing) { _fTitle.Dispose(); _fCaption.Dispose(); }
         base.Dispose(disposing);
     }
 }

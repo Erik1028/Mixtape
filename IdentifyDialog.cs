@@ -98,7 +98,7 @@ internal sealed class IdentifyDialog : CardDialog
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            g.TextRenderingHint = Theme.TextHint;
             g.Clear(Parent?.BackColor ?? Theme.Bg);
             using (var b = new SolidBrush(Theme.PanelBg))
             using (var p = Theme.RoundedRect(new Rectangle(0, 0, Width, Height), Theme.RadCard)) g.FillPath(b, p);

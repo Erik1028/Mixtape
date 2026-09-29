@@ -40,6 +40,13 @@ internal sealed class ThemedField : Panel
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        if (Theme.Classic)
+        {
+            // a 95 edit box: white inside the sunken two-ring edge, and no focus ring - the caret was the cue
+            g.Clear(Box.BackColor);
+            Theme.Bevel(g, ClientRectangle, raised: false);
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.Bg);
         using var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Theme.RadControl);

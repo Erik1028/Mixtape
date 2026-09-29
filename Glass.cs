@@ -525,6 +525,7 @@ internal static class Glass
     /// every control keeps its original look on non-glass windows (Settings, etc.).</summary>
     public static bool PaintBackground(Graphics g, Control c, Color tint)
     {
+        if (Theme.Classic) return false;   // 1995 had no frosted glass: every control paints its own opaque face
         var (host, frost) = FindHost(c);
         if (host is null || frost is null) return false;
         tint = ((IGlassHost)host).GlassTint;   // the host decides the tint (dialogs frost harder than flyouts)
@@ -582,7 +583,7 @@ internal class GlassDialog : Form, IGlassHost
     {
         base.OnHandleCreated(e);
         try { int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)); } catch { }   // dark title bar
-        try { int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }  // DWMWCP_ROUND — rounded corners (needed once a dialog goes borderless)
+        try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }  // DWMWCP_ROUND — rounded corners (needed once a dialog goes borderless)
         // Colour the title bar to match the dark glass body so the default "grey bar" blends into the app
         // (DWMWA_CAPTION_COLOR, Win11). The caption stays draggable + keeps its close button — it just isn't a slab.
         try { var c = Theme.Bg; int cap = (c.B << 16) | (c.G << 8) | c.R; DwmSetWindowAttribute(Handle, 35, ref cap, sizeof(int)); } catch { }

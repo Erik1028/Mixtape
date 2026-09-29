@@ -482,7 +482,7 @@ internal sealed class LyricsPanel : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TextRenderingHint = Theme.TextHint;
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(Surface);
 
         if (_picking)

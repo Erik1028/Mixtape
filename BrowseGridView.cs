@@ -262,10 +262,14 @@ internal sealed class BrowseGridView : Panel
         if (max > 0)
         {
             bool active = _barDragging || _barHover;
-            using var b = new SolidBrush(Color.FromArgb(active ? 165 : 90, 255, 255, 255));
-            float w = active ? 6 : 4;
-            using var p = Theme.RoundedRect(new RectangleF(Width - 5 - w, barY + 2, w, barH - 4), w / 2f);
-            g.FillPath(b, p);
+            if (Theme.Classic) Theme.PaintClassicPageScroll(g, Width, Height, barY, barH);
+            else
+            {
+                using var b = new SolidBrush(Color.FromArgb(active ? 165 : 90, 255, 255, 255));
+                float w = active ? 6 : 4;
+                using var p = Theme.RoundedRect(new RectangleF(Width - 5 - w, barY + 2, w, barH - 4), w / 2f);
+                g.FillPath(b, p);
+            }
         }
     }
 

@@ -10,6 +10,9 @@ internal sealed class AppSettings
     public string Accent { get; set; } = "Teal";
     /// <summary>Background palette: Graphite|Midnight|Carbon|Mocha.</summary>
     public string ThemeVariant { get; set; } = "Graphite";
+    /// <summary>The Windows 95 look (Settings > Appearance > Look). Applied before any control is built,
+    /// so the skin is chosen at startup - which is why changing it offers a restart.</summary>
+    public bool ClassicSkin { get; set; }
     public bool Compact { get; set; }          // false = comfortable (52px rows + art), true = compact (28px, text-only)
     public bool ShowArtwork { get; set; } = true;
     /// <summary>UI language code: "en" | "hu". Empty = auto (follow the OS language). Applied at startup;
@@ -160,9 +163,15 @@ internal sealed class AppSettings
 
     public static AppSettings Load()
     {
-        try { if (File.Exists(FilePath)) return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new(); }
+        AppSettings s = new();
+        try { if (File.Exists(FilePath)) s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new(); }
         catch { }
-        return new AppSettings();
+        // MIX_CLASSIC=1|0 forces the skin for a render or a test without touching the saved file (the same
+        // kind of harness switch as MIX_LANG). Every window loads its own settings, so it belongs here.
+        // Frozen too: an overridden value must never be written back by a later Save (a window-position save on
+        // close would otherwise persist the forced skin into the user's own settings file).
+        if (Environment.GetEnvironmentVariable("MIX_CLASSIC") is { Length: > 0 } skin) { s.ClassicSkin = skin == "1"; Frozen = true; }
+        return s;
     }
 
     /// <summary>Set by the render harness: the previews must never write the user's real settings.json (opening

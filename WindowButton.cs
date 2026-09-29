@@ -16,6 +16,7 @@ internal sealed class WindowButton : Control
     public bool Maximized { get => _maximized; set { if (_maximized == value) return; _maximized = value; Invalidate(); } }
     private float _hoverT;   // 0→1 hover highlight
     private bool _painted;
+    private bool _down;      // Classic only: a caption button visibly goes in when held
     private Tween? _tw;
 
     public WindowButton()
@@ -24,7 +25,9 @@ internal sealed class WindowButton : Control
         BackColor = Color.Transparent;
         TabStop = false;
         MouseEnter += (_, _) => AnimHover(1f);
-        MouseLeave += (_, _) => AnimHover(0f);
+        MouseLeave += (_, _) => { AnimHover(0f); if (_down) { _down = false; Invalidate(); } };
+        MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Theme.Classic) { _down = true; Invalidate(); } };
+        MouseUp += (_, _) => { if (_down) { _down = false; Invalidate(); } };
     }
 
     private void AnimHover(float to)
@@ -39,6 +42,7 @@ internal sealed class WindowButton : Control
     {
         _painted = true;
         var g = e.Graphics;
+        if (Theme.Classic) { PaintClassic(g); return; }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         float h = Math.Clamp(_hoverT, 0f, 1f);
 
@@ -94,6 +98,50 @@ internal sealed class WindowButton : Control
                 float iw = outer.Width * 0.5f, ih = outer.Height * 0.54f, inset = 2f;
                 var inner = new RectangleF(outer.Right - iw - inset, outer.Bottom - ih - inset, iw, ih);
                 using (var ib = new SolidBrush(stroke)) using (var ip = Theme.RoundedRect(inner, 1.8f)) g.FillPath(ib, ip);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The caption buttons of 1995: a small face-coloured square with a raised edge (sunken while held) and
+    /// a hand-placed 1-pixel glyph. They are drawn, not scaled - at 16x14 every pixel of a minimise bar or a
+    /// close cross is a decision, and anti-aliasing any of it would give the era away immediately.
+    /// </summary>
+    private void PaintClassic(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        var r = new Rectangle(0, 0, Width, Height);
+        Theme.FaceBevel(g, r, raised: !_down);
+        int dx = _down ? 1 : 0;
+        int cx = Width / 2 + dx, cy = Height / 2 + dx;
+        using var pen = new Pen(Theme.FaceDark);
+        using var br = new SolidBrush(Theme.FaceDark);
+        switch (Which)
+        {
+            case Kind.Minimize:
+                g.FillRectangle(br, cx - 4, cy + 3, 7, 2);
+                break;
+            case Kind.Maximize when !_maximized:
+                g.DrawRectangle(pen, cx - 5, cy - 5, 9, 9);
+                g.DrawLine(pen, cx - 5, cy - 4, cx + 4, cy - 4);   // the thick caption line of a title bar
+                break;
+            case Kind.Maximize:                                     // restore: a small window in front of a larger one
+                g.DrawRectangle(pen, cx - 2, cy - 5, 6, 6);
+                g.DrawLine(pen, cx - 2, cy - 4, cx + 4, cy - 4);
+                using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, cx - 5, cy - 2, 7, 7);
+                g.DrawRectangle(pen, cx - 5, cy - 2, 6, 6);
+                g.DrawLine(pen, cx - 5, cy - 1, cx + 1, cy - 1);
+                break;
+            case Kind.Close:
+                for (int i = 0; i < 6; i++)                          // a 6x6 cross drawn a pixel at a time, two pixels wide
+                {
+                    g.FillRectangle(br, cx - 3 + i, cy - 3 + i, 2, 1);
+                    g.FillRectangle(br, cx + 2 - i, cy - 3 + i, 2, 1);
+                }
+                break;
+            case Kind.MiniPlayer:                                    // a window with a smaller one inset in its corner
+                g.DrawRectangle(pen, cx - 5, cy - 4, 9, 7);
+                g.FillRectangle(br, cx, cy - 1, 4, 4);
                 break;
         }
     }
