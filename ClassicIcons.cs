@@ -12,6 +12,7 @@ internal static class ClassicIcons
     {
         Home, IPod, Songs, Album, Artist, Chart, Playlist, SmartPlaylist, Computer, Video, Photos, Latest,
         Folder, Lyrics, Queue, Wand, Eq, Speaker, SpeakerMute, CoverFlow, AddToList, Gear, Shuffle, Repeat, RepeatOne,
+        RadioOff, RadioOn,
     }
 
     // k black  w white  s silver  g grey  n navy  b blue  t teal  c cyan  r red  m maroon
@@ -511,6 +512,46 @@ internal static class ClassicIcons
             "...kkk........k.",
             "....kkkkkkkkkk..",
             ".....k..........",
+            "................",
+            "................",
+        },
+        // the radio button: a 12 px circle in the top-left of the map - grey and black arcs on the lit side, white
+        // and silver on the shaded side, a white well, and (on) the four-by-four dot
+        Id.RadioOff => new[]
+        {
+            "....gggg........",
+            "..ggkkkkgg......",
+            ".gkkwwwwkkw.....",
+            ".gkwwwwwwsw.....",
+            "gkwwwwwwwwsw....",
+            "gkwwwwwwwwsw....",
+            "gkwwwwwwwwsw....",
+            "gkwwwwwwwwsw....",
+            ".gkwwwwwwsw.....",
+            ".wsswwwwssw.....",
+            "..wwssssww......",
+            "....wwww........",
+            "................",
+            "................",
+            "................",
+            "................",
+        },
+        Id.RadioOn => new[]
+        {
+            "....gggg........",
+            "..ggkkkkgg......",
+            ".gkkwwwwkkw.....",
+            ".gkwwwwwwsw.....",
+            "gkwwwkkwwwsw....",
+            "gkwwkkkkwwsw....",
+            "gkwwkkkkwwsw....",
+            "gkwwwkkwwwsw....",
+            ".gkwwwwwwsw.....",
+            ".wsswwwwssw.....",
+            "..wwssssww......",
+            "....wwww........",
+            "................",
+            "................",
             "................",
             "................",
         },
