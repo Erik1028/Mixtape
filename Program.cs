@@ -1873,7 +1873,8 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_SIDE") is { Length: > 0 } sideTab) { Application.DoEvents(); form.PreviewSidePanel(sideTab); }   // the docked side card (UpNext|History|Lyrics); needs a wide window
         if (Environment.GetEnvironmentVariable("MIX_COMPACT") is { } cmp) { Application.DoEvents(); form.PreviewRows(cmp != "0"); }   // row density, in memory only
         if (Environment.GetEnvironmentVariable("MIX_THEME_SWITCH") is { Length: > 0 } tv) { Application.DoEvents(); form.PreviewThemeSwitch(tv); }   // a runtime palette change (baked-colour check)
-        if (Environment.GetEnvironmentVariable("MIX_ACCENT") is { Length: > 0 } acc) { Application.DoEvents(); form.PreviewAccent(acc); }   // a runtime accent change (preset name or #hex)
+        if (Environment.GetEnvironmentVariable("MIX_ACCENT") is { Length: > 0 } acc) { Application.DoEvents(); form.PreviewAccent(acc); }
+        if (Environment.GetEnvironmentVariable("MIX_OPEN_CF") == "1") { Application.DoEvents(); form.PreviewCoverFlow(); for (int i = 0; i < 8; i++) { Application.DoEvents(); Thread.Sleep(60); } }   // Cover Flow opened the way the button opens it   // a runtime accent change (preset name or #hex)
         if (view == "poster") { Application.DoEvents(); form.PreviewPoster(outPng); form.Dispose(); return; }   // a playlist drawn as a picture
         if (Environment.GetEnvironmentVariable("MIX_REMAINING") == "1") form.PreviewRemaining(true);   // the card's total slot counts down
         if (Environment.GetEnvironmentVariable("MIX_RATE") is { Length: > 0 } rt && int.TryParse(rt, out int rtv)) { Application.DoEvents(); form.PreviewRating(rtv); }   // the deck's rating stars
