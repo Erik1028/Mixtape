@@ -277,6 +277,21 @@ internal static class Program
         GC.KeepAlive(mutex); // keep the handle (and thus the lock) alive for the app's lifetime
     }
 
+    /// <summary>"Restart now" (after a language, look or player-position change). Every window is closed the
+    /// ordinary way first - the main window keeps the resume bookmark and the volume on its way out - and only when
+    /// none of them refused (the iPod is still being written to) is the fresh copy started. It waits for this copy's
+    /// single-instance lock, which Main hands over the moment Run returns.</summary>
+    internal static void Restart()
+    {
+        if (Environment.ProcessPath is not string exe) return;
+        var exit = new System.ComponentModel.CancelEventArgs();
+        Application.Exit(exit);
+        MainForm.Trace("restart: " + (exit.Cancel ? "a window refused - staying as we are" : "every window closed - starting the new copy"));
+        if (exit.Cancel) return;   // still here, exactly as before - and nothing left waiting to start
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "--relaunch") { UseShellExecute = true }); }
+        catch { }
+    }
+
     /// <summary>Broadcast window message a second launch posts so the running instance restores + activates itself.</summary>
     internal static readonly uint ShowInstanceMessage = RegisterWindowMessage("MixtapeShowExistingInstance");
     private static readonly IntPtr HWND_BROADCAST = (IntPtr)0xFFFF;
@@ -1497,7 +1512,7 @@ internal static class Program
         }
 
         // The small modal windows that now wear the app's own card chrome (title strip + round close).
-        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn")
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn" or "messagebusy")
         {
             Form dlg = view switch
             {
@@ -1514,6 +1529,7 @@ internal static class Program
                 "noteeditor" => NotesDialog.PreviewEditor(),
                 "message" => MessageDialog.Preview(Loc.T("The look changes after a restart. Restart Mixtape now?"), Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question),
                 "messagewarn" => MessageDialog.Preview(Loc.T("The iPod was removed while songs were being copied. Plug it back in and try again."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Warning),
+                "messagebusy" => MessageDialog.Preview(Loc.T("Mixtape is still writing to the iPod, so it can't restart yet. Your change is saved and takes effect the next time Mixtape starts."), Loc.T("Writing to the iPod"), MessageBoxButtons.OK, MessageBoxIcon.Warning),
                 _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }),
             };
             bool cardLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow = the real window
