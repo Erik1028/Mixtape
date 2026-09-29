@@ -904,7 +904,8 @@ internal sealed class MainForm : Form, IMessageFilter
             Application.DoEvents();
         }
     }
-    public void PreviewAccent(string accent) { _settings.Accent = accent; ApplyAllSettings(); }   // MIX_ACCENT=<preset name | #hex>: a runtime accent change
+    public void PreviewAccent(string accent) { _settings.Accent = accent; ApplyAllSettings(); }
+    public void PreviewCoverFlow() => OpenCoverFlow();   // MIX_OPEN_CF=1: open Cover Flow through the real path (its card-shaped region included)   // MIX_ACCENT=<preset name | #hex>: a runtime accent change
     /// <summary>Render harness: draw the poster for the biggest playlist straight to a file.</summary>
     public void PreviewPoster(string outPath)
     {
@@ -3350,7 +3351,9 @@ internal sealed class MainForm : Form, IMessageFilter
         _coverFlow.Bounds = a;
 
         int w = a.Width, h = a.Height, r = CardRadius;
-        if (w <= r * 2 || h <= r * 2) { _coverFlow.Region = null; return; }
+        // r == 0 is the Classic skin's square card: no region at all. (A zero-size AddArc throws GDI+'s
+        // "Parameter is not valid" - opening Cover Flow in the Windows 95 look crashed on exactly that.)
+        if (r <= 0 || w <= r * 2 || h <= r * 2) { _coverFlow.Region = null; return; }
         using var p = new System.Drawing.Drawing2D.GraphicsPath();
         p.AddArc(0, 0, r * 2, r * 2, 180, 90);
         p.AddArc(w - r * 2, 0, r * 2, r * 2, 270, 90);
