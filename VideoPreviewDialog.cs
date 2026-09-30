@@ -80,6 +80,7 @@ internal sealed class VideoPreviewDialog : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 open/close/minimize animation
         try { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)); } catch { }
         try { int caption = 0x00000000; DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); } catch { }
     }

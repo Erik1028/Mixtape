@@ -278,6 +278,7 @@ internal sealed class PhotoViewerDialog : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 open/close/minimize animation
         if (Theme.Classic)
         {
             // square, and no DWM line round the frame we paint ourselves
