@@ -4457,6 +4457,7 @@ internal sealed class MainForm : Form, IMessageFilter
             // instead of folding "other" into Free and contradicting the centre (43 GB centre vs "251 GB free" legend).
             if (other > 0) segs.Add(new DeviceHero.Seg(Loc.T("Other"), other, Theme.Blend(Theme.Bg, Color.White, 0.13)));
             segs.Add(new DeviceHero.Seg(Loc.T("Free"), free, Theme.Accent));
+            if (IsDriveRootMount(dev.MountRoot)) hero.Caption = Loc.T("Drive {0}", char.ToUpperInvariant(dev.MountRoot[0]));   // Classic: under the pie, as 95 put "Drive C"
             hero.Set(null, total, free, segs.ToArray());
             Add(hero);
         }
