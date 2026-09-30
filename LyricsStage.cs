@@ -96,6 +96,7 @@ internal sealed class LyricsStage : Control
     private readonly Font _fTime = StageFont(8.5f, FontStyle.Regular);
     private readonly Font _fSub = StageFont(10.5f, FontStyle.Regular);
     private readonly Font _fTitle = StageFont(13f, FontStyle.Bold);
+    private readonly Font _fPanel = Theme.UiFont(Theme.SzBody);   // Classic: the control panel's own 95 type
 
     /// <summary>The stage's type. In the Classic skin the UI face (MS Sans Serif, which the skin holds to 8 and
     /// 12 pt) cannot set words at stage size, so it uses the TrueType face Windows shipped from 3.1 on - Arial -
@@ -559,7 +560,7 @@ internal sealed class LyricsStage : Control
                 {
                     using var op = new Pen(W(0.22 * a));
                     using var cb = new SolidBrush(W(0.55 * a));
-                    using var cp = Theme.RoundedRect(chip, 6f);
+                    using var cp = Theme.RoundedRect(chip, Theme.Classic ? 0f : 6f);
                     g.DrawPath(op, cp);
                     g.DrawString(_format, _fTime, cb, chip.X + 8, chip.Y + (ch - sz.Height) / 2f, Typo);
                 }
@@ -567,6 +568,7 @@ internal sealed class LyricsStage : Control
         }
 
         if (UnderDeck) return;   // the deck shows the times and owns the transport
+        if (Theme.Classic) { DrawClassicControls(g, a); return; }
 
         // times + seek
         var s = SeekRect;
@@ -590,6 +592,37 @@ internal sealed class LyricsStage : Control
         // volume — the bar is under us, so this is the only one there is
         DrawSpeaker(g, SpeakerRect, a);
         DrawSlider(g, VolRect, (float)_volume, _hot == Hit.Volume || _volDrag, a);
+    }
+
+    /// <summary>
+    /// Classic: the full stage's controls on a raised grey panel under the title - the control strip of a 1995 media
+    /// player under its black picture. The times in the panel's own type, the seek and the volume as the deck's 95
+    /// trackbars, the transport as its raised push buttons, the lyrics toggle latched down while the words show.
+    /// Every control keeps the hit rectangle it has in the modern look; only the drawing changes.
+    /// </summary>
+    private void DrawClassicControls(Graphics g, float a)
+    {
+        if (a < 0.5f) return;
+        var s = SeekRect; var v = VolRect;
+        Theme.FaceBevel(g, Rectangle.FromLTRB(s.X - 12, s.Y - 24, s.Right + 12, v.Bottom + 16), raised: true);   // from where the artist line ends
+        double dur = _duration.TotalSeconds, pos = Math.Clamp((_reported + (_playing ? _since.Elapsed : TimeSpan.Zero)).TotalSeconds, 0, Math.Max(0, dur));
+        // TextRenderer skips the Graphics translation (the stage rises into place) unless it is asked to keep it
+        const TextFormatFlags tf = TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsTranslateTransform;
+        TextRenderer.DrawText(g, Fmt(pos), _fPanel, new Rectangle(s.X, s.Y - 21, 90, 16), Theme.TextCol, tf | TextFormatFlags.Left);
+        if (dur > 0) TextRenderer.DrawText(g, "-" + Fmt(dur - pos), _fPanel, new Rectangle(s.Right - 90, s.Y - 21, 90, 16), Theme.TextCol, tf | TextFormatFlags.Right);
+        NowPlayingBar.DrawClassicSlider(g, new Rectangle(s.X, s.Y + s.Height / 2 - 6, s.Width, 12), dur > 0 ? pos / dur : 0, knob: true);
+
+        NowPlayingBar.DrawCircleGlyph(g, PrevRect, _hot == Hit.Prev, NowPlayingBar.GlyphPrevL, dim: false);
+        NowPlayingBar.DrawPlayDisc(g, NowPlayingBar.Centered(PlayRect, 30, 30), _hot == Hit.Play, dim: false, _playing ? 1f : 0f);
+        NowPlayingBar.DrawCircleGlyph(g, NextRect, _hot == Hit.Next, NowPlayingBar.GlyphNextL, dim: false);
+        bool words = _sheetShown >= 0.5;
+        var bub = NowPlayingBar.Centered(BubbleRect, 26, 26);
+        NowPlayingBar.ClassicToolButton(g, bub, hover: _hot == Hit.Bubble && !words, latched: words);
+        NowPlayingBar.ClassicGlyph(g, ClassicIcons.Id.Lyrics, bub, words);
+        DrawMore(g, MoreRect, _hot == Hit.More, a);
+
+        NowPlayingBar.ClassicGlyph(g, _volume > 0.001 ? ClassicIcons.Id.Speaker : ClassicIcons.Id.SpeakerMute, SpeakerRect, false);
+        NowPlayingBar.DrawClassicSlider(g, new Rectangle(v.X, v.Y + v.Height / 2 - 6, v.Width, 12), _volume, knob: true);
     }
 
     private static void DrawSlider(Graphics g, Rectangle s, float f, bool hot, float a)
@@ -666,6 +699,15 @@ internal sealed class LyricsStage : Control
     /// <summary>Apple's "···" — the way to the things that do not belong on the stage itself.</summary>
     private static void DrawMore(Graphics g, Rectangle r, bool hot, float a)
     {
+        if (Theme.Classic)   // a raised 95 button with three black dots, on the stage and on the control panel alike
+        {
+            var btn = NowPlayingBar.Centered(r, 26, 26);
+            NowPlayingBar.ClassicToolButton(g, btn, hover: hot);
+            using var k = new SolidBrush(Theme.FaceDark);
+            int mx = btn.X + btn.Width / 2, my = btn.Y + btn.Height / 2;
+            for (int d = -1; d <= 1; d++) g.FillRectangle(k, mx - 1 + d * 4, my, 2, 2);
+            return;
+        }
         if (hot) { using var hb = new SolidBrush(W(0.12 * a)); g.FillEllipse(hb, r); }
         using var b = new SolidBrush(W((hot ? 1.0 : 0.85) * a));
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
@@ -686,6 +728,19 @@ internal sealed class LyricsStage : Control
     {
         var r = CloseRect;
         bool hot = _hot == Hit.Close;
+        if (Theme.Classic)
+        {
+            // back to the popover: a raised button with the caption's own "restore" box - a window behind a window
+            var b = NowPlayingBar.Centered(r, 26, 26);
+            NowPlayingBar.ClassicToolButton(g, b, hover: hot);
+            using var k = new SolidBrush(Theme.FaceDark);
+            using var face = new SolidBrush(hot ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face);
+            int x = b.X + 7, y = b.Y + 7;
+            g.FillRectangle(k, x + 3, y, 8, 2); g.FillRectangle(k, x + 10, y + 2, 1, 5); g.FillRectangle(k, x + 8, y + 6, 2, 1);   // the one behind
+            g.FillRectangle(face, x, y + 3, 8, 7);
+            g.FillRectangle(k, x, y + 3, 8, 2); g.FillRectangle(k, x, y + 5, 1, 5); g.FillRectangle(k, x + 7, y + 5, 1, 5); g.FillRectangle(k, x, y + 9, 8, 1);   // the one in front
+            return;
+        }
         if (hot) { using var hb = new SolidBrush(W(0.12 * a)); g.FillEllipse(hb, r); }
         using var p = new Pen(W((hot ? 0.95 : 0.6) * a), 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         // "collapse" — two arrow heads pointing in, the inverse of the popover's expand mark
@@ -910,7 +965,7 @@ internal sealed class LyricsStage : Control
             DropOld();
             foreach (var f in _fontCache.Values) f.Dispose();
             _fontCache.Clear();
-            _fTime.Dispose(); _fSub.Dispose(); _fTitle.Dispose();
+            _fTime.Dispose(); _fSub.Dispose(); _fTitle.Dispose(); _fPanel.Dispose();
         }
         base.Dispose(disposing);
     }

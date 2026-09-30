@@ -1409,7 +1409,7 @@ internal static class Program
                                      FormBorderStyle = FormBorderStyle.None, BackColor = Theme.Bg,
                                      Size = new Size(int.TryParse(Environment.GetEnvironmentVariable("MIX_STAGE_W"), out int sw0) ? sw0 : 1000,
                                                      int.TryParse(Environment.GetEnvironmentVariable("MIX_STAGE_H"), out int sh0) ? sh0 : 620) };
-            var stage = new LyricsStage { Dock = DockStyle.Fill };
+            var stage = new LyricsStage { Dock = DockStyle.Fill, UnderDeck = Environment.GetEnvironmentVariable("MIX_STAGE_DECK") == "1" };   // MIX_STAGE_DECK=1: the stage as it sits under the deck
             f.Controls.Add(stage);
             f.Show();
             string sArt = Environment.GetEnvironmentVariable("MIX_LYRICS_ARTIST") ?? "Wellhello";
@@ -1886,10 +1886,15 @@ internal static class Program
                 id => { var b = new Bitmap(320, 240); using var g = Graphics.FromImage(b); using var br = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, 320, 240), Color.FromArgb(40, 120, 200), Color.FromArgb(200, 80, 140), 35f); g.FillRectangle(br, 0, 0, 320, 240); return b; },
                 id => $"VRChat — sample photo {id}")
             { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
-            dlg.Show();
+            // MIX_LIVE=1: on screen (near-invisible, not activated) + PrintWindow - the window as it really is; offscreen,
+            // DrawToBitmap paints an OS caption over the Classic window's own (its non-client area has no size on screen)
+            bool pvLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";
+            if (pvLive) { dlg.Location = new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 960 : 40, 40); dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var pbmp = new Bitmap(dlg.Width, dlg.Height);
-            dlg.DrawToBitmap(pbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
+            if (pvLive) { using var pg = Graphics.FromImage(pbmp); IntPtr phdc = pg.GetHdc(); PrintWindow(dlg.Handle, phdc, 2); pg.ReleaseHdc(phdc); }
+            else dlg.DrawToBitmap(pbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
             pbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
             dlg.Close();
             return;
