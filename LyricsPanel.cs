@@ -137,10 +137,10 @@ internal sealed class LyricsPanel : Control
             if (_holdDir != 0 && ShowSync && Environment.TickCount - _holdStart > 380
                 && Environment.TickCount - _holdLast > 70)
                 Nudge(_holdDir);
-            // Repaint only when something can still change. A paused sheet, or one with no timings, is a
-            // static picture — redrawing it sixty times a second is pure heat.
-            if (Visible && ((_playing && _synced) || _settling || _holdDir != 0 || (_synced && Math.Abs(_userScroll) > 0.5)))
-                Invalidate();
+            // Repaint only when the picture would change. A paused sheet, or one with no timings, is a static picture;
+            // and a playing one only changes when its scroll crosses a whole pixel, the sung line changes or its
+            // accent bar grows a pixel - redrawing it sixty times a second in between was pure heat.
+            if (Visible && FrameDue()) Invalidate();
         };
         VisibleChanged += (_, _) => { if (Visible) _frame.Start(); else _frame.Stop(); };
 
@@ -470,6 +470,91 @@ internal sealed class LyricsPanel : Control
 
     /// <summary>How far through the CURRENT line we are, 0..1. Uses real word timings when the source had
     /// them, otherwise spreads the line evenly over the gap to the next one.</summary>
+    /// <summary>The line the sheet aims at.</summary>
+    private int AimAt(int cur, TimeSpan now)
+    {
+        // A timestamped line with no words is an instrumental beat. Nothing is sung, so nothing lights up —
+        // but the sheet must not sit staring at a blank: aim at the next line that actually has words, so the
+        // listener is already reading what comes back in.
+        int aim = cur;
+        while (aim >= 0 && aim < _rows.Length && _rows[aim].Words.Count == 0) aim++;
+        // Past the last word (the outro): aim BACK at the final line that has words, so the song's last
+        // line stays where the eye is instead of the sheet emptying out under the header.
+        if (aim >= _rows.Length)
+        {
+            aim = cur;
+            while (aim > 0 && _rows[aim].Words.Count == 0) aim--;
+        }
+        // A long break keeps the dots at the focus point instead of pre-scrolling: the sheet only sets off
+        // for the next line about a second before it is sung, so the words arrive already in place.
+        if (_synced && cur >= 0 && cur < _rows.Length && _rows[cur].Beat && cur + 1 < _lines.Count
+            && (_lines[cur + 1].At - now).TotalSeconds > 0.9) aim = cur;
+        return aim;
+    }
+
+    /// <summary>Where the followed sheet is heading: the aimed line at the focus, drifting through the sung line
+    /// toward the next (Classic: jumping from line to line).</summary>
+    private double TargetScroll(int aim, int cur, TimeSpan now)
+    {
+        // Before the first line the sheet aims at line 1 exactly where it will sit when it lights, so
+        // the opening hand-off is a pure change of colour with no scroll at all.
+        int t = cur >= 0 ? aim : 0;
+        double target = _rows[t].Top;
+        // Classic: no drift through the line and no glide to the next - 1995 karaoke jumped to each line as it started
+        if (cur >= 0 && t == cur && cur + 1 < _rows.Length && !Theme.Classic)
+            target += (_rows[cur + 1].Top - _rows[cur].Top) * LineProgress(cur, now);
+        return target - (SheetBottom - HeaderH) * 0.40;
+    }
+
+    // ---- frame scheduling (see the timer in the constructor) ----
+    private (int cur, int top, int fill, int beat, bool playing) _paintedSig = (int.MinValue, 0, 0, 0, false);
+
+    /// <summary>What a frame shows that moves with time, quantised to what can be seen: the sung line, the sheet's
+    /// whole-pixel scroll, the accent bar's fill and the beat dots.</summary>
+    private (int cur, int top, int fill, int beat, bool playing) Sig(TimeSpan now, int cur, int top)
+    {
+        int fill = -1, beat = -1;
+        if (cur >= 0 && cur < _rows.Length)
+        {
+            if (_rows[cur].Words.Count > 0) fill = (int)(Math.Max(10, _rows[cur].Height - 4) * LineProgress(cur, now));
+            else if (_rows[cur].Beat && cur + 1 < _lines.Count)
+            {
+                double span = (_lines[cur + 1].At - _lines[cur].At).TotalSeconds;
+                beat = (int)(Math.Clamp(span <= 0 ? 1 : (now - _lines[cur].At).TotalSeconds / span, 0, 1) * 96);
+            }
+        }
+        else if (cur < 0 && _lines.Count > 0 && _lines[0].At.TotalSeconds >= BeatSeconds)
+            beat = (int)(Math.Clamp(now.TotalSeconds / _lines[0].At.TotalSeconds, 0, 1) * 96);
+        return (cur, top, fill, beat, _playing);
+    }
+
+    /// <summary>Would the next frame show anything new?</summary>
+    private bool FrameDue()
+    {
+        if (_holdDir != 0) return true;
+        if (_picking || _lines.Count == 0 || _measuredFor != Width || _rows.Length != _lines.Count) return false;   // (a re-layout comes with its own repaint)
+        int ms = Environment.TickCount;
+        if (_synced && Math.Abs(_userScroll) > 0.5 && ms - _lastUserScrollTick > 4000) return true;   // a peek easing home
+        if (Anim.MotionEnabled && ((_handoffT0 != 0 && ms - _handoffT0 < HandoffMs) || (_revealT0 != 0 && ms - _revealT0 < 260))) return true;
+        if (!_synced) return false;
+        var now = Now;
+        int cur = LyricsLookup.IndexAt(_lines, now);
+        var sig = Sig(now, cur, PredictTop(now, cur));
+        if (Anim.MotionEnabled && sig.beat >= 0) return true;   // the dots breathe
+        return !sig.Equals(_paintedSig);
+    }
+
+    /// <summary>The sheet's whole-pixel scroll the next frame would paint: the same glide step the paint takes.</summary>
+    private int PredictTop(TimeSpan now, int cur)
+    {
+        double us = _userScroll;
+        if (_synced && Environment.TickCount - _lastUserScrollTick > 4000) us = Theme.Classic ? 0 : us * 0.86;
+        double target = TargetScroll(AimAt(cur, now), cur, now);
+        double dt = Math.Min(0.05, _frameTime.Elapsed.TotalSeconds);
+        double s = !_landed || Theme.Classic ? target : _scroll + (target - _scroll) * (1 - Math.Exp(-dt / 0.16));
+        return (int)Math.Round(s + us);
+    }
+
     private double LineProgress(int i, TimeSpan now)
     {
         if (i < 0 || i >= _lines.Count) return 0;
@@ -542,34 +627,12 @@ internal sealed class LyricsPanel : Control
         // timings the sheet has no "home" to return to, and this used to slide the words back to the first
         // line a few seconds after every scroll.
         if (_synced && Environment.TickCount - _lastUserScrollTick > 4000) _userScroll = Theme.Classic ? 0 : _userScroll * 0.86;   // Classic: back in one go
-        // A timestamped line with no words is an instrumental beat. Nothing is sung, so nothing lights up —
-        // but the sheet must not sit staring at a blank: aim at the next line that actually has words, so the
-        // listener is already reading what comes back in.
-        int aim = cur;
-        while (aim >= 0 && aim < _rows.Length && _rows[aim].Words.Count == 0) aim++;
-        // Past the last word (the outro): aim BACK at the final line that has words, so the song's last
-        // line stays where the eye is instead of the sheet emptying out under the header.
-        if (aim >= _rows.Length)
-        {
-            aim = cur;
-            while (aim > 0 && _rows[aim].Words.Count == 0) aim--;
-        }
-        // A long break keeps the dots at the focus point instead of pre-scrolling: the sheet only sets off
-        // for the next line about a second before it is sung, so the words arrive already in place.
-        if (_synced && cur >= 0 && cur < _rows.Length && _rows[cur].Beat && cur + 1 < _lines.Count
-            && (_lines[cur + 1].At - now).TotalSeconds > 0.9) aim = cur;
+        int aim = AimAt(cur, now);
 
         double dtF = Math.Min(0.05, _frameTime.Elapsed.TotalSeconds);
         if (_synced && _lines.Count > 0)
         {
-            // Before the first line the sheet aims at line 1 exactly where it will sit when it lights, so
-            // the opening hand-off is a pure change of colour with no scroll at all.
-            int t = cur >= 0 ? aim : 0;
-            double target = _rows[t].Top;
-            // Classic: no drift through the line and no glide to the next - 1995 karaoke jumped to each line as it started
-            if (cur >= 0 && t == cur && cur + 1 < _rows.Length && !Theme.Classic)
-                target += (_rows[cur + 1].Top - _rows[cur].Top) * LineProgress(cur, now);
-            target -= (SheetBottom - HeaderH) * 0.40;
+            double target = TargetScroll(aim, cur, now);
             if (!_landed || Theme.Classic) { _scroll = target; _landed = true; }     // open ON the song, not above it
             else _scroll += (target - _scroll) * (1 - Math.Exp(-dtF / 0.16));
             _settling = Math.Abs(target - _scroll) > 0.5;
@@ -582,6 +645,7 @@ internal sealed class LyricsPanel : Control
         g.SetClip(new Rectangle(0, HeaderH, Width, SheetBottom - HeaderH));
         double top = _scroll + _userScroll;
         double prog = cur >= 0 ? LineProgress(cur, now) : 0;
+        _paintedSig = Sig(now, cur, (int)Math.Round(top));
 
         // Where the eye rests. Lines dim by their PIXEL distance from it, not by how many lines away they
         // are, so brightness follows the glide continuously instead of the whole sheet re-colouring in one

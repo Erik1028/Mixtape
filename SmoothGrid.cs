@@ -21,6 +21,68 @@ internal sealed class SmoothGrid : DataGridView
     /// current, and after any keyboard navigation WinForms would otherwise draw the dots around the song cell.</summary>
     protected override bool ShowFocusCues => false;
 
+    // ---- painting band by band ----
+    // A scroll step DOWN leaves two thin strips to repaint: the rows it uncovered at the bottom, and the soft edge under
+    // the header at the top (MainForm.InvalidateScrollEdge). WM_PAINT only hands a control the BOX around its update
+    // region, so the grid repainted every visible row between them (~12 ms a step at 1600x900) for what is two strips.
+    // The update region's bands are read just before WM_PAINT and each band is painted on its own, inside the same
+    // paint (the double buffer is shown once, so nothing can flicker between the bands).
+    private Rectangle[]? _bands;
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg != 0x000F || m.WParam != IntPtr.Zero) { base.WndProc(ref m); return; }   // only a WM_PAINT from BeginPaint (not a print)
+        // (cleared only after THIS message: BeginPaint sends WM_ERASEBKGND back into WndProc before OnPaint runs)
+        _bands = UpdateBands();
+        try { base.WndProc(ref m); }
+        finally { _bands = null; }
+    }
+
+    /// <summary>The update region as full-width horizontal bands, or null when it is one block (or the bands leave too
+    /// small a gap to be worth a second pass).</summary>
+    private Rectangle[]? UpdateBands()
+    {
+        IntPtr rgn = CreateRectRgn(0, 0, 0, 0);
+        try
+        {
+            if (GetUpdateRgn(Handle, rgn, false) != 3) return null;   // not a COMPLEXREGION: a single rectangle
+            using var region = Region.FromHrgn(rgn);
+            using var identity = new System.Drawing.Drawing2D.Matrix();
+            var bands = new List<Rectangle>();
+            foreach (var s in region.GetRegionScans(identity))
+            {
+                var r = Rectangle.Round(s);
+                r = new Rectangle(0, r.Y, Width, r.Height);   // rows span the width anyway
+                if (bands.Count > 0 && r.Y <= bands[^1].Bottom) bands[^1] = Rectangle.Union(bands[^1], r);
+                else bands.Add(r);
+            }
+            if (bands.Count < 2) return null;
+            int covered = 0; foreach (var b in bands) covered += b.Height;
+            return covered < (bands[^1].Bottom - bands[0].Y) * 2 / 3 ? bands.ToArray() : null;
+        }
+        finally { DeleteObject(rgn); }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var bands = _bands;
+        _bands = null;
+        if (bands is null) { base.OnPaint(e); return; }
+        foreach (var b in bands)
+        {
+            var r = Rectangle.Intersect(b, e.ClipRectangle);
+            if (r.IsEmpty) continue;
+            var state = e.Graphics.Save();
+            e.Graphics.SetClip(r, System.Drawing.Drawing2D.CombineMode.Intersect);
+            base.OnPaint(new PaintEventArgs(e.Graphics, r));
+            e.Graphics.Restore(state);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int GetUpdateRgn(IntPtr hWnd, IntPtr hRgn, bool erase);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+
     public SmoothGrid()
     {
         DoubleBuffered = true;

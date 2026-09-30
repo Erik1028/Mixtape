@@ -1970,6 +1970,11 @@ internal static class Program
             Application.DoEvents();
             MainForm.Trace("np-local: " + (form.PreviewNowPlayingLocal(npl, double.TryParse(Environment.GetEnvironmentVariable("MIX_NP_AT"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double npa) ? npa : 30) ? "ok" : "NOT FOUND"));
         }
+        if (Environment.GetEnvironmentVariable("MIX_FIND_SYNCED") == "1")   // which PC songs have synced lyrics (-> <out>.synced.txt), to pick one for the lyrics benches
+        {
+            for (int i = 0; i < 100 && form.PreviewLocalCount == 0; i++) { Application.DoEvents(); Thread.Sleep(50); }
+            File.WriteAllText(outPng + ".synced.txt", form.PreviewFindSynced());
+        }
         if (Environment.GetEnvironmentVariable("MIX_PLAY_LOCAL") is { Length: > 0 } ppl)   // really play a PC-library song (muted) through the engine
         {
             for (int i = 0; i < 100 && form.PreviewLocalCount == 0; i++) { Application.DoEvents(); Thread.Sleep(50); }
@@ -2027,6 +2032,10 @@ internal static class Program
         var appRoot = (Control?)form.PreviewRoot ?? form;
         if (live)
         {
+            if (int.TryParse(Environment.GetEnvironmentVariable("MIX_IDLEBENCH"), out int idleSec) && idleSec > 0)   // CPU while the window just sits there (or plays: MIX_PLAY_LOCAL)
+                File.WriteAllText(outPng + ".idle.txt", IdleBench(idleSec));
+            if (int.TryParse(Environment.GetEnvironmentVariable("MIX_PAINTBENCH"), out int benchN) && benchN > 0)   // what a frame of this page costs
+                File.WriteAllText(outPng + ".bench.txt", form.PreviewPaintBench(benchN));
             if (Environment.GetEnvironmentVariable("MIX_HOVER_SWEEP") == "1")   // a pointer sweep, copied off the screen as it stands
                 File.WriteAllText(outPng + ".sweep.txt", form.PreviewHoverSweep(outPng));
             form.PreviewLivePaint();   // hover / selection / scroll round-trips: the incremental repaints a user causes
@@ -2602,6 +2611,96 @@ internal static class Program
     private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hwnd, int cmd);
+
+    /// <summary>Harness (MIX_IDLEBENCH=seconds): what the app costs while its message loop runs untouched for that long,
+    /// after a one-second settle - idle, or with MIX_PLAY_LOCAL / MIX_STAGE / MIX_SIDE playing with the lyrics open. The
+    /// loop sleeps until a message arrives, so the harness adds nothing of its own. The CPU comes from the processor's
+    /// cycle counters: Windows' own CPU times are sampled at the clock tick, and work that a timer wakes (it runs right on
+    /// the tick) came out up to three times too high. Also lists the windows that painted, took timer ticks or posted
+    /// callbacks - where an idle cost hides.</summary>
+    private static string IdleBench(int seconds)
+    {
+        int wakes = 0; double handling = 0;
+        void PumpFor(int ms, bool counted)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < ms)
+            {
+                MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, (uint)Math.Max(1, ms - sw.ElapsedMilliseconds), 0x04FF /* QS_ALLINPUT */, 0x4 /* MWMO_INPUTAVAILABLE */);
+                long t = System.Diagnostics.Stopwatch.GetTimestamp();
+                Application.DoEvents();
+                if (counted) { wakes++; handling += System.Diagnostics.Stopwatch.GetElapsedTime(t).TotalMilliseconds; }
+            }
+        }
+        PumpFor(1000, false);
+        var me = System.Diagnostics.Process.GetCurrentProcess();
+        int gc0 = GC.CollectionCount(0);
+        CensusStart();
+        QueryThreadCycleTime(GetCurrentThread(), out ulong ui0); QueryProcessCycleTime(me.Handle, out ulong pr0);
+        var wall = System.Diagnostics.Stopwatch.StartNew();
+        PumpFor(seconds * 1000, true);
+        QueryThreadCycleTime(GetCurrentThread(), out ulong ui1); QueryProcessCycleTime(me.Handle, out ulong pr1);
+        string census = CensusStop();
+        me.Refresh();
+        double mhz = Convert.ToDouble(Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0", "~MHz", 3000) ?? 3000);
+        double pms = (pr1 - pr0) / (mhz * 1000), ums = (ui1 - ui0) / (mhz * 1000);
+        return $"{wall.Elapsed.TotalSeconds:0.0} s: {pms:0} ms of CPU = {pms / wall.Elapsed.TotalMilliseconds * 100:0.00} % of one core "
+            + $"(UI thread {ums:0} ms: {wakes} wake-ups, {handling:0} ms handling messages); gen0 GCs +{GC.CollectionCount(0) - gc0}; "
+            + $"private {me.PrivateMemorySize64 / 1048576.0:0} MB, working set {me.WorkingSet64 / 1048576.0:0} MB" + Environment.NewLine + census;
+    }
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint MsgWaitForMultipleObjectsEx(uint count, IntPtr handles, uint ms, uint wakeMask, uint flags);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool QueryThreadCycleTime(IntPtr thread, out ulong cycles);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool QueryProcessCycleTime(IntPtr process, out ulong cycles);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetCurrentThread();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+
+    // The idle bench's census: per window, the paints (queued and sent), timer ticks and posted callbacks.
+    private delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int id, HookProc fn, IntPtr mod, uint thread);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr h);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr wParam, IntPtr lParam);
+    private static readonly Dictionary<IntPtr, int[]> Census = new();
+    private static HookProc? _getMsg, _callWnd;   // (held here: the hooks must not be collected while installed)
+    private static IntPtr _hGet, _hCall;
+    private static void Count(IntPtr hwnd, int k) { if (!Census.TryGetValue(hwnd, out var a)) Census[hwnd] = a = new int[4]; a[k]++; }
+    private static void CensusStart()
+    {
+        Census.Clear();
+        _getMsg = (code, wp, lp) =>
+        {
+            if (code >= 0 && wp == (IntPtr)1)   // PM_REMOVE: a message really taken off the queue (MSG: hwnd, message)
+            {
+                IntPtr h = System.Runtime.InteropServices.Marshal.ReadIntPtr(lp);
+                int msg = System.Runtime.InteropServices.Marshal.ReadInt32(lp, IntPtr.Size);
+                if (msg == 0x000F) Count(h, 0); else if (msg == 0x0113) Count(h, 1); else if (msg >= 0xC000) Count(h, 2);
+            }
+            return CallNextHookEx(_hGet, code, wp, lp);
+        };
+        _callWnd = (code, wp, lp) =>
+        {
+            if (code >= 0)   // CWPSTRUCT: lParam, wParam, message, hwnd
+            {
+                int msg = System.Runtime.InteropServices.Marshal.ReadInt32(lp, IntPtr.Size * 2);
+                IntPtr h = System.Runtime.InteropServices.Marshal.ReadIntPtr(lp, IntPtr.Size * 2 + 8);
+                if (msg == 0x000F) Count(h, 3);
+            }
+            return CallNextHookEx(_hCall, code, wp, lp);
+        };
+        _hGet = SetWindowsHookEx(3, _getMsg, IntPtr.Zero, GetCurrentThreadId());    // WH_GETMESSAGE
+        _hCall = SetWindowsHookEx(4, _callWnd, IntPtr.Zero, GetCurrentThreadId());  // WH_CALLWNDPROC
+    }
+    private static string CensusStop()
+    {
+        UnhookWindowsHookEx(_hGet); UnhookWindowsHookEx(_hCall);
+        var rows = Census.OrderByDescending(kv => kv.Value.Sum()).Take(8).Select(kv =>
+        {
+            var c = Control.FromHandle(kv.Key);
+            string who = c is null ? $"window {kv.Key:X}" : $"{c.GetType().Name} {c.Width}x{c.Height}{(c.Visible ? "" : " (hidden)")}";
+            return $"    {who,-44} paints {kv.Value[0]} queued + {kv.Value[3]} sent, timer ticks {kv.Value[1]}, posted callbacks {kv.Value[2]}";
+        });
+        return string.Join(Environment.NewLine, rows) + Environment.NewLine;
+    }
 
     /// <summary>A near-invisible live-render window must never catch the user's own input: a click, a hover or a file
     /// dragged across it would land in the test window instead of whatever they see there. Transparent on a layered
