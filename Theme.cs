@@ -225,6 +225,26 @@ internal static class Theme
     /// asks Windows 11 NOT to round it (DWMWCP_DONOTROUND), since a 95 window was a rectangle.</summary>
     public static int DwmCorner(int modern) => Classic ? 1 : modern;
 
+    /// <summary>
+    /// Classic: take Windows 11's own open / close / minimize animation off a window (its DWM transitions) - the windows
+    /// of 1995 appeared in one go. Every window class calls this from OnHandleCreated: the handle exists and nothing is
+    /// shown yet, which is the only time it works (while CreateWindow is still running DWM refuses it with E_HANDLE).
+    /// </summary>
+    public static void ClassicNoTransitions(IntPtr hwnd)
+    {
+        if (!Classic) return;
+        try
+        {
+            int on = 1;
+            if (DwmSetWindowAttribute(hwnd, 3 /* DWMWA_TRANSITIONS_FORCEDISABLED */, ref on, sizeof(int)) == 0) Interlocked.Increment(ref TransitionsOff);
+        }
+        catch { }
+    }
+    /// <summary>How many windows DWM has taken <see cref="ClassicNoTransitions"/> for (the --classicwin test reads it).</summary>
+    internal static int TransitionsOff;
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
     /// <summary>The DWM border line for a borderless window: none in Classic, where the window draws its own
     /// raised frame and a grey line round it would sit on top of the frame's white outer edge.</summary>
     public static int DwmBorder(Color modern) => Classic ? unchecked((int)0xFFFFFFFE) : modern.R | (modern.G << 8) | (modern.B << 16);

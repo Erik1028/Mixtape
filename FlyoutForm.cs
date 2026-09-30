@@ -53,6 +53,7 @@ internal abstract class FlyoutForm : Form, IGlassHost
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 open/close/minimize animation
         try { int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)); } catch { }                  // dark mode
         try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }                // DWMWCP_ROUND
         try { int none = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(Handle, 34, ref none, sizeof(int)); } catch { } // no DWM border line

@@ -833,7 +833,7 @@ internal sealed class LyricsStage : Control
 
         // ---- scroll ----
         // Only a followed sheet has a home to ease back to; an untimed one stays where the reader left it.
-        if (_synced && _clock.Elapsed.TotalMilliseconds - _lastUserScrollTick > 4000) _userScroll *= 0.86;
+        if (_synced && _clock.Elapsed.TotalMilliseconds - _lastUserScrollTick > 4000) _userScroll = Theme.Classic ? 0 : _userScroll * 0.86;   // Classic: back in one go
         int aim = cur;
         while (aim >= 0 && aim < _rows.Length && _rows[aim].Words.Count == 0) aim++;
         if (aim >= _rows.Length) { aim = cur; while (aim > 0 && _rows[aim].Words.Count == 0) aim--; }
@@ -845,10 +845,11 @@ internal sealed class LyricsStage : Control
         {
             int tt = cur >= 0 ? aim : 0;
             double target = _rows[tt].Top;
-            if (cur >= 0 && tt == cur && cur + 1 < _rows.Length)
+            // Classic: 1995 karaoke - no drift through the line, no glide to the next; the sheet jumps as a line starts
+            if (cur >= 0 && tt == cur && cur + 1 < _rows.Length && !Theme.Classic)
                 target += (_rows[cur + 1].Top - _rows[cur].Top) * LineProgress(cur, now);
             target -= FocusY;
-            if (!_landed) { _scroll = target; _landed = true; }
+            if (!_landed || Theme.Classic) { _scroll = target; _landed = true; }
             else _scroll += (target - _scroll) * (1 - Math.Exp(-dt / 0.22));
         }
         double top = _scroll + _userScroll;

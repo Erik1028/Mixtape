@@ -7331,6 +7331,7 @@ internal sealed class MainForm : Form, IMessageFilter
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 open/close/minimize animation
         ApplyWindowChrome();
     }
 

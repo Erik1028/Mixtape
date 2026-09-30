@@ -32,6 +32,7 @@ internal static class Tip
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 fade
             try { int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)); } catch { }
             try { int round = Theme.DwmCorner(3); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }   // DWMWCP_ROUNDSMALL
             try { int bc = Theme.DwmBorder(Theme.Border); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }

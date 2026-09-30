@@ -582,6 +582,7 @@ internal class GlassDialog : Form, IGlassHost
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 open/close/minimize animation
         try { int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)); } catch { }   // dark title bar
         try { int round = Theme.DwmCorner(2); DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }  // DWMWCP_ROUND — rounded corners (needed once a dialog goes borderless)
         // Colour the title bar to match the dark glass body so the default "grey bar" blends into the app

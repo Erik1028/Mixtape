@@ -35,6 +35,9 @@ internal static class Program
         // Tag tidy-up writes to the iTunesDB, so it gets the same treatment the smart playlists have:
         // a sandbox copy, the real scan + apply, then a reload that checks every value landed. → ipod-tidytest.txt
         if (args.Length >= 2 && args[0] == "--tidytest") { RunTidyTest(args[1]); return; }
+        // The Windows 95 look's windows: each must have had Windows 11's open/close/minimize transitions switched off
+        // as its handle was created - a dialog, a message box and a popover are made and counted. → ipod-classicwin.txt
+        if (args.Length >= 1 && args[0] == "--classicwin") { RunClassicWinTest(); return; }
         // How often a tween actually gets a frame, on both pacers. → the console
         if (args.Length >= 1 && args[0] == "--animbench") { RunAnimBench(); return; }
         // The Classic skin's pixel icons on one sheet, at 1x and 4x, with any malformed map reported. → the png
@@ -266,6 +269,10 @@ internal static class Program
         // scrollbar, the rail, their fonts) before its constructor body runs, and they must already see it.
         Theme.SetSkin(AppSettings.Load().ClassicSkin);
         Theme.DitherCovers = AppSettings.Load().DitherCovers;
+        // 1995 had no motion: views, dialogs, menus and tips appeared in one go, and the wheel scrolled by the line.
+        // Every tween in the app answers to this one switch (the one "Show animations in Windows" turns off), and
+        // each window takes Windows 11's own open / close / minimize animation off itself (Theme.ClassicNoTransitions).
+        if (Theme.Classic) Anim.MotionEnabled = false;
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -1812,6 +1819,10 @@ internal static class Program
             // and the events it raised logged after each step to <out>.steps.txt.
             if (Environment.GetEnvironmentVariable("MIX_CF_CLICKS") is { Length: > 0 } clicks)
             {
+                // The first click focuses the deck, which activates this window - and then whatever the person at the
+                // computer is doing (a wheel, a letter: type-to-jump) lands in it too. Real input arrives POSTED to the
+                // queue; the steps below are SENT and never pass the filter, so dropping posted input keeps it clean.
+                Application.AddMessageFilter(new DropRealInput());
                 var log = new System.Text.StringBuilder();
                 cf.ModeChanged += m => log.AppendLine("  event ModeChanged " + m);
                 cf.CloseRequested += () => log.AppendLine("  event CloseRequested");
@@ -2953,6 +2964,33 @@ internal static class Program
             form.Close();
         };
         Application.Run(form);
+    }
+
+    /// <summary>Harness: drops real keyboard and mouse input (posted to the queue) - sent test messages pass untouched.</summary>
+    private sealed class DropRealInput : IMessageFilter
+    {
+        public bool PreFilterMessage(ref Message m) => m.Msg is (>= 0x0100 and <= 0x0109) or (>= 0x0200 and <= 0x020E);
+    }
+
+    private static void RunClassicWinTest()
+    {
+        Theme.SetSkin(true);
+        Anim.MotionEnabled = false;
+        int before = Theme.TransitionsOff;
+        var windows = new List<Form>
+        {
+            new CardDialog { Text = "card" },                                                                   // every dialog of the app
+            MessageDialog.Preview("Test", "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Information),        // the message boxes
+            new GlassDialog { Text = "glass" },                                                                 // Settings' base
+        };
+        foreach (var w in windows) { w.StartPosition = FormStartPosition.Manual; w.Location = new Point(-3000, -3000); w.ShowInTaskbar = false; w.Show(); }
+        Application.DoEvents();
+        int got = Theme.TransitionsOff - before;
+        foreach (var w in windows) w.Dispose();
+        bool ok = got == windows.Count;
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-classicwin.txt"),
+            $"windows with Windows 11 transitions switched off: {got} of {windows.Count}" + Environment.NewLine
+            + $"RESULT: {(ok ? "OK" : "FAIL")}" + Environment.NewLine);
     }
 
     private static void RunTidyTest(string fixtureDb)

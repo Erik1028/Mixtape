@@ -541,7 +541,7 @@ internal sealed class LyricsPanel : Control
         // Ease back to the followed line after a peek - but ONLY when there is a line to follow. With no
         // timings the sheet has no "home" to return to, and this used to slide the words back to the first
         // line a few seconds after every scroll.
-        if (_synced && Environment.TickCount - _lastUserScrollTick > 4000) _userScroll *= 0.86;
+        if (_synced && Environment.TickCount - _lastUserScrollTick > 4000) _userScroll = Theme.Classic ? 0 : _userScroll * 0.86;   // Classic: back in one go
         // A timestamped line with no words is an instrumental beat. Nothing is sung, so nothing lights up —
         // but the sheet must not sit staring at a blank: aim at the next line that actually has words, so the
         // listener is already reading what comes back in.
@@ -566,10 +566,11 @@ internal sealed class LyricsPanel : Control
             // the opening hand-off is a pure change of colour with no scroll at all.
             int t = cur >= 0 ? aim : 0;
             double target = _rows[t].Top;
-            if (cur >= 0 && t == cur && cur + 1 < _rows.Length)
+            // Classic: no drift through the line and no glide to the next - 1995 karaoke jumped to each line as it started
+            if (cur >= 0 && t == cur && cur + 1 < _rows.Length && !Theme.Classic)
                 target += (_rows[cur + 1].Top - _rows[cur].Top) * LineProgress(cur, now);
             target -= (SheetBottom - HeaderH) * 0.40;
-            if (!_landed) { _scroll = target; _landed = true; }     // open ON the song, not above it
+            if (!_landed || Theme.Classic) { _scroll = target; _landed = true; }     // open ON the song, not above it
             else _scroll += (target - _scroll) * (1 - Math.Exp(-dtF / 0.16));
             _settling = Math.Abs(target - _scroll) > 0.5;
         }
