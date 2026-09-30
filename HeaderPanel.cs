@@ -248,7 +248,7 @@ internal sealed class HeaderPanel : Panel
         // cluster asks each button how wide it really needs to be. Packing by the table alone made
         // "Zene hozzáadása" run straight into "Törlés".
         var items = new (ThemedButton b, int w)[] { (CoverButton, 124), (AddButton, 132), (DeleteButton, 104) };
-        for (int i = 0; i < items.Length; i++) items[i].w = Math.Max(items[i].w, items[i].b.NeededWidth);
+        for (int i = 0; i < items.Length; i++) items[i].w = Math.Max(items[i].w, items[i].b.LabelWidth);   // the FULL label, compact or not (see LabelWidth)
         int right = Width - Pad;
         int minClusterLeft = TextX + TitleMinW + 16;   // the right cluster (search + buttons) must not reach left of this
 

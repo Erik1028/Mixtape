@@ -3352,6 +3352,9 @@ internal sealed class MainForm : Form, IMessageFilter
 
         _coverFlow.SetItems(items, start);
         _coverFlow.PlayingTag = _playingTrack is not null ? CoverTag(_playingTrack, mode) : null;
+        // the Classic header's meta line: "135 albums  ·  Local Music", like the list page's own
+        _coverFlow.SetMeta(CountNoun(items.Count, mode switch { CoverFlowView.BrowseMode.Songs => "song", CoverFlowView.BrowseMode.Artists => "artist", _ => "album" }),
+            local ? Loc.T("Local Music") : _device?.Profile.ModelName ?? _device?.Profile.ModelNumber ?? "iPod");
 
         int gen = ++_cfGen;
         string? mount = _device?.MountRoot;
@@ -3399,6 +3402,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_coverFlow is null || _content is null) return;
         var a = _content.Bounds;
         if (!_deck) a.Height = Math.Max(1, a.Height - NowPlayingBar.H);   // deck mode: the whole card is content
+        _coverFlow.FootH = _deck ? CardFoot.H : 0;   // Classic: its frame ends where the list's does
         _coverFlow.Bounds = a;
 
         int w = a.Width, h = a.Height, r = CardRadius;
@@ -3966,6 +3970,14 @@ internal sealed class MainForm : Form, IMessageFilter
         const int s = 256;
         var bmp = new Bitmap(s, s);
         using var g = Graphics.FromImage(bmp);
+        if (Theme.Classic)
+        {
+            // 1995: a plain grey picture with the look's own CD icon blown up in the middle - reserved colours only,
+            // so the 256-colour dither leaves it solid instead of speckling a gradient
+            g.Clear(Theme.Face);
+            ClassicIcons.Draw(g, ClassicIcons.Id.Album, (s - 128) / 2, (s - 128) / 2, 8);
+            return bmp;
+        }
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         using (var br = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, s, s),
             Theme.Blend(Theme.PanelBg, Color.White, 0.07), Theme.Blend(Theme.PanelBg, Color.Black, 0.18), 60f))

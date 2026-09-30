@@ -69,6 +69,21 @@ internal static class Halftone
 
     private static int Level(float v) => Math.Clamp((int)Math.Round(v / 51f), 0, 5) * 51;
 
+    /// <summary>One pixel onto the halftone palette at (<paramref name="x"/>, <paramref name="y"/>): the same pattern,
+    /// cube and reserved colours as <see cref="Apply"/>, for a picture rendered pixel by pixel (Cover Flow's warp).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void Dither(ref int r, ref int g, ref int b, int x, int y)
+    {
+        if (Reserved.Contains((r << 16) | (g << 8) | b)) return;
+        float t = ((Bayer[((y & 7) << 3) | (x & 7)] + 0.5f) / 64f - 0.5f) * 51f;
+        r = Level(r + t); g = Level(g + t); b = Level(b + t);
+    }
+
+    /// <summary>The ordered pattern's rank at (<paramref name="x"/>, <paramref name="y"/>), 0..63: a pixel belongs to
+    /// a stipple of density d when its rank is below d * 64.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int Rank(int x, int y) => Bayer[((y & 7) << 3) | (x & 7)];
+
     // One halftoned copy per picture and size, dropped with the picture (weak keys) and trimmed when a window
     // resize leaves a picture with several sizes it will not be shown at again.
     private static readonly ConditionalWeakTable<Image, Dictionary<Size, Bitmap>> Cache = new();

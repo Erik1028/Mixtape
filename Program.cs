@@ -300,6 +300,8 @@ internal static class Program
     private static extern uint RegisterWindowMessage(string msg);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private static readonly string[] TestImageExt = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp" };
 
@@ -1801,9 +1803,49 @@ internal static class Program
                 items.Add(new CoverFlowView.Item(CoverArt.GenerateSquare(i * 7 + 3, CoverFlowView.SourcePx), titles[i % titles.Length], artists[i % artists.Length], i));
             cf.SetItems(items, titles.Length);
             cf.PlayingTag = items[titles.Length].Tag; // so the "Now Playing" chip shows in the preview
+            cf.SetMeta(items.Count + " albums", "Local Music");
             if (float.TryParse(Environment.GetEnvironmentVariable("MIX_CF_POS"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float cfPos))
                 cf.PreviewPos(cfPos);   // MIX_CF_POS=<float>: a frame mid-crossing (the live warp) instead of the settled deck
             for (int i = 0; i < 8; i++) { Application.DoEvents(); Thread.Sleep(60); }
+            // MIX_CF_CLICKS=part,part>dx,part~ms,... : real mouse messages at the named parts of the page (see
+            // CoverFlowView.PreviewRect) - a click, a press dragged dx px, or a press held ms - with the deck's state
+            // and the events it raised logged after each step to <out>.steps.txt.
+            if (Environment.GetEnvironmentVariable("MIX_CF_CLICKS") is { Length: > 0 } clicks)
+            {
+                var log = new System.Text.StringBuilder();
+                cf.ModeChanged += m => log.AppendLine("  event ModeChanged " + m);
+                cf.CloseRequested += () => log.AppendLine("  event CloseRequested");
+                cf.Activated += it => log.AppendLine("  event Activated " + it.Title);
+                void Pump(int ms) { var sw = System.Diagnostics.Stopwatch.StartNew(); while (sw.ElapsedMilliseconds < ms) { Application.DoEvents(); Thread.Sleep(10); } }
+                IntPtr LP(Point p) => (IntPtr)((p.Y << 16) | (p.X & 0xFFFF));
+                // the form sits off screen, where Windows sends no WM_PAINT - so paint it by hand before each step,
+                // which is what lays the page out (the parts' rectangles come from the last paint)
+                void Layout() { using var tmp = new Bitmap(cf.Width, cf.Height); cf.DrawToBitmap(tmp, new Rectangle(0, 0, cf.Width, cf.Height)); }
+                log.AppendLine("start: " + cf.PreviewState());
+                foreach (string stepRaw in clicks.Split(','))
+                {
+                    Layout();
+                    bool lose = stepRaw.EndsWith('!');   // "part~ms!": the capture goes elsewhere mid-press, before the release
+                    string step = lose ? stepRaw[..^1] : stepRaw;
+                    string part = step; int dx = 0, hold = 60;
+                    if (step.Contains('>')) { part = step[..step.IndexOf('>')]; dx = int.Parse(step[(step.IndexOf('>') + 1)..]); }
+                    else if (step.Contains('~')) { part = step[..step.IndexOf('~')]; hold = int.Parse(step[(step.IndexOf('~') + 1)..]); }
+                    var r = cf.PreviewRect(part);
+                    if (r.IsEmpty) { log.AppendLine(step + ": NO SUCH PART"); continue; }
+                    var p0 = new Point(r.X + r.Width / 2, r.Y + r.Height / 2);
+                    SendMessage(cf.Handle, 0x0200, IntPtr.Zero, LP(p0));   // WM_MOUSEMOVE (hover)
+                    SendMessage(cf.Handle, 0x0201, (IntPtr)1, LP(p0));     // WM_LBUTTONDOWN
+                    log.AppendLine($"  {step} at {p0.X},{p0.Y} in {r} -> pressed: {cf.PreviewState()}");
+                    Pump(hold);
+                    var p1 = p0;
+                    for (int k = 1; k <= 10 && dx != 0; k++) { p1 = new Point(p0.X + dx * k / 10, p0.Y); SendMessage(cf.Handle, 0x0200, (IntPtr)1, LP(p1)); Pump(25); }
+                    if (lose) { cf.Capture = false; Pump(700); log.AppendLine($"  {step} capture lost -> {cf.PreviewState()}"); }
+                    SendMessage(cf.Handle, 0x0202, IntPtr.Zero, LP(p1));   // WM_LBUTTONUP
+                    Pump(700);
+                    log.AppendLine(step + ": " + cf.PreviewState());
+                }
+                File.WriteAllText(outPng + ".steps.txt", log.ToString());
+            }
             using var cbmp2 = new Bitmap(f.Width, f.Height);
             f.DrawToBitmap(cbmp2, new Rectangle(0, 0, f.Width, f.Height));
             cbmp2.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
@@ -1904,7 +1946,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_COMPACT") is { } cmp) { Application.DoEvents(); form.PreviewRows(cmp != "0"); }   // row density, in memory only
         if (Environment.GetEnvironmentVariable("MIX_THEME_SWITCH") is { Length: > 0 } tv) { Application.DoEvents(); form.PreviewThemeSwitch(tv); }   // a runtime palette change (baked-colour check)
         if (Environment.GetEnvironmentVariable("MIX_ACCENT") is { Length: > 0 } acc) { Application.DoEvents(); form.PreviewAccent(acc); }
-        if (Environment.GetEnvironmentVariable("MIX_OPEN_CF") == "1") { Application.DoEvents(); form.PreviewCoverFlow(); for (int i = 0; i < 8; i++) { Application.DoEvents(); Thread.Sleep(60); } }   // Cover Flow opened the way the button opens it   // a runtime accent change (preset name or #hex)
+        if (Environment.GetEnvironmentVariable("MIX_OPEN_CF") == "1") { for (int i = 0; i < 100 && view.StartsWith("local") && form.PreviewLocalCount == 0; i++) { Application.DoEvents(); Thread.Sleep(50); } Application.DoEvents(); form.PreviewCoverFlow(); for (int i = 0; i < (view.StartsWith("local") ? 30 : 8); i++) { Application.DoEvents(); Thread.Sleep(60); } }   // Cover Flow opened the way the button opens it   // a runtime accent change (preset name or #hex)
         if (view == "poster") { Application.DoEvents(); form.PreviewPoster(outPng); form.Dispose(); return; }   // a playlist drawn as a picture
         if (Environment.GetEnvironmentVariable("MIX_REMAINING") == "1") form.PreviewRemaining(true);   // the card's total slot counts down
         if (Environment.GetEnvironmentVariable("MIX_RATE") is { Length: > 0 } rt && int.TryParse(rt, out int rtv)) { Application.DoEvents(); form.PreviewRating(rtv); }   // the deck's rating stars

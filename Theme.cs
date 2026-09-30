@@ -1086,11 +1086,17 @@ internal sealed class ThemedButton : Button
     /// </summary>
     /// <summary>The narrowest this button can be and still draw its whole label. Layout code that packs
     /// several buttons must ASK, not assume — the widths in those tables are English sizes.</summary>
-    public int NeededWidth
+    public int NeededWidth => CompactIcon ? 0 : LabelWidth;
+
+    /// <summary>What the label needs, whether or not the button is compact right now. A layout that DECIDES between
+    /// compact and full must ask this one: a compact button needs 0, so asking <see cref="NeededWidth"/> flipped the
+    /// decision back on the next paint - and a header whose labels outgrow its English table (Hungarian, a narrow
+    /// window) toggled between the two on every frame, repainting without end.</summary>
+    public int LabelWidth
     {
         get
         {
-            if (CompactIcon || string.IsNullOrEmpty(Text)) return 0;
+            if (string.IsNullOrEmpty(Text)) return 0;
             string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
             return TextRenderer.MeasureText(label, Font).Width + 22;   // the flat slab needs less air than the old pill
         }

@@ -81,6 +81,31 @@ internal sealed class CoverFlowView : Control
     private readonly Rectangle[] _modeRects = { Rectangle.Empty, Rectangle.Empty, Rectangle.Empty };
     private int _modeHover = -1;
 
+    // ---- the Windows 95 look ----
+    // Classic makes the browser a page like the others: the list page's own header strip (32 px icon, title, meta
+    // line, push buttons, etched rule) over a sunken black viewport with a real 95 scrollbar along its foot - on the
+    // list's exact frame, so switching between the list and Cover Flow changes what the frame holds and nothing
+    // else moves. The covers come in 256 colours and their reflections as a stipple, 1995's only translucency.
+    /// <summary>The card's foot under the list (set by the host), so the Classic frame ends where the list's does.</summary>
+    public int FootH { get; set; }
+    private string _metaCount = "", _metaTail = "";
+    private Rectangle _frame, _vp, _sb;                          // Classic: the sunken frame, the viewport, the scrollbar
+    private readonly Rectangle[] _cBtn = new Rectangle[5];       // Classic header buttons: 0-2 the views, 3 Close, 4 Now Playing
+    private int _cPress = -1, _cHover = -1;
+    private bool _cPressIn;
+    private int _sbHeld;                                         // Classic scrollbar held: -1/+1 an arrow, -2/+2 the shaft, 3 the thumb
+    private int _sbGrab;
+    private Point _sbMouse;
+    private readonly System.Windows.Forms.Timer _sbRepeat = new() { Interval = 350 };
+    private Bitmap? _cIcon;
+    private bool _bakedDither;
+    private readonly Font _fHdTitle = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
+    private readonly Font _fHdSub = Theme.UiFont(Theme.SzBody);
+    private readonly Font _fHdSubBold = Theme.UiFont(Theme.SzBody, FontStyle.Bold);
+    private readonly Font _fBtn = Theme.UiFont(Theme.SzTitle);
+    private const int ClassicTop = 22, ClassicText = 58;         // Classic: the viewport's margin above the covers; the captions' block below
+    private const float ReflShown = 0.28f;                       // Classic: how far the stippled reflection reaches, as a share of the cover
+
     public event Action<Item>? Activated;
     public event Action? CloseRequested;
     public event Action<BrowseMode>? ModeChanged;
@@ -108,6 +133,15 @@ internal sealed class CoverFlowView : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         BackColor = Color.Black;
         TabStop = true;
+        _sbRepeat.Tick += (_, _) => ScrollRepeat();
+    }
+
+    /// <summary>The Classic header's meta line: the deck's count (bold, like the list page's "174 songs") and the
+    /// library it comes from. The host sets it with every deck.</summary>
+    public void SetMeta(string count, string source)
+    {
+        _metaCount = count ?? ""; _metaTail = source ?? "";
+        if (Theme.Classic) Invalidate(new Rectangle(0, 0, Width, Theme.BarH));
     }
 
     public int CurrentIndex => Math.Clamp((int)Math.Round(_pos), 0, Math.Max(0, _items.Count - 1));
@@ -120,6 +154,32 @@ internal sealed class CoverFlowView : Control
         foreach (var m in _src.Values) pb += (long)m.Data.Length * 4;
         return (_sprites.Count, _spriteBytes, _src.Count, pb);
     }
+
+    /// <summary>Harness only (MIX_CF_CLICKS): where a named part of the Classic page is, for synthetic clicks.</summary>
+    internal Rectangle PreviewRect(string part)
+    {
+        var th = ThumbAt(_pos);
+        return part switch
+        {
+            "left" => SbLeft, "right" => SbRight, "thumb" => th,
+            "shaft-left" => Rectangle.FromLTRB(SbLeft.Right + 2, _sb.Y, Math.Max(SbLeft.Right + 3, th.X - 2), _sb.Bottom),
+            "shaft-right" => Rectangle.FromLTRB(th.Right + 2, _sb.Y, Math.Max(th.Right + 3, SbRight.X - 2), _sb.Bottom),
+            "songs" => _cBtn[0], "albums" => _cBtn[1], "artists" => _cBtn[2], "close" => _cBtn[3], "np" => _cBtn[4],
+            "stage" => HitRectOf(CurrentIndex) is { IsEmpty: false } c ? new Rectangle(c.X + c.Width / 2 - 4, c.Y + c.Height / 2 - 4, 8, 8) : Rectangle.Empty,
+            // the second cover to the right, at its outer edge (its inner half lies under its neighbour)
+            "side" => HitRectOf(CurrentIndex + 2) is { IsEmpty: false } sr ? new Rectangle(sr.Right - 10, sr.Y + sr.Height / 2 - 2, 4, 4) : Rectangle.Empty,
+            _ => Rectangle.Empty,
+        };
+    }
+
+    private Rectangle HitRectOf(int index)
+    {
+        foreach (var (i, r) in _hit) if (i == index) return Rectangle.Round(r);
+        return Rectangle.Empty;
+    }
+
+    /// <summary>Harness only: the deck's state in one line.</summary>
+    internal string PreviewState() => FormattableString.Invariant($"pos={_pos:0.00} target={_target} mode={_mode} held={_sbHeld} press={_cPress}");
 
     /// <summary>Harness only: park the deck at a fractional position (a frame mid-crossing) for a render.</summary>
     internal void PreviewPos(float pos)
@@ -186,7 +246,7 @@ internal sealed class CoverFlowView : Control
     public void AnimateIn()
     {
         _introTween?.Cancel();
-        if (!Anim.MotionEnabled) { _intro = 1f; Invalidate(); return; }
+        if (!Anim.MotionEnabled || Theme.Classic) { _intro = 1f; Invalidate(); return; }   // 1995 opened a view in one go
         _intro = 0f;
         _introTween = Anim.Run(300, v => { _intro = (float)v; if (!IsDisposed) Invalidate(); }, null, Easings.OutCubic);
     }
@@ -195,7 +255,7 @@ internal sealed class CoverFlowView : Control
     public void AnimateOut(Action done)
     {
         _introTween?.Cancel();
-        if (!Anim.MotionEnabled) { done(); return; }
+        if (!Anim.MotionEnabled || Theme.Classic) { done(); return; }
         float from = _intro;
         _introTween = Anim.Run(170, v => { _intro = from * (1f - (float)v); if (!IsDisposed) Invalidate(); }, done, Easings.OutCubic);
     }
@@ -238,16 +298,82 @@ internal sealed class CoverFlowView : Control
     {
         base.OnMouseDown(e);
         Focus();
-        if (_closeRect.Contains(e.Location)) { CloseRequested?.Invoke(); return; }
-        for (int i = 0; i < 3; i++)
-            if (_modeRects[i].Contains(e.Location)) { if ((int)_mode != i) { _mode = (BrowseMode)i; Invalidate(); ModeChanged?.Invoke(_mode); } return; }
-        if (_playingTag is not null && _npChip.Contains(e.Location)) { JumpToPlaying(); return; }
+        if (Theme.Classic)
+        {
+            // a 95 push button goes in on the press and acts on the release (if the pointer is still on it)
+            if (e.Button != MouseButtons.Left) return;
+            for (int i = 0; i < _cBtn.Length; i++)
+                if (_cBtn[i].Contains(e.Location)) { _cPress = i; _cPressIn = true; Invalidate(_cBtn[i]); return; }
+            if (_sb.Contains(e.Location)) { ScrollbarDown(e.Location); return; }
+            if (!_vp.Contains(e.Location)) return;
+        }
+        else
+        {
+            if (_closeRect.Contains(e.Location)) { CloseRequested?.Invoke(); return; }
+            for (int i = 0; i < 3; i++)
+                if (_modeRects[i].Contains(e.Location)) { if ((int)_mode != i) { _mode = (BrowseMode)i; Invalidate(); ModeChanged?.Invoke(_mode); } return; }
+            if (_playingTag is not null && _npChip.Contains(e.Location)) { JumpToPlaying(); return; }
+        }
         _mouseDown = true; _dragging = false; _downX = e.X; _downPos = _pos; _trailN = 0;
+    }
+
+    /// <summary>Classic: the header buttons and the scrollbar. True when the move was theirs.</summary>
+    private bool ClassicMouseMove(MouseEventArgs e)
+    {
+        if (_cPress >= 0)
+        {
+            bool inb = _cBtn[_cPress].Contains(e.Location);
+            if (inb != _cPressIn) { _cPressIn = inb; Invalidate(_cBtn[_cPress]); }
+            return true;
+        }
+        if (_sbHeld == 3) { DragThumb(e.X); return true; }
+        if (_sbHeld != 0) { _sbMouse = e.Location; Invalidate(_sb); return true; }
+        if (_mouseDown) return false;   // a drag across the viewport: the shared code below
+        int hv = -1;
+        for (int i = 0; i < _cBtn.Length; i++) if (_cBtn[i].Contains(e.Location)) { hv = i; break; }
+        if (hv != _cHover)
+        {
+            if (_cHover >= 0) Invalidate(_cBtn[_cHover]);
+            _cHover = hv;
+            if (hv >= 0) Invalidate(_cBtn[hv]);
+        }
+        Cursor = Cursors.Default;   // 1995 pointed at everything with the arrow
+        return true;
+    }
+
+    /// <summary>The pointer's capture went elsewhere mid-press (another window came forward, a menu opened): end the
+    /// press as a release would - a held arrow stops repeating, a dragged deck settles on a cover - instead of leaving
+    /// it held with no button down. (A normal release gets here only after OnMouseUp has already ended it.)</summary>
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (Capture) return;
+        if (_cPress >= 0) { Invalidate(_cBtn[_cPress]); _cPress = -1; }
+        if (_sbHeld != 0)
+        {
+            bool thumb = _sbHeld == 3;
+            _sbHeld = 0;
+            _sbRepeat.Stop();
+            Invalidate(_sb);
+            if (thumb) Glide((int)Math.Round(_pos), force: true);
+        }
+        if (_mouseDown)
+        {
+            _mouseDown = false;
+            if (_dragging) { _dragging = false; Glide((int)Math.Round(_pos), force: true); }
+        }
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (_cHover >= 0) { Invalidate(_cBtn[_cHover]); _cHover = -1; }
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (Theme.Classic && ClassicMouseMove(e)) return;
         if (_mouseDown)
         {
             if (!_dragging && Math.Abs(e.X - _downX) > 4) _dragging = true;
@@ -272,6 +398,26 @@ internal sealed class CoverFlowView : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if (Theme.Classic)
+        {
+            if (_cPress >= 0)
+            {
+                int b = _cPress; bool inb = _cPressIn;
+                _cPress = -1;
+                Invalidate(_cBtn[b]);
+                if (inb) ClassicButton(b);
+                return;
+            }
+            if (_sbHeld != 0)
+            {
+                bool thumb = _sbHeld == 3;
+                _sbHeld = 0;
+                _sbRepeat.Stop();
+                Invalidate(_sb);
+                if (thumb) Glide((int)Math.Round(_pos), force: true);   // let go of the thumb: the deck settles on a cover
+                return;
+            }
+        }
         if (!_mouseDown) return;
         _mouseDown = false;
         if (_dragging)
@@ -321,7 +467,84 @@ internal sealed class CoverFlowView : Control
     }
 
     private void ActivateCentre() { int i = CurrentIndex; if (i >= 0 && i < _items.Count) Activated?.Invoke(_items[i]); }
-    private int HitTest(Point p) { for (int k = _hit.Count - 1; k >= 0; k--) if (_hit[k].rect.Contains(p)) return _hit[k].index; return -1; }
+    private int HitTest(Point p)
+    {
+        if (Theme.Classic && !_vp.Contains(p)) return -1;   // a cover clipped off by the viewport's edge is not there to click
+        for (int k = _hit.Count - 1; k >= 0; k--) if (_hit[k].rect.Contains(p)) return _hit[k].index;
+        return -1;
+    }
+
+    private void ClassicButton(int b)
+    {
+        if (b < 3) { if ((int)_mode != b) { _mode = (BrowseMode)b; Invalidate(); ModeChanged?.Invoke(_mode); } }
+        else if (b == 3) CloseRequested?.Invoke();
+        else JumpToPlaying();
+    }
+
+    private bool PlayingInDeck()
+    {
+        if (_playingTag is null) return false;
+        for (int i = 0; i < _items.Count; i++) if (Equals(_items[i].Tag, _playingTag)) return true;
+        return false;
+    }
+
+    // ---- the Classic scrollbar ----
+
+    private Rectangle SbLeft => new(_sb.X, _sb.Y, 16, _sb.Height);
+    private Rectangle SbRight => new(_sb.Right - 16, _sb.Y, 16, _sb.Height);
+    private Rectangle SbTrough => Rectangle.FromLTRB(_sb.X + 16, _sb.Y, Math.Max(_sb.X + 16, _sb.Right - 16), _sb.Bottom);
+
+    /// <summary>The thumb for a deck position: as long as the share of the deck in view, as far along as the
+    /// position is through the deck.</summary>
+    private Rectangle ThumbAt(float pos)
+    {
+        var t = SbTrough;
+        int n = _items.Count;
+        if (n <= 1) return Rectangle.Empty;
+        int w = Math.Clamp((int)Math.Round(t.Width * (double)Math.Min(n, _visRange * 2 + 1) / n), Math.Min(12, t.Width), t.Width);
+        int x = t.X + (int)Math.Round((t.Width - w) * Math.Clamp(pos / (n - 1), 0f, 1f));
+        return new Rectangle(x, t.Y, w, t.Height);
+    }
+
+    private void ScrollbarDown(Point p)
+    {
+        if (_items.Count <= 1) return;   // a disabled bar
+        _sbMouse = p;
+        var th = ThumbAt(_pos);
+        if (SbLeft.Contains(p)) { _sbHeld = -1; Move(-1); }
+        else if (SbRight.Contains(p)) { _sbHeld = 1; Move(1); }
+        else if (th.Contains(p)) { _sbHeld = 3; _sbGrab = p.X - th.X; _tw?.Cancel(); Invalidate(_sb); return; }
+        else { _sbHeld = p.X < th.X ? -2 : 2; Page(_sbHeld / 2); }
+        _sbRepeat.Interval = 350;   // held: after a beat it repeats, as every 95 scrollbar did
+        _sbRepeat.Start();
+        Invalidate(_sb);
+    }
+
+    private void Page(int dir) => MoveTo(_target + dir * Math.Max(1, _visRange * 2));
+
+    private void ScrollRepeat()
+    {
+        _sbRepeat.Interval = 90;
+        switch (_sbHeld)
+        {
+            case -1: if (SbLeft.Contains(_sbMouse)) Move(-1); break;
+            case 1: if (SbRight.Contains(_sbMouse)) Move(1); break;
+            case -2: if (ThumbAt(_target).X > _sbMouse.X) Page(-1); break;          // until the thumb reaches the pointer
+            case 2: if (ThumbAt(_target).Right < _sbMouse.X) Page(1); break;
+            default: _sbRepeat.Stop(); break;
+        }
+    }
+
+    /// <summary>Dragging the thumb scrubs the deck, exactly as far through it as the thumb is along its shaft.</summary>
+    private void DragThumb(int mouseX)
+    {
+        var t = SbTrough;
+        int n = _items.Count, span = t.Width - ThumbAt(_pos).Width;
+        if (n <= 1 || span <= 0) return;
+        _tw?.Cancel();
+        _pos = Math.Clamp((mouseX - _sbGrab - t.X) / (float)span, 0f, 1f) * (n - 1);
+        InvalidateDeck();
+    }
 
     // ---- painting ----
 
@@ -343,10 +566,21 @@ internal sealed class CoverFlowView : Control
             _bg?.Dispose(); _bg = null; _vignette?.Dispose(); _vignette = null;
             ClearSprites();
         }
+        // Classic bakes the 256-colour setting into the sprites too
+        if (Theme.Classic && _bakedDither != Theme.DitherCovers) { _bakedDither = Theme.DitherCovers; ClearSprites(); }
 
+        // Where the deck lives: the whole control, or - Classic - the sunken viewport under the page's header.
+        Rectangle stage = ClientRectangle;
+        if (Theme.Classic)
+        {
+            LayoutClassic();
+            PaintClassicChrome(g, e.ClipRectangle);
+            using (var bk = new SolidBrush(Color.Black)) g.FillRectangle(bk, _vp);   // the viewport: flat black, no spotlight
+            stage = _vp;
+        }
         // Backdrop: a dark vertical gradient, cached as a bitmap (re-rendered only when the size changes)
         // and blitted 1:1 each frame - far cheaper than gradient-filling the whole control every paint.
-        if (_bg is null || _bg.Width != Width || _bg.Height != Height)
+        else if (_bg is null || _bg.Width != Width || _bg.Height != Height)
         {
             _bg?.Dispose();
             _bg = new Bitmap(Math.Max(1, Width), Math.Max(1, Height), PixelFormat.Format32bppPArgb);
@@ -365,12 +599,15 @@ internal sealed class CoverFlowView : Control
                 bgg.FillPath(pgb, gp);
             }
         }
-        var prevCM = g.CompositingMode;
-        g.CompositingMode = CompositingMode.SourceCopy;   // _bg is opaque -> skip the per-pixel alpha blend on the big full-screen blit
-        g.DrawImageUnscaled(_bg, 0, 0);
-        g.CompositingMode = prevCM;                        // covers + vignette need SourceOver
+        if (!Theme.Classic)
+        {
+            var prevCM = g.CompositingMode;
+            g.CompositingMode = CompositingMode.SourceCopy;   // _bg is opaque -> skip the per-pixel alpha blend on the big full-screen blit
+            g.DrawImageUnscaled(_bg!, 0, 0);
+            g.CompositingMode = prevCM;                        // covers + vignette need SourceOver
+        }
 
-        if (_items.Count == 0) { DrawCloseButton(g); return; }
+        if (_items.Count == 0) { if (!Theme.Classic) DrawCloseButton(g); return; }
 
         // Fast per-frame compositing: sprites are rendered at final size, so blit 1:1 (no resampling).
         g.InterpolationMode = InterpolationMode.NearestNeighbor;
@@ -378,12 +615,15 @@ internal sealed class CoverFlowView : Control
         g.CompositingQuality = CompositingQuality.HighSpeed;
         g.SmoothingMode = SmoothingMode.None;
 
-        int H = Height;
+        int H = stage.Height;
         // Covers bake at this BASE size. It tracks the window HEIGHT (covers fill ~46% of it) but is also held
         // under a fraction of the WIDTH so a wide / full-screen window grows the covers (bigger deck). The
         // open/close zoom is a runtime scaled blit (not a smaller bake); a base-size change (resize / maximize)
-        // rebakes the cache so covers re-fit.
-        int baseH = Math.Clamp((int)Math.Min(H * 0.46f, Width * 0.34f), 130, 420);
+        // rebakes the cache so covers re-fit. Classic: as big as the viewport allows under its top margin, with
+        // the reflection and the two caption lines below the cover.
+        int baseH = Theme.Classic
+            ? Math.Clamp((int)Math.Min((H - ClassicTop - ClassicText) / (Pop * (1f + ReflShown)), stage.Width * 0.34f), 60, 420)
+            : Math.Clamp((int)Math.Min(H * 0.46f, Width * 0.34f), 130, 420);
         if (baseH != _bakedCoverH)
         {
             ClearSprites();
@@ -394,7 +634,7 @@ internal sealed class CoverFlowView : Control
         }
         int centreH = _centreH;
         float introScale = 0.84f + 0.16f * Math.Clamp(_intro, 0f, 1f); // open/close zoom (applied as a scaled blit below)
-        float cx = Width / 2f, centreY = H * 0.42f;
+        float cx = stage.X + stage.Width / 2f, centreY = Theme.Classic ? stage.Y + ClassicTop + centreH / 2f : H * 0.42f;
         _maxAngle = (float)(MaxAngleDeg * Math.PI / 180);
         // The settled centre cover is blitted from its cached flat sprite, which is baked at the sub-pixel phase
         // of its resting place so the last live frame and the cached one line up exactly (no half-pixel snap).
@@ -410,12 +650,15 @@ internal sealed class CoverFlowView : Control
         _stepPx = sideStep;                                         // for drag-to-scrub
         // Fan out enough covers to reach the screen edges (capped for perf), so a wide / full-screen window
         // shows a full-width deck rather than a short fan stranded in the middle.
-        int range = Math.Clamp((int)Math.Ceiling((Width / 2f - side1) / sideStep) + 2, 5, 8);
+        int range = Math.Clamp((int)Math.Ceiling((stage.Width / 2f - side1) / sideStep) + 2, 5, 8);
         _visRange = range;
 
         int lo = Math.Max(0, (int)Math.Floor(_pos) - range);
         int hi = Math.Min(_items.Count - 1, (int)Math.Ceiling(_pos) + range);
-        _band = new Rectangle(0, (int)(centreY - centreH / 2f) - 12, Width, (int)(centreH * 1.5f + centreH * 0.42f + 70) + 12);   // covers + reflections + centre text: what a glide repaints
+        _band = Theme.Classic ? Rectangle.Inflate(_frame, -2, -2)   // Classic: the viewport and the scrollbar whose thumb rides along
+            : new Rectangle(0, (int)(centreY - centreH / 2f) - 12, Width, (int)(centreH * 1.5f + centreH * 0.42f + 70) + 12);   // covers + reflections + centre text: what a glide repaints
+        GraphicsState? clip = null;
+        if (Theme.Classic) { clip = g.Save(); g.SetClip(_vp, CombineMode.Intersect); }   // the viewport's edge cuts the fan off
         // Draw farthest-from-centre first (back) and the centre last (front): each cover overlaps the one
         // further out, the centre on top. Two cursors walking inward from both ends reproduce that exact
         // farthest-first order with zero per-frame allocation.
@@ -429,8 +672,9 @@ internal sealed class CoverFlowView : Control
         // Edge vignette: darken the far side covers toward the screen edges for depth (drawn over them).
         // Cached as a transparent overlay - and blitted as only its two non-empty EDGE STRIPS (the wide middle is
         // fully transparent, so a full-width alpha blit just churned ~half the pixels for nothing).
+        // (Classic has none: the viewport's edge simply cuts the fan off, as a 95 window did.)
         int vw = (int)(Width * 0.24f);
-        if (_vignette is null || _vignette.Width != Width || _vignette.Height != H)
+        if (!Theme.Classic && (_vignette is null || _vignette.Width != Width || _vignette.Height != H))
         {
             _vignette?.Dispose();
             _vignette = new Bitmap(Math.Max(1, Width), Math.Max(1, H), PixelFormat.Format32bppPArgb);
@@ -444,8 +688,11 @@ internal sealed class CoverFlowView : Control
             using (var rv = new LinearGradientBrush(new Rectangle(Width - vw - 1, 0, vw + 2, H), Color.FromArgb(0, edge), Color.FromArgb(165, edge), 0f))
                 vg.FillRectangle(rv, Width - vw, 0, vw, H);
         }
-        g.DrawImage(_vignette, new Rectangle(0, 0, vw, H), 0, 0, vw, H, GraphicsUnit.Pixel);                       // left strip
-        g.DrawImage(_vignette, new Rectangle(Width - vw, 0, vw, H), Width - vw, 0, vw, H, GraphicsUnit.Pixel);     // right strip
+        if (!Theme.Classic)
+        {
+            g.DrawImage(_vignette!, new Rectangle(0, 0, vw, H), 0, 0, vw, H, GraphicsUnit.Pixel);                       // left strip
+            g.DrawImage(_vignette!, new Rectangle(Width - vw, 0, vw, H), Width - vw, 0, vw, H, GraphicsUnit.Pixel);     // right strip
+        }
 
         // Bound the caches: drop the sprites + pixels of covers that scrolled well out of view, then hold the
         // sprite bytes under the budget by evicting the least recently drawn (never one drawn this frame).
@@ -466,9 +713,13 @@ internal sealed class CoverFlowView : Control
         }
 
         DrawCentreText(g, centreY, centreH);
-        DrawNowPlayingChip(g);
-        DrawModeSwitch(g);
-        DrawCloseButton(g);
+        if (clip is not null) g.Restore(clip);
+        else
+        {
+            DrawNowPlayingChip(g);
+            DrawModeSwitch(g);
+            DrawCloseButton(g);
+        }
 
         // At rest, warp the resting sprites a little beyond the visible deck now, so the newcomers of the next
         // flick are ready before they slide in.
@@ -791,7 +1042,13 @@ internal sealed class CoverFlowView : Control
         public float PwF, Phase, Q;
         public bool NearRight;
         public float CornerR, FloorR, FloorG, FloorB;
+        public float FrameA;              // the faint inner frame's strength (none in Classic)
+        public bool Dither, ScreenDoor;   // Classic: the cover in 256 colours; a stippled reflection
     }
+
+    // Classic's stippled reflection: as dense at the top as the modern one is strong (34%), thinning to nothing
+    // at ReflShown of the cover's height (the reflection buffer is half the cover, hence the factor 2).
+    private const float StippleTop = 0.34f, StippleLen = ReflShown * 2f;
 
     /// <summary>Render one cover - a perspective-warped, rounded-cornered, framed tile at <paramref name="theta"/>
     /// (0 = flat) with its faded mirror reflection beneath - into the top-left <paramref name="bufW"/> x
@@ -809,6 +1066,8 @@ internal sealed class CoverFlowView : Control
             Q = (dv - coverH / 2f * sinT) / (dv + coverH / 2f * sinT),   // far-edge height fraction
             NearRight = nearRight, CornerR = Theme.TileFrac,
             FloorR = floor.R, FloorG = floor.G, FloorB = floor.B,
+            FrameA = Theme.Classic ? 0f : FrameAlpha,
+            Dither = Theme.Classic && Theme.DitherCovers, ScreenDoor = Theme.Classic,
         };
         var data = dst.LockBits(new Rectangle(0, 0, bufW, coverH + reflH), ImageLockMode.ReadWrite, PixelFormat.Format32bppPArgb);
         job.Dst = data.Scan0; job.Stride = data.Stride;
@@ -915,12 +1174,14 @@ internal sealed class CoverFlowView : Control
                     if (n > 1) { int half = n >> 1; A = (A + half) / n; R = (R + half) / n; G = (G + half) / n; B = (B + half) / n; }
                     // the faint inner frame: a ~1.5 px lightening just inside every edge
                     float fr = 1.6f - edge;
-                    if (fr > 0f)
+                    if (fr > 0f && j.FrameA > 0f)
                     {
                         if (fr > 1f) fr = 1f;
-                        float t = FrameAlpha * fr;
+                        float t = j.FrameA * fr;
                         R += (int)((255 - R) * t); G += (int)((255 - G) * t); B += (int)((255 - B) * t);
                     }
+                    // Classic: onto the 256-colour halftone palette, dithered at the size the cover is shown at
+                    if (j.Dither) Halftone.Dither(ref R, ref G, ref B, ox, oy);
                     int a = (int)(A * cov + 0.5f);
                     if (a <= 0) { *op = 0; continue; }
                     *op = (a << 24) | (((R * a + 127) / 255) << 16) | (((G * a + 127) / 255) << 8) | ((B * a + 127) / 255);   // premultiplied
@@ -934,6 +1195,15 @@ internal sealed class CoverFlowView : Control
                     int a = (c >> 24) & 0xFF;
                     int* rp = (int*)(col + (coverH + ry) * stride);
                     if (a == 0) { *rp = 0; continue; }
+                    if (j.ScreenDoor)
+                    {
+                        // Classic: 1995's only translucency - a stipple. The cover's own pixels on the ordered pattern,
+                        // fewer further down; the rest the black floor at the cover's coverage, so a front reflection
+                        // still hides the one behind it.
+                        float dens = StippleTop * (1f - (ry + 0.5f) / (reflH * StippleLen));
+                        *rp = dens > 0f && Halftone.Rank(ox, ry) < dens * 64f ? c : a << 24;
+                        continue;
+                    }
                     float t = 0.66f + 0.34f * ((ry + 0.5f) / reflH);   // 0.66 at the top -> 1.0 (all floor) at the bottom
                     if (t > 1f) t = 1f;
                     float keep = 1f - t, fa = a * t / 255f;
@@ -983,6 +1253,17 @@ internal sealed class CoverFlowView : Control
         var it = _items[ci];
         int alpha = (int)(255 * Math.Clamp(1f - Math.Abs(_pos - ci), 0f, 1f) * _intro); // fade during a flick + on open/close
         if (alpha < 8) return;
+        if (Theme.Classic)
+        {
+            // bitmap type on the black stage, under the point where the stippled reflection runs out
+            int ty = (int)(centreY + coverH / 2f + coverH * ReflShown) + 10;
+            var tr = new Rectangle(_vp.X + 8, ty, Math.Max(1, _vp.Width - 16), 18);
+            const TextFormatFlags cf = TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+            TextRenderer.DrawText(g, it.Title, _fCentreTitle, tr, Color.White, cf);
+            if (!string.IsNullOrEmpty(it.Subtitle))
+                TextRenderer.DrawText(g, it.Subtitle, _fCentreSub, new Rectangle(tr.X, ty + 20, tr.Width, 16), Theme.Face, cf);
+            return;
+        }
         int y = (int)(centreY + coverH / 2f + coverH * 0.42f + 10);
         var rect = new Rectangle(0, y, Width, 26);
         var tf = _fCentreTitle;
@@ -997,6 +1278,169 @@ internal sealed class CoverFlowView : Control
     /// <summary>The stage behind the covers: the app's own surface, or - Classic - black, the stage of every 1995
     /// screensaver, so the covers and their reflections keep their depth instead of turning on window grey.</summary>
     private static Color Stage => Theme.Classic ? Color.Black : Theme.Bg;
+
+    // ---- the Classic page ----
+
+    /// <summary>Classic: the list page's frame, exactly - its header strip is <see cref="Theme.BarH"/> tall and the
+    /// list's sunken edge sits 2 px under it, 4 px in from each side and 4 px above the card's foot.</summary>
+    private void LayoutClassic()
+    {
+        int top = Theme.BarH + 2, bottom = Math.Max(top + 48, Height - FootH - 4);
+        _frame = new Rectangle(4, top, Math.Max(48, Width - 8), bottom - top);
+        var inner = Rectangle.Inflate(_frame, -2, -2);
+        _sb = new Rectangle(inner.X, inner.Bottom - 16, inner.Width, 16);
+        _vp = new Rectangle(inner.X, inner.Y, inner.Width, Math.Max(1, inner.Height - 16));
+    }
+
+    /// <summary>Classic: everything round the viewport - the window face, the header (the list page's, pixel for
+    /// pixel: the 32 px icon, the title, the meta line, the push buttons, the etched rule), the sunken frame and the
+    /// scrollbar. A glide repaints only the viewport and the scrollbar, so the header is skipped when it is clean.</summary>
+    private void PaintClassicChrome(Graphics g, Rectangle clip)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        using (var face = new SolidBrush(Theme.Face))
+        {
+            g.FillRectangle(face, 0, 0, Width, _frame.Y);
+            g.FillRectangle(face, 0, _frame.Y, _frame.X, Height - _frame.Y);
+            g.FillRectangle(face, _frame.Right, _frame.Y, Math.Max(0, Width - _frame.Right), Height - _frame.Y);
+            g.FillRectangle(face, _frame.X, _frame.Bottom, _frame.Width, Math.Max(0, Height - _frame.Bottom));
+        }
+        Theme.Bevel(g, _frame, raised: false);   // the client edge: the viewport and its scrollbar in one sunken frame
+        if (clip.IntersectsWith(_sb)) PaintClassicScroll(g);
+        int bh = Theme.BarH;
+        if (!clip.IntersectsWith(new Rectangle(0, 0, Width, bh))) return;
+
+        _cIcon ??= Theme.ClassicHeaderIcon(ClassicIcons.Id.CoverFlow);
+        var im = g.InterpolationMode; var po = g.PixelOffsetMode;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(_cIcon, new Rectangle(26, (bh - 40) / 2 + 4, 32, 32));
+        g.InterpolationMode = im; g.PixelOffsetMode = po;
+
+        int left = LayoutClassicButtons(g);
+        const int tx = 76;
+        int rightW = Math.Max(40, left - 16 - tx);
+        int th = TextRenderer.MeasureText(g, "Ag", _fHdTitle).Height, subH = TextRenderer.MeasureText(g, "Ag", _fHdSub).Height;
+        TextRenderer.DrawText(g, Loc.T("Cover Flow"), _fHdTitle, new Rectangle(tx, 7, rightW, th), Theme.TextCol,
+            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        if (_metaCount.Length > 0)
+        {
+            const TextFormatFlags np = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
+            TextRenderer.DrawText(g, _metaCount, _fHdSubBold, new Rectangle(tx, 31, rightW, subH), Theme.TextCol, np);
+            int hw = TextRenderer.MeasureText(g, _metaCount, _fHdSubBold, new Size(rightW, subH), np).Width;
+            if (_metaTail.Length > 0 && hw < rightW)
+                TextRenderer.DrawText(g, "  ·  " + _metaTail, _fHdSub, new Rectangle(tx + hw, 31, rightW - hw, subH), Theme.Subtle, np | TextFormatFlags.EndEllipsis);
+        }
+
+        for (int i = 0; i < 3; i++) DrawClassicButton(g, i, Loc.T(ModeLabels[i]), latched: (int)_mode == i);
+        DrawClassicButton(g, 3, Loc.T("Close"), latched: false);
+        if (!_cBtn[4].IsEmpty) DrawClassicButton(g, 4, _cBtn[4].Width > 40 ? Loc.T("Now Playing") : "", latched: false, eq: true);
+
+        using var sh = new Pen(Theme.FaceShadow);   // the etched rule that closes a 95 toolbar off from its client area
+        using var hi = new Pen(Theme.FaceHi);
+        g.DrawLine(sh, 0, bh - 2, Width, bh - 2);
+        g.DrawLine(hi, 0, bh - 1, Width, bh - 1);
+    }
+
+    /// <summary>Classic: the header's push buttons, right-aligned the way the list page aligns its own - Close at the
+    /// end, the three views before it (side by side, the chosen one latched down), and Now Playing before those while
+    /// the deck holds what is playing. Returns the cluster's left edge, which the title must not run under.</summary>
+    private int LayoutClassicButtons(Graphics g)
+    {
+        const int bh = 30, gap = 10, pad = 22, titleMin = 76 + 96 + 16;
+        int top = (Theme.BarH - bh) / 2, x = Width - pad;
+        int W(string s, int min) => Math.Max(min, TextRenderer.MeasureText(g, s, _fBtn).Width + 24);
+        int cw = W(Loc.T("Close"), 75);
+        _cBtn[3] = new Rectangle(x - cw, top, cw, bh);
+        x -= cw + gap;
+        int m0 = W(Loc.T(ModeLabels[0]), 64), m1 = W(Loc.T(ModeLabels[1]), 64), m2 = W(Loc.T(ModeLabels[2]), 64);
+        x -= m0 + m1 + m2;
+        _cBtn[0] = new Rectangle(x, top, m0, bh);
+        _cBtn[1] = new Rectangle(x + m0, top, m1, bh);
+        _cBtn[2] = new Rectangle(x + m0 + m1, top, m2, bh);
+        _cBtn[4] = Rectangle.Empty;
+        if (PlayingInDeck())
+        {
+            int nw = TextRenderer.MeasureText(g, Loc.T("Now Playing"), _fBtn).Width + 32 + 12;
+            if (x - gap - nw < titleMin) nw = 40;   // no room for the words: the equaliser alone
+            x -= gap + nw;
+            _cBtn[4] = new Rectangle(x, top, nw, bh);
+        }
+        return x;
+    }
+
+    /// <summary>A 95 push button, as <see cref="ThemedButton"/> draws one - raised, pushed in while held (the label
+    /// moving the same pixel), a view button latched down over the white dither while it is the chosen one.</summary>
+    private void DrawClassicButton(Graphics g, int i, string text, bool latched, bool eq = false)
+    {
+        var r = _cBtn[i];
+        if (r.IsEmpty) return;
+        bool held = _cPress == i && _cPressIn;
+        if (latched)
+        {
+            using (var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face)) g.FillRectangle(dither, r);
+            Theme.Bevel(g, r, raised: false);
+        }
+        else
+        {
+            using (var b = new SolidBrush(_cHover == i && !held ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(b, r);
+            Theme.Bevel(g, r, raised: !held);
+        }
+        var tr = r;
+        if (latched || held) tr.Offset(1, 1);
+        if (eq)
+        {
+            using (var nb = new SolidBrush(Theme.ClassicNavy))   // the equaliser in navy, as on the deck's own Now Playing
+            {
+                int bx = text.Length > 0 ? tr.X + 12 : tr.X + (tr.Width - 11) / 2, by = tr.Y + tr.Height / 2 + 6;
+                int[] hs = { 8, 12, 6 };
+                for (int k = 0; k < 3; k++) g.FillRectangle(nb, bx + k * 4, by - hs[k], 3, hs[k]);
+            }
+            if (text.Length == 0) return;
+            tr = Rectangle.FromLTRB(tr.X + 30, tr.Y, tr.Right - 6, tr.Bottom);
+            TextRenderer.DrawText(g, text, _fBtn, tr, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            return;
+        }
+        TextRenderer.DrawText(g, text, _fBtn, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>Classic: a 95 horizontal scrollbar under the viewport - arrow buttons at the ends, the dithered shaft,
+    /// a raised thumb as long as the share of the deck in view. A held stretch of shaft darkens, as 95's did; with a
+    /// single cover the bar is disabled (embossed arrows, no thumb).</summary>
+    private void PaintClassicScroll(Graphics g)
+    {
+        var t = SbTrough;
+        using (var dither = new HatchBrush(HatchStyle.Percent50, Theme.FaceHi, Theme.Face)) g.FillRectangle(dither, t);
+        bool enabled = _items.Count > 1;
+        var th = enabled ? ThumbAt(_pos) : Rectangle.Empty;
+        if (!th.IsEmpty && (_sbHeld == -2 || _sbHeld == 2))
+        {
+            var held = _sbHeld < 0 ? Rectangle.FromLTRB(t.X, t.Y, th.X, t.Bottom) : Rectangle.FromLTRB(th.Right, t.Y, t.Right, t.Bottom);
+            using var dk = new SolidBrush(Theme.FaceDark);
+            g.FillRectangle(dk, held);
+        }
+        DrawScrollArrow(g, SbLeft, -1, _sbHeld == -1 && SbLeft.Contains(_sbMouse), enabled);
+        DrawScrollArrow(g, SbRight, 1, _sbHeld == 1 && SbRight.Contains(_sbMouse), enabled);
+        if (!th.IsEmpty) Theme.FaceBevel(g, th, raised: true);
+    }
+
+    /// <summary>An arrow button of the scrollbar: the 7-pixel triangle of every 95 scrollbar, pushed in while held.</summary>
+    private static void DrawScrollArrow(Graphics g, Rectangle r, int dir, bool down, bool enabled)
+    {
+        Theme.FaceBevel(g, r, raised: !down);
+        int o = down ? 1 : 0, x0 = r.X + 6 + o, cy = r.Y + r.Height / 2 - 1 + o;
+        void Tri(Brush br, int d)
+        {
+            for (int i = 0; i < 4; i++) { int k = dir < 0 ? i : 3 - i; g.FillRectangle(br, x0 + i + d, cy - k + d, 1, 1 + 2 * k); }
+        }
+        if (!enabled)   // disabled: embossed, white under grey
+        {
+            using (var hb = new SolidBrush(Theme.FaceHi)) Tri(hb, 1);
+            using (var sb = new SolidBrush(Theme.FaceShadow)) Tri(sb, 0);
+            return;
+        }
+        using var br = new SolidBrush(Theme.FaceDark);
+        Tri(br, 0);
+    }
 
     private void DrawCloseButton(Graphics g)
     {
@@ -1028,6 +1472,7 @@ internal sealed class CoverFlowView : Control
         {
             _tw?.Cancel(); _introTween?.Cancel(); ClearCaches(); _bg?.Dispose(); _vignette?.Dispose(); _live?.Dispose();
             _fCentreTitle.Dispose(); _fCentreSub.Dispose(); _fMode.Dispose(); _fNpChip.Dispose(); _closePen.Dispose();
+            _sbRepeat.Dispose(); _cIcon?.Dispose(); _fHdTitle.Dispose(); _fHdSub.Dispose(); _fHdSubBold.Dispose(); _fBtn.Dispose();
         }
         base.Dispose(disposing);
     }
