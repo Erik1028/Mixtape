@@ -256,18 +256,23 @@ internal sealed class HeaderPanel : Panel
         foreach (var (b, w) in items) if (b.Visible) { fullW += w; n++; }
         if (n > 1) fullW += (n - 1) * gap;
         bool hasBtns = n > 0;
+        bool hasSearch = Search is { Visible: true }, hasSlider = !hasSearch && SizeSlider is { Visible: true };
+        bool topRow = hasSearch || hasSlider;
+        // The bar is one 56 px row. Stacked over the buttons, the photo-size slider (or a search box) needs 70 px, and
+        // the buttons landed under the bar's bottom edge, clipped to their top few pixels. When the stack does not
+        // fit, the slider sits in the button row instead, to the buttons' left.
+        bool oneRow = topRow && hasBtns && searchH + gapV + bh > Height;
+        const int inlineMin = 150;   // the narrowest the inline slider may get before the buttons give up their labels
         // Collapse the action buttons to icon-only pills when the full text row would overlap the title.
-        bool compact = hasBtns && (right - fullW) < minClusterLeft;
+        bool compact = hasBtns && (right - fullW - (oneRow ? inlineMin + gap : 0)) < minClusterLeft;
         int btnRowW = compact ? n * cbw + Math.Max(0, n - 1) * gap : fullW;
         foreach (var (b, _) in items) b.CompactIcon = compact;
 
-        bool hasSearch = Search is { Visible: true }, hasSlider = !hasSearch && SizeSlider is { Visible: true };
-        bool topRow = hasSearch || hasSlider;
-        int clusterH = (topRow ? searchH : 0) + (topRow && hasBtns ? gapV : 0) + (hasBtns ? bh : 0);
+        int clusterH = oneRow ? bh : (topRow ? searchH : 0) + (topRow && hasBtns ? gapV : 0) + (hasBtns ? bh : 0);
         // Sit the search/action cluster BELOW the window-button row (with a gap), instead of vertically centred —
         // so the search bar + buttons are lower and clear of the window controls, with breathing room up top.
         int top = Math.Max(6, (Height - clusterH) / 2);
-        int btnTop = top + (topRow ? searchH + gapV : 0);
+        int btnTop = oneRow ? top : top + (topRow ? searchH + gapV : 0);
 
         int rowLeft = right - btnRowW, x = rowLeft;
         foreach (var (b, w) in items) if (b.Visible) { int bw = compact ? cbw : w; b.SetBounds(x, btnTop, bw, bh); x += bw + gap; }
@@ -275,7 +280,15 @@ internal sealed class HeaderPanel : Panel
         _buttonsBottom = hasBtns ? btnTop + bh : top;
 
         int maxClusterW = Math.Max(60, right - minClusterLeft);   // widest the search/slider may be without crossing the title
-        if (Search is { Visible: true } search)
+        if (oneRow)
+        {
+            var ctl = hasSearch ? Search! : SizeSlider!;
+            int sw = Math.Clamp(rowLeft - gap - minClusterLeft, 60, 200);   // what the title leaves, at most 200
+            int sx = rowLeft - gap - sw, ch = hasSearch ? searchH : ctl.Height;
+            ctl.SetBounds(sx, top + (bh - ch) / 2, sw, ch);
+            _searchLeft = sx;
+        }
+        else if (Search is { Visible: true } search)
         {
             int sw = Math.Min(Math.Max(btnRowW, hasBtns ? 200 : 220), maxClusterW);   // align over the buttons; shrink to fit; never cross the title
             int sx = right - sw;
@@ -340,7 +353,7 @@ internal sealed class HeaderPanel : Panel
 
         int tx = TextX;
         // Leave room for the search box + action-button stack on the right so the title never runs under them.
-        int rightLimit = (Search is { Visible: true } ? _searchLeft : _buttonsLeft) - 16;
+        int rightLimit = Math.Min(_searchLeft, _buttonsLeft) - 16;
         int rightW = Math.Max(80, rightLimit - tx);
         var kickerFont = _fKicker;
         var titleFont = _fTitleFont;
