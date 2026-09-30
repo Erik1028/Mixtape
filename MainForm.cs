@@ -987,7 +987,6 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     public void PreviewDeckHover(string hit) => _nowPlaying.PreviewHover(hit);   // MIX_DECK_HOVER=<control>: the deck with that control hovered
 
-    /// <summary>Render harness: the hover state of a row (MIX_HOT_ROW=n, MIX_ROW_ACTION=play|more).</summary>
     /// <summary>Harness (MIX_LIVE): drive the song list through the incremental repaints a user causes - a hover
     /// walking down a few rows, the selection moving and coming back, a scroll and return - each flushed with Update()
     /// so the partial-clip paint path runs exactly as it does on screen.</summary>
@@ -1005,6 +1004,79 @@ internal sealed class MainForm : Form, IMessageFilter
         ScrollGrid(3); _tracks.Update(); Application.DoEvents(); ScrollGrid(-3); _tracks.Update(); Application.DoEvents();
     }
 
+    /// <summary>Harness (MIX_HOVER_SWEEP, with MIX_LIVE): the pointer sweeps down eight songs the way a real mouse does -
+    /// mouse messages into the list, the real cursor untouched - and the list is then copied off the screen AS IT STANDS,
+    /// with no repaint, so buttons left behind would show. Four sweeps, each from a clean paint: across the titles over
+    /// rows the pointer has never crossed, across them again, straight down the play buttons, and in and out of each
+    /// play button on the way down. Each time only the row under the pointer may show its play button.</summary>
+    internal string PreviewHoverSweep(string outPrefix)
+    {
+        if (_tracks.Rows.Count < 10) return "RESULT: FAIL (the list needs ten songs)" + Environment.NewLine;
+        var sb = new System.Text.StringBuilder();
+        bool ok = true;
+        string[] names = { "fresh rows, across the titles", "crossed rows, across the titles", "down the play buttons", "in and out of each play button" };
+        for (int pass = 1; pass <= names.Length; pass++)
+        {
+            SetHotRow(-1); _rowAction = RowAction.None;
+            _tracks.Invalidate(); _tracks.Update();   // a clean paint: whatever shows after the sweep, the sweep left
+            for (int i = 1; i <= 8; i++)
+            {
+                var r = _tracks.GetRowDisplayRectangle(i, false);
+                var play = RowPlayRect(r);
+                int title = _tracks.Width / 2, button = play.X + play.Width / 2, y = r.Y + r.Height / 2;
+                var path = pass <= 2 ? new[] { title } : pass == 3 ? new[] { button } : new[] { title, button, title };
+                foreach (int x in path)
+                {
+                    SendMessage(_tracks.Handle, 0x0200, IntPtr.Zero, (IntPtr)((y << 16) | x));   // WM_MOUSEMOVE
+                    _tracks.Update();
+                }
+            }
+            using var shot = new Bitmap(_tracks.Width, _tracks.Height);
+            using (var g = Graphics.FromImage(shot))
+            {
+                IntPtr dst = g.GetHdc(), src = GetDC(_tracks.Handle);
+                BitBlt(dst, 0, 0, shot.Width, shot.Height, src, 0, 0, 0x00CC0020);   // SRCCOPY: the pixels on screen, no repaint
+                ReleaseDC(_tracks.Handle, src); g.ReleaseHdc(dst);
+            }
+            shot.Save(outPrefix + ".sweep" + pass + ".png", System.Drawing.Imaging.ImageFormat.Png);
+            var left = Enumerable.Range(1, 7).Where(i => ShowsPlay(shot, i)).ToList();
+            bool hot = ShowsPlay(shot, 8);
+            ok &= left.Count == 0 && hot;
+            sb.AppendLine(names[pass - 1] + ": buttons left behind on rows [" + string.Join(", ", left)
+                + "], the row under the pointer shows them: " + (hot ? "yes" : "NO"));
+        }
+        // ... and the user's own pointer can never reach this window: the point under it belongs to what is behind it
+        IntPtr under = WindowFromPoint(_tracks.PointToScreen(new Point(_tracks.Width / 2, 40)));
+        bool through = under == IntPtr.Zero || GetAncestor(under, 2) != Handle;   // GA_ROOT
+        ok &= through;
+        sb.AppendLine("real pointer and drags pass through the test window: " + (through ? "yes" : "NO"));
+        SetHotRow(-1); _rowAction = RowAction.None; _tracks.Invalidate(); _tracks.Update();
+        sb.AppendLine("RESULT: " + (ok ? "OK" : "FAIL"));
+        return sb.ToString();
+    }
+
+    private bool ShowsPlay(Bitmap shot, int row)   // enough ink in the row's play zone to be its play button
+    {
+        var p = RowPlayRect(_tracks.GetRowDisplayRectangle(row, false));
+        p = Rectangle.FromLTRB(p.X + 6, p.Y + 3, p.Right - 2, p.Bottom - 3);   // clear of a selected row's accent bar and the row dividers
+        Color bg = shot.GetPixel(p.X, p.Y);
+        int ink = 0;
+        for (int y = p.Top; y < p.Bottom; y++)
+            for (int x = p.Left; x < p.Right; x++)
+            {
+                Color c = shot.GetPixel(x, y);
+                if (Math.Abs(c.R - bg.R) + Math.Abs(c.G - bg.G) + Math.Abs(c.B - bg.B) > 90) ink++;
+            }
+        return ink > 8;
+    }
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point p);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hWnd, int flags);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+    [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, int rop);
+
+    /// <summary>Render harness: the hover state of a row (MIX_HOT_ROW=n, MIX_ROW_ACTION=play|more).</summary>
     public void PreviewRowHover(int row, string? action)
     {
         if (row < 0 || row >= _tracks.Rows.Count) return;
@@ -1535,9 +1607,15 @@ internal sealed class MainForm : Form, IMessageFilter
     private void SetHotRow(int row)
     {
         if (row == _hotRow) return;
-        if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.ListBg;
+        int old = _hotRow;
+        if (old >= 0 && old < _tracks.Rows.Count) _tracks.Rows[old].DefaultCellStyle.BackColor = Theme.ListBg;
         _hotRow = row;
         if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.ShowHover ? Theme.RowHover : Theme.ListBg;
+        // Repaint both rows outright: the hover buttons (play at the left, "···" at the right) must go with the pointer,
+        // and a back-colour change repaints a row only when the colour really changes - the Windows 95 look has no hover
+        // colour, so there it never did, and the buttons stayed behind on every row the pointer had crossed.
+        if (old >= 0 && old < _tracks.Rows.Count) _tracks.InvalidateRow(old);
+        if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.InvalidateRow(_hotRow);
     }
 
     // ---- in-app media preview (play songs / watch videos & photos straight off the iPod) ----
@@ -7278,6 +7356,9 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             var cp = base.CreateParams;
             cp.Style |= WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME | WS_SYSMENU | WS_CAPTION;
+            // The near-invisible live-render window (harness only): WS_EX_TRANSPARENT on the layered window makes it skip
+            // hit-testing, so a real click, hover or file drag passes through to whatever the user sees there.
+            if (NoActivate) cp.ExStyle |= 0x20;
             return cp;
         }
     }

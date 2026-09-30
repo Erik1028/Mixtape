@@ -1391,7 +1391,7 @@ internal static class Program
             }
             bool dlgLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow: shows the DWM caption as it really is
             using var dlg = new LibraryDoctorDialog(rep) { StartPosition = FormStartPosition.Manual, Location = dlgLive ? new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 700 : 40, 40) : new Point(-2600, -2600) };
-            if (dlgLive) { dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            if (dlgLive) { dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); ClickThrough(dlg); }
             else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var dbmp = new Bitmap(dlg.Width, dlg.Height);
@@ -1416,7 +1416,7 @@ internal static class Program
             using var dlg = new TrackInfoDialog(tracks) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
             if (int.TryParse(Environment.GetEnvironmentVariable("MIX_PROP_TAB"), out int ptab)) dlg.PreviewTab(ptab);   // Classic: which tab of the Properties sheet
             bool tiLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen + PrintWindow: nested panels as they really stack
-            if (tiLive) { dlg.Location = new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 520 : 40, 40); dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            if (tiLive) { dlg.Location = new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 520 : 40, 40); dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); ClickThrough(dlg); }
             else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var dbmp = new Bitmap(dlg.Width, dlg.Height);
@@ -1563,7 +1563,7 @@ internal static class Program
             bool cardLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow = the real window
             dlg.StartPosition = FormStartPosition.Manual;
             dlg.Location = cardLive ? new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 700 : 60, 60) : new Point(-2600, -2600);
-            if (cardLive) { dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            if (cardLive) { dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); ClickThrough(dlg); }
             else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using (var pbmp = new Bitmap(dlg.Width, dlg.Height))
@@ -1919,7 +1919,7 @@ internal static class Program
             // MIX_LIVE=1: on screen (near-invisible, not activated) + PrintWindow - the window as it really is; offscreen,
             // DrawToBitmap paints an OS caption over the Classic window's own (its non-client area has no size on screen)
             bool pvLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";
-            if (pvLive) { dlg.Location = new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 960 : 40, 40); dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            if (pvLive) { dlg.Location = new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 960 : 40, 40); dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); ClickThrough(dlg); }
             else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var pbmp = new Bitmap(dlg.Width, dlg.Height);
@@ -2027,6 +2027,8 @@ internal static class Program
         var appRoot = (Control?)form.PreviewRoot ?? form;
         if (live)
         {
+            if (Environment.GetEnvironmentVariable("MIX_HOVER_SWEEP") == "1")   // a pointer sweep, copied off the screen as it stands
+                File.WriteAllText(outPng + ".sweep.txt", form.PreviewHoverSweep(outPng));
             form.PreviewLivePaint();   // hover / selection / scroll round-trips: the incremental repaints a user causes
             using var lb = new Bitmap(form.Width, form.Height);
             using (var lg = Graphics.FromImage(lb)) { IntPtr hdc = lg.GetHdc(); PrintWindow(form.Handle, hdc, 2); lg.ReleaseHdc(hdc); }
@@ -2600,6 +2602,20 @@ internal static class Program
     private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hwnd, int cmd);
+
+    /// <summary>A near-invisible live-render window must never catch the user's own input: a click, a hover or a file
+    /// dragged across it would land in the test window instead of whatever they see there. Transparent on a layered
+    /// window = skipped by hit-testing, children included (drag-and-drop finds its target the same way); the harness
+    /// drives the window with sent messages, which still arrive.</summary>
+    private static void ClickThrough(Form f)
+    {
+        const int GWL_EXSTYLE = -20, WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20;
+        SetWindowLong(f.Handle, GWL_EXSTYLE, GetWindowLong(f.Handle, GWL_EXSTYLE) | WS_EX_LAYERED | WS_EX_TRANSPARENT);
+    }
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr hWnd, int index);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int SetWindowLong(IntPtr hWnd, int index, int value);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hwnd, out RECT rc);
     private struct RECT { public int Left, Top, Right, Bottom; }
