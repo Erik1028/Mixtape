@@ -79,10 +79,6 @@ internal static class Halftone
         r = Level(r + t); g = Level(g + t); b = Level(b + t);
     }
 
-    /// <summary>The ordered pattern's rank at (<paramref name="x"/>, <paramref name="y"/>), 0..63: a pixel belongs to
-    /// a stipple of density d when its rank is below d * 64.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static int Rank(int x, int y) => Bayer[((y & 7) << 3) | (x & 7)];
 
     // One halftoned copy per picture and size, dropped with the picture (weak keys) and trimmed when a window
     // resize leaves a picture with several sizes it will not be shown at again.

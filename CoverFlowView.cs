@@ -104,7 +104,6 @@ internal sealed class CoverFlowView : Control
     private readonly Font _fHdSubBold = Theme.UiFont(Theme.SzBody, FontStyle.Bold);
     private readonly Font _fBtn = Theme.UiFont(Theme.SzTitle);
     private const int ClassicTop = 22, ClassicText = 58;         // Classic: the viewport's margin above the covers; the captions' block below
-    private const float ReflShown = 0.28f;                       // Classic: how far the stippled reflection reaches, as a share of the cover
 
     public event Action<Item>? Activated;
     public event Action? CloseRequested;
@@ -620,9 +619,9 @@ internal sealed class CoverFlowView : Control
         // under a fraction of the WIDTH so a wide / full-screen window grows the covers (bigger deck). The
         // open/close zoom is a runtime scaled blit (not a smaller bake); a base-size change (resize / maximize)
         // rebakes the cache so covers re-fit. Classic: as big as the viewport allows under its top margin, with
-        // the reflection and the two caption lines below the cover.
+        // the two caption lines below the cover (no reflection: 1995 had none).
         int baseH = Theme.Classic
-            ? Math.Clamp((int)Math.Min((H - ClassicTop - ClassicText) / (Pop * (1f + ReflShown)), stage.Width * 0.34f), 60, 420)
+            ? Math.Clamp((int)Math.Min((H - ClassicTop - ClassicText) / Pop, stage.Width * 0.34f), 60, 420)
             : Math.Clamp((int)Math.Min(H * 0.46f, Width * 0.34f), 130, 420);
         if (baseH != _bakedCoverH)
         {
@@ -634,7 +633,9 @@ internal sealed class CoverFlowView : Control
         }
         int centreH = _centreH;
         float introScale = 0.84f + 0.16f * Math.Clamp(_intro, 0f, 1f); // open/close zoom (applied as a scaled blit below)
-        float cx = stage.X + stage.Width / 2f, centreY = Theme.Classic ? stage.Y + ClassicTop + centreH / 2f : H * 0.42f;
+        float cx = stage.X + stage.Width / 2f, centreY = Theme.Classic
+            ? stage.Y + Math.Max(ClassicTop, (H - centreH - ClassicText) / 2f) + centreH / 2f   // Classic: the covers and their caption, centred in the viewport
+            : H * 0.42f;
         _maxAngle = (float)(MaxAngleDeg * Math.PI / 180);
         // The settled centre cover is blitted from its cached flat sprite, which is baked at the sub-pixel phase
         // of its resting place so the last live frame and the cached one line up exactly (no half-pixel snap).
@@ -863,7 +864,7 @@ internal sealed class CoverFlowView : Control
             float left = Xc - pw / 2f;
             int leftI = (int)MathF.Floor(left);
             float phase = left - leftI;
-            int bufW = Math.Clamp((int)MathF.Ceiling(phase + pw), 1, _live!.Width), reflH = ch / 2;
+            int bufW = Math.Clamp((int)MathF.Ceiling(phase + pw), 1, _live!.Width), reflH = Theme.Classic ? 0 : ch / 2;   // (Classic: no reflection)
             WarpInto(_live, bufW, ch, reflH, GetSrc(i), theta, nearRight: d > 0, phase);
             _statLive++;
             float top = centreY - ch * scale / 2f;
@@ -924,7 +925,7 @@ internal sealed class CoverFlowView : Control
         int ch = side == 0 ? _centreH : _bakedCoverH;
         float theta = side == 0 ? 0f : _maxAngle, phase = side == 0 ? _flatPhase : 0f;
         float pw = ch * (float)Math.Cos(theta);
-        int w = Math.Max(1, (int)MathF.Ceiling(pw + phase)), reflH = ch / 2;
+        int w = Math.Max(1, (int)MathF.Ceiling(pw + phase)), reflH = Theme.Classic ? 0 : ch / 2;   // (Classic: no reflection)
         var bmp = new Bitmap(w, ch + reflH, PixelFormat.Format32bppPArgb);
         WarpInto(bmp, w, ch, reflH, GetSrc(index), theta, nearRight: side > 0, phase);
         _sprites[key] = bmp;
@@ -1043,12 +1044,8 @@ internal sealed class CoverFlowView : Control
         public bool NearRight;
         public float CornerR, FloorR, FloorG, FloorB;
         public float FrameA;              // the faint inner frame's strength (none in Classic)
-        public bool Dither, ScreenDoor;   // Classic: the cover in 256 colours; a stippled reflection
+        public bool Dither;               // Classic: the cover in 256 colours
     }
-
-    // Classic's stippled reflection: as dense at the top as the modern one is strong (34%), thinning to nothing
-    // at ReflShown of the cover's height (the reflection buffer is half the cover, hence the factor 2).
-    private const float StippleTop = 0.34f, StippleLen = ReflShown * 2f;
 
     /// <summary>Render one cover - a perspective-warped, rounded-cornered, framed tile at <paramref name="theta"/>
     /// (0 = flat) with its faded mirror reflection beneath - into the top-left <paramref name="bufW"/> x
@@ -1067,7 +1064,7 @@ internal sealed class CoverFlowView : Control
             NearRight = nearRight, CornerR = Theme.TileFrac,
             FloorR = floor.R, FloorG = floor.G, FloorB = floor.B,
             FrameA = Theme.Classic ? 0f : FrameAlpha,
-            Dither = Theme.Classic && Theme.DitherCovers, ScreenDoor = Theme.Classic,
+            Dither = Theme.Classic && Theme.DitherCovers,
         };
         var data = dst.LockBits(new Rectangle(0, 0, bufW, coverH + reflH), ImageLockMode.ReadWrite, PixelFormat.Format32bppPArgb);
         job.Dst = data.Scan0; job.Stride = data.Stride;
@@ -1195,15 +1192,6 @@ internal sealed class CoverFlowView : Control
                     int a = (c >> 24) & 0xFF;
                     int* rp = (int*)(col + (coverH + ry) * stride);
                     if (a == 0) { *rp = 0; continue; }
-                    if (j.ScreenDoor)
-                    {
-                        // Classic: 1995's only translucency - a stipple. The cover's own pixels on the ordered pattern,
-                        // fewer further down; the rest the black floor at the cover's coverage, so a front reflection
-                        // still hides the one behind it.
-                        float dens = StippleTop * (1f - (ry + 0.5f) / (reflH * StippleLen));
-                        *rp = dens > 0f && Halftone.Rank(ox, ry) < dens * 64f ? c : a << 24;
-                        continue;
-                    }
                     float t = 0.66f + 0.34f * ((ry + 0.5f) / reflH);   // 0.66 at the top -> 1.0 (all floor) at the bottom
                     if (t > 1f) t = 1f;
                     float keep = 1f - t, fa = a * t / 255f;
@@ -1255,13 +1243,21 @@ internal sealed class CoverFlowView : Control
         if (alpha < 8) return;
         if (Theme.Classic)
         {
-            // bitmap type on the black stage, under the point where the stippled reflection runs out
-            int ty = (int)(centreY + coverH / 2f + coverH * ReflShown) + 10;
-            var tr = new Rectangle(_vp.X + 8, ty, Math.Max(1, _vp.Width - 16), 18);
-            const TextFormatFlags cf = TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-            TextRenderer.DrawText(g, it.Title, _fCentreTitle, tr, Color.White, cf);
-            if (!string.IsNullOrEmpty(it.Subtitle))
-                TextRenderer.DrawText(g, it.Subtitle, _fCentreSub, new Rectangle(tr.X, ty + 20, tr.Width, 16), Theme.Face, cf);
+            // 1995 type on the black stage, just under the cover: aliased, as every screen then drew it. (TextRenderer
+            // would ClearType it, and colour fringes glare on white-on-black.)
+            int ty = (int)(centreY + coverH / 2f) + 12;
+            var tr = new RectangleF(_vp.X + 8, ty, Math.Max(1, _vp.Width - 16), 20);
+            var hint = g.TextRenderingHint;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
+            using (var fmt = new StringFormat(StringFormatFlags.NoWrap) { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
+            using (var title = new SolidBrush(Color.White))
+            using (var sub = new SolidBrush(Theme.Face))
+            {
+                g.DrawString(it.Title, _fCentreTitle, title, tr, fmt);
+                if (!string.IsNullOrEmpty(it.Subtitle))
+                    g.DrawString(it.Subtitle, _fCentreSub, sub, new RectangleF(tr.X, ty + 22, tr.Width, 16), fmt);
+            }
+            g.TextRenderingHint = hint;
             return;
         }
         int y = (int)(centreY + coverH / 2f + coverH * 0.42f + 10);
@@ -1276,7 +1272,7 @@ internal sealed class CoverFlowView : Control
     }
 
     /// <summary>The stage behind the covers: the app's own surface, or - Classic - black, the stage of every 1995
-    /// screensaver, so the covers and their reflections keep their depth instead of turning on window grey.</summary>
+    /// screensaver, so the covers keep their depth instead of turning on window grey.</summary>
     private static Color Stage => Theme.Classic ? Color.Black : Theme.Bg;
 
     // ---- the Classic page ----
