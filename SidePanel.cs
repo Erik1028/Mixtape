@@ -21,10 +21,12 @@ internal sealed class SidePanel : Panel
     public Tab Current { get; private set; } = Tab.UpNext;
 
     public const int W = 320;             // the card's width
-    private const int StripH = 44, Pad = 14;
+    private static int StripH => Theme.Classic ? 28 : 44;   // Classic: just the property-sheet tabs over their page
+    private const int Pad = 14;
     private int _hoverTab = -1;
     private bool _hoverClose;
     private readonly Font _fTab = Theme.UiFont(Theme.SzBody, FontStyle.Bold);
+    private readonly Font _fTab95 = Theme.UiFont(Theme.SzBody);   // Classic: a property sheet's tabs are in the plain face
     private readonly List<(Rectangle Rect, Tab Tab)> _tabHit = new();
 
     public SidePanel()
@@ -63,6 +65,7 @@ internal sealed class SidePanel : Panel
         // All three, visible or not: the Visible getter is false while the WINDOW is still hidden (startup with the card
         // remembered open), and a tab laid out only "when visible" would keep its 200x44 default until the next resize.
         var body = new Rectangle(0, StripH, Width, Math.Max(0, Height - StripH - CardFoot.H));
+        if (Theme.Classic) body = Rectangle.Inflate(ClassicPage, -4, -4);   // inside the property page's raised edge
         foreach (Control c in Controls) c.Bounds = body;
     }
 
@@ -76,16 +79,43 @@ internal sealed class SidePanel : Panel
         if (ht != _hoverTab || hc != _hoverClose) { _hoverTab = ht; _hoverClose = hc; Cursor = ht >= 0 || hc ? Theme.HandCursor : Cursors.Default; Invalidate(); }
     }
 
+    /// <summary>Classic: the property page the three tabs belong to.</summary>
+    private Rectangle ClassicPage => Rectangle.FromLTRB(2, StripH, Math.Max(3, Width - 2), Math.Max(StripH + 1, Height - CardFoot.H - 2));
+
+    private static (Tab tab, string name)[] Names() => new[] { (Tab.UpNext, Loc.T("Up Next")), (Tab.History, Loc.T("History")), (Tab.Lyrics, Loc.T("Lyrics")) };
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        if (Theme.Classic)
+        {
+            // a 1995 property sheet: the tabs on the window face, the chosen one standing forward and joined to its page
+            g.SmoothingMode = SmoothingMode.None;
+            g.Clear(Theme.Face);
+            _tabHit.Clear();
+            var page = ClassicPage;
+            int tx = page.X + 2;
+            var cells = new List<(Rectangle r, string name, bool on)>();
+            foreach (var (tab, name) in Names())
+            {
+                int w = TextRenderer.MeasureText(name, _fTab95).Width + 12;
+                var r = new Rectangle(tx, page.Y - ClassicPropertySheet.TabH + 2, w, ClassicPropertySheet.TabH - 2);
+                _tabHit.Add((r, tab));
+                cells.Add((r, name, tab == Current));
+                tx += w;
+            }
+            Theme.Bevel(g, page, raised: true);
+            foreach (var c in cells) if (!c.on) ClassicPropertySheet.DrawTab(g, c.r, c.name, false, _fTab95);
+            foreach (var c in cells) if (c.on) ClassicPropertySheet.DrawTab(g, new Rectangle(c.r.X - 2, c.r.Y - 2, c.r.Width + 4, c.r.Height + 3), c.name, true, _fTab95);
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.Bg);
 
         // the tab strip: the active tab on an accent-tinted chip, the others quiet
         _tabHit.Clear();
         int x = Pad;
-        foreach (var (tab, name) in new[] { (Tab.UpNext, Loc.T("Up Next")), (Tab.History, Loc.T("History")), (Tab.Lyrics, Loc.T("Lyrics")) })
+        foreach (var (tab, name) in Names())
         {
             int tw = TextRenderer.MeasureText(name, _fTab, new Size(int.MaxValue, 24), TextFormatFlags.NoPrefix).Width + 24;
             var r = new Rectangle(x, (StripH - 26) / 2, tw, 26);
@@ -104,7 +134,7 @@ internal sealed class SidePanel : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _fTab.Dispose();
+        if (disposing) { _fTab.Dispose(); _fTab95.Dispose(); }
         base.Dispose(disposing);
     }
 }

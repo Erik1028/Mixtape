@@ -386,7 +386,7 @@ internal sealed class LyricsStage : Control
 
     private void DrawWash(Graphics g)
     {
-        if (Theme.Classic) { g.Clear(Color.Black); return; }   // 1995: the stage of a screensaver - black, the words lit on it
+        if (Theme.Classic) { g.Clear(Theme.Face); return; }   // 1995: the window's own grey face; the words sit on a white page in it
         float swap = Swap;
         if (swap >= 1f && _oldWashA is not null) DropOld();
         if (_washA is null && _oldWashA is null) { using var b0 = new SolidBrush(Theme.Bg); g.FillRectangle(b0, ClientRectangle); return; }
@@ -450,8 +450,9 @@ internal sealed class LyricsStage : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = TextRenderingHint.AntiAlias;   // not GridFit: it snaps glyphs and shimmers under the pop
+        g.SmoothingMode = Theme.Classic ? SmoothingMode.None : SmoothingMode.AntiAlias;
+        // not GridFit: it snaps glyphs and shimmers under the pop. Classic: 1995 had no font smoothing - crisp, aliased type
+        g.TextRenderingHint = Theme.Classic ? TextRenderingHint.SingleBitPerPixelGridFit : TextRenderingHint.AntiAlias;
         EnsureFonts();
         MainForm.Trace("paint: wash");
         DrawWash(g);
@@ -480,7 +481,7 @@ internal sealed class LyricsStage : Control
     /// <summary>The words scale with the window: 24 pt in a small one, up to 32 pt on a big screen.</summary>
     private void EnsureFonts()
     {
-        float want = Math.Clamp(Height / 24f, 22f, 32f);
+        float want = Theme.Classic ? Math.Clamp(Height / 30f, 15f, 22f) : Math.Clamp(Height / 24f, 22f, 32f);   // Classic: a document's type, not a stage's
         if (_fLine is not null && Math.Abs(want - _lineSize) < 0.75f) return;
         _lineSize = want;
         _fLine = FontFor(want);
@@ -490,7 +491,7 @@ internal sealed class LyricsStage : Control
     private Font FontFor(float size)
     {
         int key = (int)Math.Round(size * 10);
-        if (!_fontCache.TryGetValue(key, out var f)) { f = StageFont(key / 10f, FontStyle.Bold); _fontCache[key] = f; }
+        if (!_fontCache.TryGetValue(key, out var f)) { f = StageFont(key / 10f, Theme.Classic ? FontStyle.Regular : FontStyle.Bold); _fontCache[key] = f; }
         return f;
     }
 
@@ -498,6 +499,7 @@ internal sealed class LyricsStage : Control
     {
         var r = CoverRect;
         int rad = Theme.Classic ? 0 : Math.Max(8, (int)Math.Round(r.Width * Theme.TileFrac));   // Classic: a square picture
+        if (!Theme.Classic)   // (Classic: the picture sits in a sunken frame instead, below)
         for (int i = 6; i >= 1; i--)   // a deep, soft shadow lifts the cover off the wash
             using (var sh = new SolidBrush(Color.FromArgb((int)(18 * a), 0, 0, 0)))
             using (var sp = Theme.RoundedRect(new RectangleF(r.X - i, r.Y + i + 4, r.Width + i * 2, r.Height + i * 2), rad + i))
@@ -530,13 +532,13 @@ internal sealed class LyricsStage : Control
                 Theme.DrawNote(g, new RectangleF(r.X + (r.Width - ns) / 2f, r.Y + (r.Height - ns) / 2f, ns, ns), W(0.5 * a));
             }
             g.Clip = saved;
-            using var edge = new Pen(W(0.16 * a));
-            g.DrawPath(edge, clip);
+            if (Theme.Classic) Theme.Bevel(g, Rectangle.Inflate(r, 2, 2), raised: false);   // a 95 picture box: the cover sunk into the face
+            else { using var edge = new Pen(W(0.16 * a)); g.DrawPath(edge, clip); }
         }
 
         // title + artist
-        using (var tb = new SolidBrush(W(0.95 * a)))
-        using (var ab = new SolidBrush(W(0.6 * a)))
+        using (var tb = new SolidBrush(Theme.Classic ? Theme.TextCol : W(0.95 * a)))
+        using (var ab = new SolidBrush(Theme.Classic ? Theme.TextCol : W(0.6 * a)))
         // No LineLimit here: with it, a line that does not fit the rect's height is not clipped but DROPPED
         // — a 22 px rect and a 13 pt bold face left the title invisible.
         using (var fmt = new StringFormat(Typo) { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
@@ -560,10 +562,9 @@ internal sealed class LyricsStage : Control
                 }
                 if (!chip.IsEmpty)
                 {
-                    using var op = new Pen(W(0.22 * a));
-                    using var cb = new SolidBrush(W(0.55 * a));
-                    using var cp = Theme.RoundedRect(chip, Theme.Classic ? 0f : 6f);
-                    g.DrawPath(op, cp);
+                    using var cb = new SolidBrush(Theme.Classic ? Theme.TextCol : W(0.55 * a));
+                    if (Theme.Classic) Theme.Bevel(g, Rectangle.Round(chip), raised: false, thin: true);   // Classic: a status-bar field
+                    else { using var op = new Pen(W(0.22 * a)); using var cp = Theme.RoundedRect(chip, 6f); g.DrawPath(op, cp); }
                     g.DrawString(_format, _fTime, cb, chip.X + 8, chip.Y + (ch - sz.Height) / 2f, Typo);
                 }
             }
@@ -896,14 +897,24 @@ internal sealed class LyricsStage : Control
         return !Sig(PredictTop()).Equals(_paintedSig);
     }
 
+    /// <summary>Classic: the page the words sit on - white, sunk into the window face like a document open in WordPad,
+    /// below the corner button.</summary>
+    private Rectangle ClassicDoc { get { var sr = SheetRect; return Rectangle.FromLTRB(sr.X - 14, 60, sr.Right + 14, Math.Max(80, Height - 24)); } }
+
     private void DrawSheet(Graphics g, float a)
     {
         var sr = SheetRect;
+        var doc = ClassicDoc;
+        if (Theme.Classic)
+        {
+            using (var page = new SolidBrush(Color.White)) g.FillRectangle(page, doc);
+            Theme.Bevel(g, doc, raised: false);   // the 95 field's two-pixel sunken edge
+        }
         if (_lines.Count == 0)
         {
-            using var sb = new SolidBrush(W(0.6 * a));
+            using var sb = new SolidBrush(Theme.Classic ? Theme.TextCol : W(0.6 * a));
             using var fmt = new StringFormat(Typo) { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center };
-            g.DrawString(_status, _fSub, sb, new RectangleF(sr.X, 0, sr.Width, Height), fmt);
+            g.DrawString(_status, _fSub, sb, Theme.Classic ? new RectangleF(sr.X, doc.Y, sr.Width, doc.Height) : new RectangleF(sr.X, 0, sr.Width, Height), fmt);
             return;
         }
         Measure(g);
@@ -928,7 +939,7 @@ internal sealed class LyricsStage : Control
         double top = _scroll + _userScroll;
         _paintedTop = (int)Math.Round(top);
 
-        g.SetClip(new Rectangle(sr.X - 8, 0, sr.Width + 16, Height));
+        g.SetClip(Theme.Classic ? Rectangle.Inflate(doc, -2, -2) : new Rectangle(sr.X - 8, 0, sr.Width + 16, Height));
 
         // intro dots
         if (_synced && cur < 0 && _rows.Length > 0 && _lines[0].At.TotalSeconds >= BeatSeconds)
@@ -965,6 +976,20 @@ internal sealed class LyricsStage : Control
             // wash reads as a dirty stripe on a coloured ground, so nothing is painted over the picture.
             double edge = Math.Clamp(Math.Min(y + row.Height - 10, Height - y - 10) / 90.0, 0, 1);
 
+            if (Theme.Classic)
+            {
+                // Classic: a document, not a stage - every line black, the sung one SELECTED the way a 1995 list
+                // selects an item: a navy bar across the page, the words in white (grey with black words while the
+                // song is paused, as an unfocused list showed its selection). No fades, no growth.
+                if (isNow)
+                {
+                    using var sel = new SolidBrush(_playing ? Theme.ClassicNavy : Theme.Face);
+                    g.FillRectangle(sel, doc.X + 2, y - 4, doc.Width - 4, row.Height + 8);
+                }
+                DrawRowLines(g, row, y, isNow && _playing ? Color.White : Theme.TextCol, 1f);
+                continue;
+            }
+
             // WHOLE-LINE highlight. The sung line brightens and grows as one thing over the hand-off, the
             // line before it dims and settles back. No word-by-word fill: the sources give LINE times, and a
             // per-word guess read as jitter rather than as karaoke.
@@ -980,8 +1005,7 @@ internal sealed class LyricsStage : Control
                 using var hb = new SolidBrush(W(0.10 * reveal * a * edge));
                 g.FillPath(hb, hp);
             }
-            // Classic: the sung line in karaoke yellow, the rest white - the era's sing-along screen
-            DrawRowLines(g, row, y, Theme.Classic && isNow ? Color.FromArgb(Math.Clamp((int)Math.Round(alpha * 255), 0, 255), 255, 255, 0) : W(alpha), scale);
+            DrawRowLines(g, row, y, W(alpha), scale);
         }
         g.ResetClip();
     }
@@ -1020,6 +1044,8 @@ internal sealed class LyricsStage : Control
     private static void DrawBeat(Graphics g, int x, int cy, double prog, double t, double alpha)
     {
         prog = Math.Clamp(prog, 0, 1);
+        // Classic: the instrumental break as a 1995 progress bar, its navy chunks crawling across until the words return
+        if (Theme.Classic) { Theme.ClassicProgress(g, new Rectangle(x, cy - 7, 124, 14), (int)Math.Round(prog * 120)); return; }
         for (int k = 0; k < 3; k++)
         {
             double f = Math.Clamp(prog * 3 - k, 0, 1);

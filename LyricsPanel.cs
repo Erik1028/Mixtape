@@ -102,7 +102,10 @@ internal sealed class LyricsPanel : Control
 
     private readonly System.Windows.Forms.Timer _frame = new() { Interval = 16 };   // ~60 fps while visible
 
-    private const int Pad = 18, HeaderH = 44, LineGap = 10, MinLineH = 26, FooterH = 30;
+    private const int Pad = 18, HeaderH = 44, FooterH = 30;
+    // Classic: a document's line spacing - the rows were sized for the modern type and read double-spaced in the 95 face
+    private static int LineGap => Theme.Classic ? 6 : 10;
+    private static int MinLineH => Theme.Classic ? 16 : 26;
     /// <summary>A silence at least this long shows the three dots.</summary>
     private const double BeatSeconds = 4.0;
 
@@ -122,7 +125,7 @@ internal sealed class LyricsPanel : Control
     private readonly Font _fHeader = Theme.DisplayFont(12.5f, FontStyle.Bold);
     private readonly Font _fSong = Theme.UiFont(9f);
     private readonly Font _fLine = Theme.UiFont(11.5f);
-    private readonly Font _fLineOn = Theme.DisplayFont(13.5f, FontStyle.Bold);
+    private readonly Font _fLineOn = Theme.Classic ? Theme.UiFont(11.5f, FontStyle.Bold) : Theme.DisplayFont(13.5f, FontStyle.Bold);   // Classic: a selected list item keeps the list's size
     private readonly Font _fStatus = Theme.UiFont(10f);
 
     public LyricsPanel()
@@ -516,7 +519,7 @@ internal sealed class LyricsPanel : Control
         int fill = -1, beat = -1;
         if (cur >= 0 && cur < _rows.Length)
         {
-            if (_rows[cur].Words.Count > 0) fill = (int)(Math.Max(10, _rows[cur].Height - 4) * LineProgress(cur, now));
+            if (_rows[cur].Words.Count > 0) fill = Theme.Classic ? -1 : (int)(Math.Max(10, _rows[cur].Height - 4) * LineProgress(cur, now));   // (Classic has no accent bar)
             else if (_rows[cur].Beat && cur + 1 < _lines.Count)
             {
                 double span = (_lines[cur + 1].At - _lines[cur].At).TotalSeconds;
@@ -678,6 +681,22 @@ internal sealed class LyricsPanel : Control
             bool isNow = _synced && i == cur;
             bool isPast = _synced && i < cur;
             bool isPrev = _synced && i == _prevCur && ho < 1 && !isNow;
+            if (Theme.Classic)
+            {
+                // Classic: the page of a document - every line black, the sung one selected like a 1995 list item (a
+                // navy bar across the page, the words in white; grey with black words while the song is paused, as an
+                // unfocused list showed its selection). No dimming by distance, no fades, no accent bar.
+                if (isNow)
+                {
+                    bool held = _held > 0.5;
+                    using var sel = new SolidBrush(held ? Theme.Face : Theme.ClassicNavy);
+                    int lines = _rows[i].Words.Count == 0 ? 1 : _rows[i].Words.Max(w => w.VisualLine) + 1;
+                    g.FillRectangle(sel, 6, y - 2, Width - 12, lines * _rows[i].LineH + 4);   // around the words; the white page runs from 6 to Width - 6
+                    DrawWords(g, _rows[i], y, true, held ? Theme.TextCol : Color.White);
+                }
+                else DrawWords(g, _rows[i], y, false, Theme.TextCol);
+                continue;
+            }
             double d = Math.Clamp(Math.Abs(y + _rows[i].Height / 2.0 - focusY) / 190.0, 0, 1);
             double bright = _synced ? 0.66 - 0.42 * Math.Pow(d, 1.15) : 0.62;
             // The CURRENT line's not-yet-sung words must be clearly darker than the sung ones, or the
@@ -723,11 +742,14 @@ internal sealed class LyricsPanel : Control
         }
         g.ResetClip();
 
-        // top/bottom fades so lines melt into the popover edges
-        using (var lg = new LinearGradientBrush(new Rectangle(0, HeaderH, Width, 28), Surface, Color.FromArgb(0, Surface), LinearGradientMode.Vertical))
-            g.FillRectangle(lg, 0, HeaderH, Width, 28);
-        using (var lg = new LinearGradientBrush(new Rectangle(0, SheetBottom - 28, Width, 28), Color.FromArgb(0, Surface), Surface, LinearGradientMode.Vertical))
-            g.FillRectangle(lg, 0, SheetBottom - 28, Width, 28);
+        // top/bottom fades so lines melt into the popover edges (Classic: a page simply ends at its frame)
+        if (!Theme.Classic)
+        {
+            using (var lg = new LinearGradientBrush(new Rectangle(0, HeaderH, Width, 28), Surface, Color.FromArgb(0, Surface), LinearGradientMode.Vertical))
+                g.FillRectangle(lg, 0, HeaderH, Width, 28);
+            using (var lg = new LinearGradientBrush(new Rectangle(0, SheetBottom - 28, Width, 28), Color.FromArgb(0, Surface), Surface, LinearGradientMode.Vertical))
+                g.FillRectangle(lg, 0, SheetBottom - 28, Width, 28);
+        }
 
         // The chrome goes on LAST, over the sheet. TextRenderer paints through GDI and ignores the Graphics
         // clip, so a lyric line straddling the top or the bottom of the sheet band draws straight across the
@@ -826,6 +848,8 @@ internal sealed class LyricsPanel : Control
     private void DrawBeat(Graphics g, int x, int cy, double prog, double t, double alpha)
     {
         prog = Math.Clamp(prog, 0, 1);
+        // Classic: the instrumental break as a 1995 progress bar, its navy chunks crawling across until the words return
+        if (Theme.Classic) { Theme.ClassicProgress(g, new Rectangle(x, cy - 5, 76, 10), (int)Math.Round(prog * 72)); return; }
         Color off = Theme.Blend(Surface, Theme.TextCol, 0.30 * alpha);
         Color on = Theme.Blend(Surface, Theme.TextCol, alpha);
         for (int k = 0; k < 3; k++)
@@ -906,8 +930,13 @@ internal sealed class LyricsPanel : Control
         // Non-zero is drawn in the accent colour: a single press changes the number AND lights it up, so the
         // control answers immediately even though one step barely moves the sheet.
         if (_hotSync == 2) HotChip(g, ValueRect);
+        if (Theme.Classic)   // Classic: the value in a sunken white field, the way 1995 showed a number you step up and down
+        {
+            using (var field = new SolidBrush(Color.White)) g.FillRectangle(field, ValueRect);
+            Theme.Bevel(g, ValueRect, raised: false);
+        }
         TextRenderer.DrawText(g, Loc.T("{0} s", num), _fStatus, ValueRect,
-            ms == 0 ? Theme.Subtle : Theme.Accent,
+            Theme.Classic ? Theme.TextCol : ms == 0 ? Theme.Subtle : Theme.Accent,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         DrawStep(g, MinusRect, plus: false, hot: _hotSync == 1);
