@@ -1789,7 +1789,7 @@ internal sealed class NowPlayingBar : Panel
 
     /// <summary>The 95 trackbar: a sunken white channel and a raised, square thumb. The channel carries a navy
     /// fill up to the value, so the same drawing serves the seek line (a progress trough) and the volume.</summary>
-    private static void DrawClassicSlider(Graphics g, Rectangle track, double frac, bool knob)
+    internal static void DrawClassicSlider(Graphics g, Rectangle track, double frac, bool knob)
     {
         var sm = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.None;

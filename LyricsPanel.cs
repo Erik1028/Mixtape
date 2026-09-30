@@ -724,6 +724,7 @@ internal sealed class LyricsPanel : Control
     /// turns inward to come back.</summary>
     private void DrawExpand(Graphics g, Rectangle r, bool hot)
     {
+        if (Theme.Classic) { ClassicButton(g, r, hot, ClassicGlyph.Maximize); return; }
         if (hot) HotChip(g, r);
         using var pen = new Pen(hot ? Theme.TextCol : Theme.Subtle, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
@@ -735,6 +736,7 @@ internal sealed class LyricsPanel : Control
     /// becomes a back arrow, because the same button is the way out.</summary>
     private void DrawMore(Graphics g, Rectangle r, bool hot, bool back)
     {
+        if (Theme.Classic) { ClassicButton(g, r, hot, back ? ClassicGlyph.Back : ClassicGlyph.Dots); return; }
         if (hot) HotChip(g, r);
         var c = hot ? Theme.TextCol : Theme.Subtle;
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
@@ -858,6 +860,7 @@ internal sealed class LyricsPanel : Control
 
     private void DrawStep(Graphics g, Rectangle r, bool plus, bool hot)
     {
+        if (Theme.Classic) { ClassicButton(g, r, hot, plus ? ClassicGlyph.Plus : ClassicGlyph.Minus); return; }
         if (hot) HotChip(g, r);
         using var pen = new Pen(hot ? Theme.TextCol : Theme.Subtle, 1.7f);
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, m = 5;
@@ -876,8 +879,47 @@ internal sealed class LyricsPanel : Control
                 new Point(Pad + (int)rects[i].X, y + (int)rects[i].Y), col, TextFormatFlags.NoPadding);
     }
 
+    private enum ClassicGlyph { Maximize, Dots, Back, Minus, Plus }
+
+    /// <summary>Classic: the header's and the sync row's buttons as 1995 drew a small tool button - raised, lit a
+    /// little under the pointer like every other button of the look, with a black pixel glyph: the caption's own
+    /// maximize box for "full view", dots or a back arrow for the other versions, a bar and a cross for the steps.</summary>
+    private static void ClassicButton(Graphics g, Rectangle r, bool hot, ClassicGlyph glyph)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var face = new SolidBrush(hot ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(face, r);
+        Theme.Bevel(g, r, raised: true);
+        using var k = new SolidBrush(Theme.FaceDark);
+        int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+        switch (glyph)
+        {
+            case ClassicGlyph.Maximize:   // a window outline with the thick top edge of its caption
+                g.FillRectangle(k, cx - 5, cy - 5, 9, 2);
+                g.FillRectangle(k, cx - 5, cy - 3, 1, 7);
+                g.FillRectangle(k, cx + 3, cy - 3, 1, 7);
+                g.FillRectangle(k, cx - 5, cy + 3, 9, 1);
+                break;
+            case ClassicGlyph.Dots:
+                for (int d = -1; d <= 1; d++) g.FillRectangle(k, cx - 1 + d * 4, cy, 2, 2);
+                break;
+            case ClassicGlyph.Back:       // the scrollbar's left arrow
+                for (int i = 0; i < 4; i++) g.FillRectangle(k, cx - 2 + i, cy - i, 1, 1 + 2 * i);
+                break;
+            case ClassicGlyph.Minus:
+                g.FillRectangle(k, cx - 4, cy - 1, 8, 2);
+                break;
+            case ClassicGlyph.Plus:
+                g.FillRectangle(k, cx - 4, cy - 1, 8, 2);
+                g.FillRectangle(k, cx - 1, cy - 4, 2, 8);
+                break;
+        }
+        g.SmoothingMode = sm;
+    }
+
     private static void DrawX(Graphics g, Rectangle r, bool hot)
     {
+        if (Theme.Classic) { Theme.PaintClassicClose(g, r, down: false); return; }   // the caption's own close box
         using var p = new Pen(hot ? Theme.TextCol : Theme.Subtle, 1.6f);
         int m = 6;
         g.DrawLine(p, r.Left + m, r.Top + m, r.Right - m, r.Bottom - m);

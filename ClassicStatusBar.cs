@@ -35,7 +35,7 @@ internal sealed class ClassicStatusBar : Control
         Panel(g, pMain, main);
         Panel(g, pDev, device);
         Panel(g, pPlay, play);
-        PaintGrip(g);
+        DrawGrip(g, Width, Height);
     }
 
     /// <summary>One status panel: a thin sunken edge and its text, cut with an ellipsis when it does not fit.</summary>
@@ -47,12 +47,12 @@ internal sealed class ClassicStatusBar : Control
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
-    /// <summary>The size grip: the corner's diagonal ridges, a highlight line and two shadow lines per ridge.</summary>
-    private void PaintGrip(Graphics g)
+    /// <summary>The size grip: the corner's diagonal ridges, a highlight line and two shadow lines per ridge, in the
+    /// bottom-right corner of a <paramref name="w"/> x <paramref name="h"/> area.</summary>
+    internal static void DrawGrip(Graphics g, int w, int h)
     {
         using var hi = new Pen(Theme.FaceHi);
         using var sh = new Pen(Theme.FaceShadow);
-        int w = Width, h = Height;
         for (int k = 1; k <= 12; k++)
         {
             var pen = (k % 4) switch { 1 => hi, 2 => sh, 3 => sh, _ => null };
