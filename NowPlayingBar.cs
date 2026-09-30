@@ -912,7 +912,7 @@ internal sealed class NowPlayingBar : Panel
         var c = new CardGeom { Card = card, Cover = new Rectangle(card.X + 7, card.Y + 7, 40, 40) };
         c.TextX = c.Cover.Right + 12;
         c.ShowTimes = card.Width >= 300;
-        int timesW = c.ShowTimes ? 34 : 0;
+        int timesW = c.ShowTimes ? Theme.Classic ? 46 : 34 : 0;   // Classic: room for the LED's seven-segment digits
         c.Times = new Rectangle(card.Right - 14 - timesW, card.Y, timesW, card.Height);
         c.TextW = card.Right - 14 - (c.ShowTimes ? timesW + 8 : 0) - c.TextX;
         c.ShowTitle = c.TextW >= 60;
@@ -1011,7 +1011,16 @@ internal sealed class NowPlayingBar : Panel
         double dur = s.Dur, pos = s.Pos;
         bool scrubbing = s.ScrubFrac >= 0;
         double frac = scrubbing ? s.ScrubFrac : (dur > 0 ? Math.Clamp(pos / dur, 0, 1) : 0);
-        if (c.ShowTimes && !idle)
+        if (c.ShowTimes && Theme.Classic)
+        {
+            // Windows 95's CD Player: an inset black display, green seven-segment digits - "--:--" with no disc in
+            double? pk = scrubbing || idle ? null : s.HoverFrac;
+            double big = scrubbing ? s.ScrubFrac * dur : pk is { } hf2 ? hf2 * dur : pos;
+            DrawClassicLed(g, new Rectangle(c.Times.X - 4, card.Y + 6, c.Times.Width + 6, 35),
+                idle ? "--:--" : LedTime(big), idle ? LedDim : pk is not null ? LedPeek : s.Playing || scrubbing ? LedOn : LedDim,
+                idle ? "" : s.Remaining && dur > 0 ? "-" + LedTime(Math.Max(0, dur - pos)) : LedTime(dur), LedDim);
+        }
+        else if (c.ShowTimes && !idle)
         {
             double? peek = scrubbing ? null : s.HoverFrac;   // hovering the seek line: the time UNDER THE POINTER, in the accent
             double shown = scrubbing ? s.ScrubFrac * dur : peek is { } hf ? hf * dur : pos;
@@ -1043,6 +1052,67 @@ internal sealed class NowPlayingBar : Panel
                 using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
             }
             TextRenderer.DrawText(g, txt, fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    // Classic LED colours: lit green, the dimmer green of a paused (or empty) player and of the small total, and the
+    // time under the pointer in yellow, so a hover over the seek line reads as a different number.
+    private static readonly Color LedOn = Color.FromArgb(0, 255, 0), LedDim = Color.FromArgb(0, 176, 0), LedPeek = Color.FromArgb(255, 255, 0);
+
+    /// <summary>A time the way the CD Player counted it: minutes with a leading zero ("03:07").</summary>
+    private static string LedTime(double seconds)
+    {
+        if (double.IsNaN(seconds) || seconds < 0) seconds = 0;
+        int t = (int)seconds;
+        return $"{t / 60:00}:{t % 60:00}";
+    }
+
+    /// <summary>Classic: the time readout as Windows 95's CD Player showed it - an inset black display with the big
+    /// elapsed time over the small total, both in seven-segment bars (pixel rectangles: no font, no smoothing).</summary>
+    private static void DrawClassicLed(Graphics g, Rectangle led, string big, Color bigCol, string small, Color smallCol)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var bk = new SolidBrush(Color.Black)) g.FillRectangle(bk, led);
+        Theme.Bevel(g, led, raised: false, thin: true);
+        int right = led.Right - 4;
+        SegText(g, big, right, led.Y + 4, 14, 8, 2, 2, bigCol, led.Width - 6);
+        if (small.Length > 0) SegText(g, small, right, led.Y + 22, 9, 5, 1, 1, smallCol, led.Width - 6);
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>A run of seven-segment characters (digits, ':' and '-'), right-aligned at <paramref name="right"/>;
+    /// a run too wide for <paramref name="maxW"/> steps down to narrower digits instead of spilling out.</summary>
+    private static void SegText(Graphics g, string text, int right, int top, int h, int w, int t, int gap, Color col, int maxW)
+    {
+        int Width(int dw) { int n = 0; foreach (char ch in text) n += (ch == ':' ? t : dw) + gap; return n - gap; }
+        while (w > 3 && Width(w) > maxW) w--;
+        int x = right - Width(w);
+        int arm = (h - 3 * t) / 2;   // the length of a vertical segment
+        using var br = new SolidBrush(col);
+        foreach (char ch in text)
+        {
+            if (ch == ':')
+            {
+                g.FillRectangle(br, x, top + t + arm / 2, t, t);
+                g.FillRectangle(br, x, top + 2 * t + arm + arm / 2, t, t);
+                x += t + gap;
+                continue;
+            }
+            int segs = ch switch
+            {
+                '0' => 0x3F, '1' => 0x06, '2' => 0x5B, '3' => 0x4F, '4' => 0x66, '5' => 0x6D,
+                '6' => 0x7D, '7' => 0x07, '8' => 0x7F, '9' => 0x6F, '-' => 0x40, _ => 0,
+            };
+            // a b c d e f g = bits 0..6; the bars stop short of each other at the corners, as lit segments do
+            if ((segs & 0x01) != 0) g.FillRectangle(br, x + t, top, w - 2 * t, t);                          // a
+            if ((segs & 0x02) != 0) g.FillRectangle(br, x + w - t, top + t, t, arm);                         // b
+            if ((segs & 0x04) != 0) g.FillRectangle(br, x + w - t, top + 2 * t + arm, t, arm);               // c
+            if ((segs & 0x08) != 0) g.FillRectangle(br, x + t, top + 2 * t + 2 * arm, w - 2 * t, t);         // d
+            if ((segs & 0x10) != 0) g.FillRectangle(br, x, top + 2 * t + arm, t, arm);                       // e
+            if ((segs & 0x20) != 0) g.FillRectangle(br, x, top + t, t, arm);                                 // f
+            if ((segs & 0x40) != 0) g.FillRectangle(br, x + t, top + t + arm, w - 2 * t, t);                 // g
+            x += w + gap;
         }
     }
 
