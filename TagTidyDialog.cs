@@ -11,7 +11,7 @@ internal sealed class TagTidyDialog : CardDialog
     private readonly List<TagTidy.Group> _groups;
     private readonly bool[] _on;
     private readonly FixList _list;
-    private readonly ThemedButton _apply;
+    private readonly ThemedButton _apply, _cancel;
     private readonly GlassLabel _intro = new();
 
     public IReadOnlyList<TagTidy.Group> Selected => _groups.Where((_, i) => _on[i]).ToList();
@@ -44,10 +44,10 @@ internal sealed class TagTidyDialog : CardDialog
         Controls.Add(_list);
 
         int by = 54 + listH + 22;
-        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(ClientSize.Width - 240, by), DialogResult = DialogResult.Cancel };
+        _cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(ClientSize.Width - 256, by), DialogResult = DialogResult.Cancel };
         _apply = new ThemedButton { Text = Loc.T("Fix"), Primary = true, Pill = true, Width = 130, Height = 32, Location = new Point(ClientSize.Width - 130 - 20, by), DialogResult = DialogResult.OK };
-        Controls.Add(cancel); Controls.Add(_apply);
-        CancelButton = cancel;
+        Controls.Add(_cancel); Controls.Add(_apply);
+        CancelButton = _cancel;
         UpdateApply();
         AdoptCard();
     }
@@ -57,6 +57,11 @@ internal sealed class TagTidyDialog : CardDialog
         int songs = _groups.Where((_, i) => _on[i]).Sum(g => g.Tracks.Count);
         _apply.Text = songs == 0 ? Loc.T("Fix") : songs == 1 ? Loc.T("Fix 1 song") : Loc.T("Fix {0} songs", songs);
         _apply.Enabled = songs > 0;
+        // One row from the right edge, 10 px apart, Fix as wide as its label (which changes with the ticks and runs
+        // longer in Hungarian). The two used to be placed from separate guesses and overlapped by 6 px.
+        _apply.Width = Math.Max(130, _apply.LabelWidth);
+        _apply.Left = ClientSize.Width - 20 - _apply.Width;
+        _cancel.Left = _apply.Left - 10 - _cancel.Width;
     }
 
     /// <summary>One row per proposal: a tick, the field, the old value, the new one, and how many songs it touches.</summary>
