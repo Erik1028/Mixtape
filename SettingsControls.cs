@@ -548,17 +548,17 @@ internal sealed class ClassicPropertySheet : Panel
             x += w;
         }
         Theme.Bevel(g, PageRect, raised: true);
-        for (int i = 0; i < _tabs.Length; i++) if (i != _sel) Tab(g, rects[i], _tabs[i], false);
+        for (int i = 0; i < _tabs.Length; i++) if (i != _sel) DrawTab(g, rects[i], _tabs[i], false, _font);
         if (_sel >= 0 && _sel < rects.Length)
         {
             var r = rects[_sel];
-            Tab(g, new Rectangle(r.X - 2, 0, r.Width + 4, TabH + 1), _tabs[_sel], true);
+            DrawTab(g, new Rectangle(r.X - 2, 0, r.Width + 4, TabH + 1), _tabs[_sel], true, _font);
         }
     }
 
     /// <summary>One tab: white on the left and the top (its two top corners cut by a pixel), grey and black on the
     /// right, no bottom edge - the chosen one is two pixels taller and wider, and wipes the page's edge under it.</summary>
-    private void Tab(Graphics g, Rectangle r, string text, bool on)
+    internal static void DrawTab(Graphics g, Rectangle r, string text, bool on, Font font)
     {
         using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 1);
         using var hi = new Pen(Theme.FaceHi);
@@ -572,7 +572,7 @@ internal sealed class ClassicPropertySheet : Panel
         g.DrawLine(dk, r.Right - 2, r.Y + 1, r.Right - 2, r.Y + 1);
         g.DrawLine(sh, r.Right - 2, r.Y + 2, r.Right - 2, bottom);
         var tr = new Rectangle(r.X, r.Y + (on ? 0 : 1), r.Width, r.Height - 2);
-        TextRenderer.DrawText(g, text, _font, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(g, text, font, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
     protected override void Dispose(bool disposing)
