@@ -21,6 +21,8 @@ internal sealed class MiniPlayerForm : Form
     public event Action<double>? SeekRequested;     // 0..1
     public event Action<double>? VolumeRequested;    // 0..1
     public event Action? MuteRequested;
+    /// <summary>Classic: the speaker opens 1995's volume window (arg = the speaker, on screen) instead of muting.</summary>
+    public event Action<Rectangle>? VolumePopupRequested;
     public event Action? ShuffleRequested;
     public event Action? RepeatRequested;
     public event Action<Rectangle>? EqualizerRequested;     // arg = anchor screen rect for the flyout
@@ -300,7 +302,9 @@ internal sealed class MiniPlayerForm : Form
         {
             case Hit.Close: ExpandRequested?.Invoke(); return;
             case Hit.More: ShowMoreMenu(l.More); return;
-            case Hit.Speaker: MuteRequested?.Invoke(); return;
+            case Hit.Speaker:
+                if (Theme.Classic && VolumePopupRequested is not null) { VolumePopupRequested(RectangleToScreen(l.Speaker)); return; }
+                MuteRequested?.Invoke(); return;
             case Hit.Vol: _drag = Drag.Volume; RetargetKnobs(); SetVolumeFromX(l.Vol, e.X); return;
             case Hit.Shuffle: ShuffleRequested?.Invoke(); return;
             case Hit.Repeat: RepeatRequested?.Invoke(); return;
@@ -325,7 +329,7 @@ internal sealed class MiniPlayerForm : Form
             return;
         }
         var h = HitAt(e.Location);
-        Cursor = h == Hit.Cover ? Cursors.Hand : Cursors.Default;
+        Cursor = h == Hit.Cover ? Theme.HandCursor : Cursors.Default;
         if (h != _hover) { _hover = h; RetargetKnobs(); Invalidate(); }
     }
 

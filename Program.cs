@@ -1346,6 +1346,20 @@ internal static class Program
         }
 
         // The Pro-features dialog renders on its own.
+        // The Classic volume window (the tray speaker's), at 70 % and not muted; MIX_VOL_MUTED=1 ticks Mute.
+        if (view == "volume")
+        {
+            double lv = 0.7; bool mu = Environment.GetEnvironmentVariable("MIX_VOL_MUTED") == "1";
+            using var vp = new ClassicVolumePopup(() => lv, () => mu, v => lv = v, () => mu = !mu) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
+            vp.Show();
+            for (int i = 0; i < 4; i++) { Application.DoEvents(); Thread.Sleep(40); }
+            using var vbmp = new Bitmap(vp.Width, vp.Height);
+            vp.DrawToBitmap(vbmp, new Rectangle(0, 0, vp.Width, vp.Height));
+            vbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+            vp.Close();
+            return;
+        }
+
         if (view == "profeatures")
         {
             using var pf = new ProFeaturesDialog(gapless: true, crossOn: true, crossSecs: 6, normalize: false, mono: false, sleepMin: 0, (_, _, _, _, _) => { }, _ => { })
@@ -1400,10 +1414,14 @@ internal static class Program
             };
             if (view == "trackinfo1") tracks.RemoveRange(1, 2);   // single-song variant — shows the read-only stats section
             using var dlg = new TrackInfoDialog(tracks) { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
-            dlg.Show();
+            if (int.TryParse(Environment.GetEnvironmentVariable("MIX_PROP_TAB"), out int ptab)) dlg.PreviewTab(ptab);   // Classic: which tab of the Properties sheet
+            bool tiLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen + PrintWindow: nested panels as they really stack
+            if (tiLive) { dlg.Location = new Point(Cursor.Position.X < Screen.PrimaryScreen!.Bounds.Width / 2 ? Screen.PrimaryScreen.Bounds.Width - 520 : 40, 40); dlg.Opacity = 0.02; ShowWindow(dlg.Handle, 8 /* SW_SHOWNA */); }
+            else dlg.Show();
             for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(60); }
             using var dbmp = new Bitmap(dlg.Width, dlg.Height);
-            dlg.DrawToBitmap(dbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
+            if (tiLive) { using var tg = Graphics.FromImage(dbmp); IntPtr thdc = tg.GetHdc(); PrintWindow(dlg.Handle, thdc, 2); tg.ReleaseHdc(thdc); }
+            else dlg.DrawToBitmap(dbmp, new Rectangle(0, 0, dlg.Width, dlg.Height));
             dbmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
             dlg.Close();
             return;
@@ -1521,7 +1539,7 @@ internal static class Program
         }
 
         // The small modal windows that now wear the app's own card chrome (title strip + round close).
-        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn" or "messagebusy")
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn" or "messagebusy" or "welcome")
         {
             Form dlg = view switch
             {
@@ -1538,8 +1556,9 @@ internal static class Program
                 "noteeditor" => NotesDialog.PreviewEditor(),
                 "message" => MessageDialog.Preview(Loc.T("The look changes after a restart. Restart Mixtape now?"), Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question),
                 "messagewarn" => MessageDialog.Preview(Loc.T("The iPod was removed while songs were being copied. Plug it back in and try again."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Warning),
+                "welcome" => new WelcomeDialog(int.TryParse(Environment.GetEnvironmentVariable("MIX_TIP"), out int wt) ? wt : 4, true),   // MIX_TIP=<n>: which tip
                 "messagebusy" => MessageDialog.Preview(Loc.T("Mixtape is still writing to the iPod, so it can't restart yet. Your change is saved and takes effect the next time Mixtape starts."), Loc.T("Writing to the iPod"), MessageBoxButtons.OK, MessageBoxIcon.Warning),
-                _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }),
+                _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }, CopyFlight.ToIPod),
             };
             bool cardLive = Environment.GetEnvironmentVariable("MIX_LIVE") == "1";   // on screen (near-invisible, not activated) + PrintWindow = the real window
             dlg.StartPosition = FormStartPosition.Manual;
@@ -2986,10 +3005,21 @@ internal static class Program
         foreach (var w in windows) { w.StartPosition = FormStartPosition.Manual; w.Location = new Point(-3000, -3000); w.ShowInTaskbar = false; w.Show(); }
         Application.DoEvents();
         int got = Theme.TransitionsOff - before;
+        // the busy pointer: the hourglass is a real cursor (not the system's wait cursor), and the hook comes and goes
+        bool hgOk = !ReferenceEquals(ClassicBusy.Hourglass, Cursors.WaitCursor) && ClassicBusy.Hourglass.Handle != IntPtr.Zero;
+        bool busyOk = true;
+        try { ClassicBusy.Set(true, windows[0].Handle); Application.DoEvents(); ClassicBusy.Set(false, windows[0].Handle); Application.DoEvents(); }
+        catch { busyOk = false; }
+        using (var hb = new Bitmap(48, 48))
+        {
+            using (var hg = Graphics.FromImage(hb)) { hg.Clear(Theme.Face); ClassicBusy.Hourglass.Draw(hg, new Rectangle(8, 8, 32, 32)); }
+            hb.Save(Path.Combine(AppContext.BaseDirectory, "ipod-hourglass.png"), System.Drawing.Imaging.ImageFormat.Png);
+        }
         foreach (var w in windows) w.Dispose();
-        bool ok = got == windows.Count;
+        bool ok = got == windows.Count && hgOk && busyOk;
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-classicwin.txt"),
             $"windows with Windows 11 transitions switched off: {got} of {windows.Count}" + Environment.NewLine
+            + $"hourglass cursor: {(hgOk ? "made" : "MISSING")}, busy hook on/off: {(busyOk ? "ok" : "THREW")}" + Environment.NewLine
             + $"RESULT: {(ok ? "OK" : "FAIL")}" + Environment.NewLine);
     }
 

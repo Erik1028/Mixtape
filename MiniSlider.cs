@@ -21,7 +21,7 @@ internal sealed class MiniSlider : Control
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
-        Cursor = Cursors.Hand;
+        Cursor = Theme.HandCursor;
         Height = 24;
     }
 

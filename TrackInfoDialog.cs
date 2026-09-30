@@ -29,10 +29,12 @@ internal sealed class TrackInfoDialog : CardDialog
         _tracks = tracks;
         _t = tracks[0];
         _multi = tracks.Count > 1;
-        Text = _multi ? Loc.T("Edit {0} songs", tracks.Count) : Loc.T("Song info");
+        Text = Theme.Classic   // Classic: a 95 Properties sheet, named the way 95 named one
+            ? (_multi ? Loc.T("{0} songs Properties", tracks.Count) : Loc.T("{0} Properties", _t.DisplayTitle))
+            : _multi ? Loc.T("Edit {0} songs", tracks.Count) : Loc.T("Song info");
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-        ClientSize = new Size(440, _multi ? 524 : 624);
+        ClientSize = new Size(Theme.Classic ? 460 : 440, _multi ? 524 : 624);
         BackColor = Theme.Bg;
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
@@ -44,20 +46,35 @@ internal sealed class TrackInfoDialog : CardDialog
             return _tracks.All(x => sel(x) == first) ? first : "";
         }
 
-        int y = 18;
+        // Classic: Windows 95's Properties - a tabbed sheet with General (what the song is, read-only) in front and
+        // Details (the tags you can change: the same fields as the modern card) behind it.
+        Control.ControlCollection target = Controls;
+        ClassicPropertySheet? sheet = null;
+        Panel? general = null, details = null;
+        if (Theme.Classic)
+        {
+            sheet = new ClassicPropertySheet(new[] { Loc.T("General"), Loc.T("Details") });
+            general = new Panel { BackColor = Theme.Face };
+            details = new Panel { BackColor = Theme.Face, Visible = false };
+            sheet.Controls.Add(general);
+            sheet.Controls.Add(details);
+            sheet.Selected += i => { general.Visible = i == 0; details.Visible = i == 1; };
+            target = details.Controls;
+        }
+        int y = Theme.Classic ? 12 : 18;
         if (_multi)
         {
-            Controls.Add(new Label { Text = Loc.T("Editing {0} songs. Type in a field to set it on all of them; leave a field blank to keep each song's own value.", tracks.Count),
+            target.Add(new Label { Text = Loc.T("Editing {0} songs. Type in a field to set it on all of them; leave a field blank to keep each song's own value.", tracks.Count),
                 ForeColor = Theme.Subtle, AutoSize = false, Location = new Point(16, y), Size = new Size(410, 36) });
             y += 42;
         }
 
         TextBox Row(string label, string value, bool editable = true, int width = 300)
         {
-            Controls.Add(new Label { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+            target.Add(new Label { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
             var tb = new TextBox { Text = value, Location = new Point(122, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
             if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
-            Controls.Add(ThemedField.Wrap(tb));
+            target.Add(ThemedField.Wrap(tb));
             y += 36;
             return tb;
         }
@@ -75,38 +92,38 @@ internal sealed class TrackInfoDialog : CardDialog
         {
             var tb = new TextBox { Text = value, Location = new Point(x, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
             if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
-            Controls.Add(ThemedField.Wrap(tb));
+            target.Add(ThemedField.Wrap(tb));
             return tb;
         }
-        void Slash(int x) => Controls.Add(new Label { Text = "/", ForeColor = Theme.Faint, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Location = new Point(x, y), Size = new Size(14, 26) });
+        void Slash(int x) => target.Add(new Label { Text = "/", ForeColor = Theme.Faint, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Location = new Point(x, y), Size = new Size(14, 26) });
 
         // Year + "Track # / total" share a row. Track # is per-song, so it's disabled when editing
         // several; the album total is shared, so it stays editable either way.
-        Controls.Add(new Label { Text = Loc.T("Year"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        target.Add(new Label { Text = Loc.T("Year"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
         _year = Num(122, 70, Common(x => x.Year > 0 ? x.Year.ToString() : ""), true);
-        Controls.Add(new Label { Text = Loc.T("Track #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(206, y), Size = new Size(66, 26) });
+        target.Add(new Label { Text = Loc.T("Track #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(206, y), Size = new Size(66, 26) });
         _track = Num(282, 70, _multi ? "" : (_t.TrackNumber > 0 ? _t.TrackNumber.ToString() : ""), !_multi);
         Slash(352);
         _trackTotal = Num(368, 56, Common(x => x.TotalTracks > 0 ? x.TotalTracks.ToString() : ""), true);
         y += 38;
 
         // "Disc # / total" — disc # is per-song (disabled in multi), the disc count is album-shared.
-        Controls.Add(new Label { Text = Loc.T("Disc #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        target.Add(new Label { Text = Loc.T("Disc #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
         _disc = Num(122, 70, _multi ? "" : (_t.DiscNumber > 0 ? _t.DiscNumber.ToString() : ""), !_multi);
         Slash(194);
         _discTotal = Num(210, 56, Common(x => x.TotalDiscs > 0 ? x.TotalDiscs.ToString() : ""), true);
         y += 38;
 
         // Rating stars.
-        Controls.Add(new Label { Text = Loc.T("Rating"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        target.Add(new Label { Text = Loc.T("Rating"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
         int commonStars = _multi && !_tracks.All(x => Math.Min(5, x.Rating / 20) == Math.Min(5, _t.Rating / 20)) ? 0 : Math.Min(5, _t.Rating / 20);
         _rating = new StarRating { Location = new Point(120, y - 2), Size = new Size(160, 30), Value = commonStars };
         _rating.UserChanged += () => _ratingTouched = true;
-        Controls.Add(_rating);
+        target.Add(_rating);
         y += 44;
 
-        // Read-only stats (single song only) — the info the grid can't show all at once.
-        if (!_multi)
+        // Read-only stats (single song only) — the info the grid can't show all at once. (Classic: the General page.)
+        if (!_multi && !Theme.Classic)
         {
             Controls.Add(new Panel { BackColor = Theme.PanelBg, Location = new Point(16, y), Size = new Size(408, 1) });
             y += 10;
@@ -124,8 +141,21 @@ internal sealed class TrackInfoDialog : CardDialog
             y += 8;
         }
 
-        var save = new ThemedButton { Text = Loc.T("Save"), Primary = true, Pill = true, Width = 100, Height = 32, Location = new Point(ClientSize.Width - 116, y), DialogResult = DialogResult.OK };
-        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(ClientSize.Width - 116 - 106, y), DialogResult = DialogResult.Cancel };
+        if (sheet is not null)
+        {
+            // the sheet: its tabs, then a page as tall as the Details fields need; OK and Cancel under it
+            sheet.SetBounds(8, 10, ClientSize.Width - 16, ClassicPropertySheet.TabH + y + 16);
+            var pr = sheet.PageRect;
+            general!.Bounds = details!.Bounds = new Rectangle(pr.X + 3, pr.Y + 3, pr.Width - 6, pr.Height - 6);
+            BuildGeneral(general);
+            Controls.Add(sheet);
+            _sheet = sheet;
+            y = sheet.Bottom + 10;
+        }
+        var save = new ThemedButton { Text = Theme.Classic ? Loc.T("OK") : Loc.T("Save"), Primary = true, Pill = true, Width = Theme.Classic ? 75 : 100, Height = Theme.Classic ? 23 : 32, DialogResult = DialogResult.OK };
+        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = Theme.Classic ? 75 : 96, Height = Theme.Classic ? 23 : 32, DialogResult = DialogResult.Cancel };
+        if (Theme.Classic) { save.Location = new Point(ClientSize.Width - 8 - 75 - 6 - 75, y); cancel.Location = new Point(ClientSize.Width - 8 - 75, y); }   // 95: OK, then Cancel
+        else { save.Location = new Point(ClientSize.Width - 116, y); cancel.Location = new Point(ClientSize.Width - 116 - 106, y); }
         save.Click += (_, _) => BuildEdit();
         Controls.Add(save);
         Controls.Add(cancel);
@@ -133,9 +163,96 @@ internal sealed class TrackInfoDialog : CardDialog
         CancelButton = cancel;
         // Height from the content, not a guess: the fixed 524/624 left a 60 px hole under the buttons
         // while the top margin was 18.
-        ClientSize = new Size(ClientSize.Width, y + save.Height + 18);
+        ClientSize = new Size(ClientSize.Width, y + save.Height + (Theme.Classic ? 10 : 18));
         AdoptCard();
-        if (_multi) ActiveControl = _artist;   // start on the first editable field, not the disabled Title
+        if (Theme.Classic) ActiveControl = save;   // the General page is in front; its fields are read-only
+        else if (_multi) ActiveControl = _artist;   // start on the first editable field, not the disabled Title
+    }
+
+    private Bitmap? _classicIcon;   // the General page's 32 px icon (the dialog owns it)
+    private ClassicPropertySheet? _sheet;
+
+    /// <summary>Harness only (MIX_PROP_TAB): open the Classic sheet on another tab.</summary>
+    internal void PreviewTab(int i) { if (_sheet is not null) _sheet.SelectedIndex = i; }
+
+    /// <summary>
+    /// Classic: the General page of a 95 file's Properties - what the song is (its type, where it sits, how big and how
+    /// long, its format), its history on the iPod, and for a file on this PC the attributes the file system gives it,
+    /// as greyed check boxes. Read-only; the tags you can change are on Details.
+    /// </summary>
+    private void BuildGeneral(Panel page)
+    {
+        int w = page.Width, y = 12;
+        var ci = System.Globalization.CultureInfo.CurrentCulture;
+        _classicIcon = Theme.ClassicHeaderIcon(_multi ? ClassicIcons.Id.Album : ClassicIcons.Id.Songs);
+        page.Controls.Add(new PictureBox { Image = _classicIcon, Location = new Point(14, y), Size = new Size(32, 32) });
+        page.Controls.Add(new Label { Text = _multi ? Loc.T("{0} songs", _tracks.Count) : _t.DisplayTitle, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true,
+            UseMnemonic = false, Location = new Point(76, y + 9), Size = new Size(w - 88, 18) });
+        y += 46;
+        void Rule()   // the etched line between a 95 page's groups
+        {
+            page.Controls.Add(new Panel { BackColor = Theme.FaceShadow, Location = new Point(10, y), Size = new Size(w - 20, 1) });
+            page.Controls.Add(new Panel { BackColor = Theme.FaceHi, Location = new Point(10, y + 1), Size = new Size(w - 20, 1) });
+            y += 12;
+        }
+        void Info(string label, string value)
+        {
+            page.Controls.Add(new Label { Text = label, ForeColor = Theme.TextCol, AutoSize = false, UseMnemonic = false, Location = new Point(14, y), Size = new Size(100, 18) });
+            page.Controls.Add(new Label { Text = value, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true, UseMnemonic = false, Location = new Point(118, y), Size = new Size(w - 130, 18) });
+            y += 22;
+        }
+        Rule();
+        if (_multi)
+        {
+            Info(Loc.T("Songs:"), _tracks.Count.ToString("N0", ci));
+            Info(Loc.T("Size:"), SizeStr(_tracks.Sum(x => (long)x.FileSize)));
+            Info(Loc.T("Length:"), LengthStr(TimeSpan.FromMilliseconds(_tracks.Sum(x => (double)x.LengthMs))));
+            return;
+        }
+        string? file = _t.LocalPath is { Length: > 0 } lp ? lp : _t.Location is { Length: > 0 } loc ? loc.TrimStart(':').Replace(':', '\\') : null;
+        Info(Loc.T("Type:"), _t.FileTypeDescription is { Length: > 0 } d ? d
+            : Path.GetExtension(file ?? "") is { Length: > 1 } ext ? Loc.T("{0} file", ext.TrimStart('.').ToUpperInvariant()) : "—");
+        Info(Loc.T("Location:"), file is null ? "—" : Path.GetDirectoryName(file) ?? "—");
+        Info(Loc.T("Size:"), _t.FileSize > 0 ? SizeStr(_t.FileSize) : "—");
+        Info(Loc.T("Length:"), _t.LengthMs > 0 ? LengthStr(_t.Duration) : "—");
+        Info(Loc.T("Format:"), FormatStr(_t));
+        Rule();
+        Info(Loc.T("Added:"), DateStr(_t.DateAdded));
+        Info(Loc.T("Last played:"), DateStr(_t.LastPlayed));
+        Info(Loc.T("Plays:"), _t.PlayCount.ToString("N0", ci));
+        if (_t.LocalPath is not { Length: > 0 } path || !File.Exists(path)) return;
+        FileAttributes attrs;
+        try { attrs = File.GetAttributes(path); } catch { return; }
+        Rule();
+        page.Controls.Add(new Label { Text = Loc.T("Attributes:"), ForeColor = Theme.TextCol, AutoSize = false, UseMnemonic = false, Location = new Point(14, y), Size = new Size(100, 18) });
+        var boxes = new Panel { Location = new Point(118, y), Size = new Size(w - 130, 18), BackColor = Theme.Face };
+        boxes.Paint += (_, e) =>
+        {
+            int x = 0;
+            foreach (var (text, on) in new[] { (Loc.T("Read-only"), attrs.HasFlag(FileAttributes.ReadOnly)), (Loc.T("Hidden"), attrs.HasFlag(FileAttributes.Hidden)), (Loc.T("Archive"), attrs.HasFlag(FileAttributes.Archive)) })
+            {
+                Theme.ClassicCheckBox(e.Graphics, new Rectangle(x, 2, 13, 13), on, enabled: false);
+                int tw = TextRenderer.MeasureText(e.Graphics, text, Font).Width;
+                var tr = new Rectangle(x + 17, 0, tw + 4, 18);
+                const TextFormatFlags tf = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
+                TextRenderer.DrawText(e.Graphics, text, Font, new Rectangle(tr.X + 1, tr.Y + 1, tr.Width, tr.Height), Theme.FaceHi, tf);   // a greyed 95 label: embossed
+                TextRenderer.DrawText(e.Graphics, text, Font, tr, Theme.FaceShadow, tf);
+                x += 17 + tw + 14;
+            }
+        };
+        page.Controls.Add(boxes);
+    }
+
+    /// <summary>"4,1 MB (4 302 341 bytes)" - the short size and the exact one, as 95's General page gave both.</summary>
+    private static string SizeStr(long bytes) =>
+        CapacityBar.Human(bytes) + " (" + Loc.T("{0} bytes", bytes.ToString("N0", System.Globalization.CultureInfo.CurrentCulture)) + ")";
+
+    private static string LengthStr(TimeSpan t) => t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _classicIcon?.Dispose();
+        base.Dispose(disposing);
     }
 
     /// <summary>Conversational date (mirrors the grid's Added column); "—" when unset.</summary>
@@ -235,7 +352,7 @@ internal sealed class TrackInfoDialog : CardDialog
             DoubleBuffered = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             BackColor = Theme.Bg;
-            Cursor = Cursors.Hand;
+            Cursor = Theme.HandCursor;
             MouseMove += (_, e) => { int s = StarAt(e.X); if (s != _hover) { _hover = s; Invalidate(); } };
             MouseLeave += (_, _) => { _hover = -1; Invalidate(); };
             MouseClick += (_, e) => { int s = StarAt(e.X); Value = (s == 1 && _value == 1) ? 0 : s; UserChanged?.Invoke(); }; // click the lone filled star again → clear

@@ -117,7 +117,7 @@ internal sealed class HeaderPanel : Panel
             if (overArt != _artHover || overBadge != _badgeHover)
             {
                 _artHover = overArt; _badgeHover = overBadge;
-                Cursor = (overArt || overBadge) ? Cursors.Hand : Cursors.Default;
+                Cursor = (overArt || overBadge) ? Theme.HandCursor : Cursors.Default;
                 Invalidate();
             }
         };

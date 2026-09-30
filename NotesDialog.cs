@@ -165,7 +165,7 @@ internal sealed class NotesDialog : CardDialog
                 int y = 6 + i * RowH - _scroll;
                 if (y + RowH < 0 || y > Height) continue;
                 var row = new Rectangle(6, y, Width - 12, RowH - 2);
-                if (i == _hover)
+                if (i == _hover && Theme.ShowHover)
                 {
                     using var hb = new SolidBrush(Theme.RowHover);
                     using var hp = Theme.RoundedRect(row, Theme.RadControl);

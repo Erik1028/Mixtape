@@ -195,7 +195,7 @@ internal sealed class HomeView : Panel
         bool overBar = Bar().Max > 0 && e.X >= Width - BarZone;
         if (overBar != _barHover) { _barHover = overBar; Invalidate(); }
         var h = overBar ? null : HitTest(e.Location);
-        Cursor = h is not null ? Cursors.Hand : Cursors.Default;
+        Cursor = h is not null ? Theme.HandCursor : Cursors.Default;
         if (!ReferenceEquals(h, _hover)) SetHover(h);
     }
 
@@ -403,7 +403,7 @@ internal sealed class HomeView : Panel
             var rect = new Rectangle(x, ry + i * RowH, w, RowH);
             _hit.Add((rect, row));
             if (rect.Bottom < 0 || rect.Top > Height) continue;
-            if (ReferenceEquals(row, _hover))
+            if (ReferenceEquals(row, _hover) && Theme.ShowHover)
             {
                 using var hb = new SolidBrush(Theme.RowHover);
                 if (Theme.Classic) g.FillRectangle(hb, rect.X - 4, rect.Y, rect.Width + 8, rect.Height);   // inside the group box's frame

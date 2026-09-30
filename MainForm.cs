@@ -173,6 +173,8 @@ internal sealed class MainForm : Form, IMessageFilter
         // restarts the app. "play" first starts a PC song (muted), so there is a live audio engine to shut down;
         // "busy" fakes a write in flight, so the restart must be refused - the message is dismissed, then Settings.
         string? testMode = Environment.GetEnvironmentVariable("MIX_TEST_RESTART");
+        // Classic: 1995's welcome screen once the window is up - not in a render, not under the restart harness
+        if (Theme.Classic && _autoDetect && testMode is null && _settings.ShowWelcome) Shown += (_, _) => BeginInvoke(() => ShowWelcome());
         if (testMode is "1" or "play" or "busy") Shown += async (_, _) =>
         {
             TracePath ??= Environment.GetEnvironmentVariable("MIX_TRACE");
@@ -447,6 +449,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _nowPlaying.AdvancedToNext += OnGaplessAdvancedToNext;
         _nowPlaying.QueueRequested += OpenUpNext;
         _nowPlaying.LyricsRequested += OpenLyrics;
+        _nowPlaying.VolumePopupRequested += r => OpenClassicVolume(r, below: _deck);
         // Holding the sync stepper steps every 80 ms; settings.json is read-merged-rewritten on every save,
         // so the write waits until the pressing stops.
         _lyricSave.Tick += (_, _) => FlushLyricSync();
@@ -748,7 +751,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // Three stable colours (selected tint / hover / normal). Reuse a cached brush per colour, rebuilt only when
         // the colour changes (theme/accent switch), so a fast scroll's per-row fills don't churn a fresh GDI brush.
         SolidBrush b = _tracks.Rows[e.RowIndex].Selected ? RowBrush(ref _bRowSel, ref _cRowSel, Theme.Classic ? Theme.ClassicNavy : Theme.Blend(Theme.Bg, Theme.Accent, 0.12))
-            : e.RowIndex == _hotRow ? RowBrush(ref _bRowHot, ref _cRowHot, Theme.RowHover)
+            : e.RowIndex == _hotRow && Theme.ShowHover ? RowBrush(ref _bRowHot, ref _cRowHot, Theme.RowHover)
             : RowBrush(ref _bRowBg, ref _cRowBg, Theme.ListBg);
         e.Graphics.FillRectangle(b, e.RowBounds);
     }
@@ -846,7 +849,7 @@ internal sealed class MainForm : Form, IMessageFilter
             {
                 var more = RowMoreRect(b);
                 float mx = more.X + more.Width / 2f, my = b.Y + b.Height / 2f;
-                if (hotMore) { using var hb = new SolidBrush(Theme.Blend(Theme.RowHover, Color.White, 0.08)); using var hp = Theme.RoundedRect(new RectangleF(mx - 12, my - 12, 24, 24), Theme.RadControl); g.FillPath(hb, hp); }
+                if (hotMore && Theme.ShowHover) { using var hb = new SolidBrush(Theme.Blend(Theme.RowHover, Color.White, 0.08)); using var hp = Theme.RoundedRect(new RectangleF(mx - 12, my - 12, 24, 24), Theme.RadControl); g.FillPath(hb, hp); }
                 using var dots = new SolidBrush(hotMore ? Theme.TextCol : Theme.Subtle);
                 for (int k = -1; k <= 1; k++) g.FillEllipse(dots, mx + k * 6f - 1.6f, my - 1.6f, 3.2f, 3.2f);
             }
@@ -909,7 +912,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _rowAction = a;
         if (row >= 0) _tracks.InvalidateRow(row);
         if (_hotRow >= 0 && _hotRow != row && _hotRow < _tracks.Rows.Count) _tracks.InvalidateRow(_hotRow);
-        _tracks.Cursor = a != RowAction.None ? Cursors.Hand : Cursors.Default;
+        _tracks.Cursor = a != RowAction.None ? Theme.HandCursor : Cursors.Default;
     }
 
     private void OnRowActionClick(object? sender, MouseEventArgs e)
@@ -1534,7 +1537,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (row == _hotRow) return;
         if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.ListBg;
         _hotRow = row;
-        if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.RowHover;
+        if (_hotRow >= 0 && _hotRow < _tracks.Rows.Count) _tracks.Rows[_hotRow].DefaultCellStyle.BackColor = Theme.ShowHover ? Theme.RowHover : Theme.ListBg;
     }
 
     // ---- in-app media preview (play songs / watch videos & photos straight off the iPod) ----
@@ -1772,7 +1775,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 try { if (MusicExporter.ExportOne(t, mount, dest, organize: true, applyTags: true) is null) missing++; else ok++; }
                 catch (Exception ex) { errors.Add($"{t.DisplayTitle}: {ex.Message}"); }
             }
-        });
+        }, CopyFlight.FromIPod);
         prog.ShowDialog(this);
 
         string msg = prog.WasCancelled ? Loc.T("Stopped — copied {0} song(s).", ok) : Loc.T("Copied {0} song(s) to:\n{1}", ok, dest);
@@ -3106,6 +3109,7 @@ internal sealed class MainForm : Form, IMessageFilter
             _mini.SeekRequested += f => _nowPlaying.SeekFraction(f);
             _mini.VolumeRequested += v => _nowPlaying.SetVolumeLevel(v);
             _mini.MuteRequested += () => _nowPlaying.ToggleMute();
+            _mini.VolumePopupRequested += r => OpenClassicVolume(r, below: false);
             _mini.ShuffleRequested += () => _nowPlaying.ToggleShuffle();
             _mini.RepeatRequested += () => _nowPlaying.CycleRepeat();
             _mini.EqualizerRequested += OpenEqualizer;
@@ -5428,7 +5432,7 @@ internal sealed class MainForm : Form, IMessageFilter
             }
             if (ok > 0) { report(files.Length * 100, Loc.T("Saving the iPod database…")); _lib!.Save(); }
             try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
-        }))
+        }, CopyFlight.ToIPod))
         {
             prog.ShowDialog(this);
             ReloadAfterEdit();
@@ -6248,7 +6252,7 @@ internal sealed class MainForm : Form, IMessageFilter
             }
             if (ok > 0) { report(files.Length * 100, Loc.T("Saving the iPod database…")); _lib!.Save(); }
             try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
-        });
+        }, CopyFlight.ToIPod);
         prog.ShowDialog(this);
         _viewKind = SidebarRowKind.Videos;
         ReloadAfterEdit();
@@ -6311,7 +6315,7 @@ internal sealed class MainForm : Form, IMessageFilter
             }
             report(picks.Length, Loc.T("Writing the photo library… (this can take a moment)"));
             _photos!.Save();
-        });
+        }, CopyFlight.ToIPod);
         prog.ShowDialog(this);
         ShowPhotos();
 
@@ -6345,7 +6349,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 if (staged >= BatchSize) { report(i + 1, Loc.T("Saving… ({0} added so far)", ok)); _photos!.Save(); staged = 0; }
             }
             if (staged > 0) { report(files.Length, Loc.T("Writing the photo library… (this can take a moment)")); _photos!.Save(); }
-        });
+        }, CopyFlight.ToIPod);
         prog.ShowDialog(this);
         ShowPhotos();
 
@@ -6866,6 +6870,40 @@ internal sealed class MainForm : Form, IMessageFilter
 
     // ---- customization ----
 
+    /// <summary>The app is busy (a write to the iPod, a rebuild): the pointer says so. Classic trades Windows 11's
+    /// spinning ring for 1995's hourglass (see ClassicBusy).</summary>
+    private new bool UseWaitCursor
+    {
+        get => base.UseWaitCursor;
+        set { base.UseWaitCursor = value; if (Theme.Classic && IsHandleCreated) ClassicBusy.Set(value, Handle); }
+    }
+
+    /// <summary>Classic: the welcome screen (at start, and from Help). It remembers the next tip and its own box.</summary>
+    private void ShowWelcome()
+    {
+        using var w = new WelcomeDialog(_settings.WelcomeTip, _settings.ShowWelcome);
+        w.ShowDialog(this);
+        _settings.WelcomeTip = w.NextTip;
+        _settings.ShowWelcome = w.ShowAtStartup;
+        _settings.Save();
+        if (w.OpenSettingsAfter) OpenSettings();
+    }
+
+    private ClassicVolumePopup? _volPopup;
+    private int _volPopupClosedTick;
+
+    /// <summary>Classic: the tray's volume window, under (deck) or over the speaker that asked for it. A second click on
+    /// the speaker is the click that closed it, so it does not open it again.</summary>
+    private void OpenClassicVolume(Rectangle speaker, bool below)
+    {
+        if (Environment.TickCount - _volPopupClosedTick < 250) return;
+        if (_volPopup is { IsDisposed: false }) { _volPopup.Close(); return; }
+        var p = _volPopup = new ClassicVolumePopup(() => _nowPlaying.VolumeSetting, () => _nowPlaying.Muted,
+            v => _nowPlaying.SetVolumeLevel(v), () => _nowPlaying.ToggleMute());
+        p.FormClosed += (_, _) => { if (ReferenceEquals(_volPopup, p)) _volPopup = null; _volPopupClosedTick = Environment.TickCount; };
+        p.ShowAnchored(speaker, below);
+    }
+
     private void OpenSettings() => OpenSettings(0);
 
     private void OpenSettings(int category)
@@ -6965,6 +7003,7 @@ internal sealed class MainForm : Form, IMessageFilter
         };
 
         var help = Menu(Loc.T("&Help"));
+        Item(help, Loc.T("Welcome Screen"), ShowWelcome);
         Item(help, Loc.T("About Mixtape"), () => OpenSettings(7));
 
         _root!.Controls.Add(bar);

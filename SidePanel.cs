@@ -73,7 +73,7 @@ internal sealed class SidePanel : Panel
         int ht = -1;
         for (int i = 0; i < _tabHit.Count; i++) if (_tabHit[i].Rect.Contains(p)) ht = i;
         bool hc = CloseRect.Contains(p);
-        if (ht != _hoverTab || hc != _hoverClose) { _hoverTab = ht; _hoverClose = hc; Cursor = ht >= 0 || hc ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        if (ht != _hoverTab || hc != _hoverClose) { _hoverTab = ht; _hoverClose = hc; Cursor = ht >= 0 || hc ? Theme.HandCursor : Cursors.Default; Invalidate(); }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -92,7 +92,7 @@ internal sealed class SidePanel : Panel
             _tabHit.Add((r, tab));
             bool on = tab == Current, hover = _tabHit.Count - 1 == _hoverTab;
             if (on) { using var b = new SolidBrush(Theme.Blend(Theme.Bg, Theme.Accent, 0.16)); using var p = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(b, p); }
-            else if (hover) { using var b = new SolidBrush(Theme.RowHover); using var p = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(b, p); }
+            else if (hover && Theme.ShowHover) { using var b = new SolidBrush(Theme.RowHover); using var p = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(b, p); }
             TextRenderer.DrawText(g, name, _fTab, r, on ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             x += tw + 6;
@@ -172,7 +172,7 @@ internal sealed class HistoryPanel : Control
             int top = RowTop(i);
             if (top + RowH < 0 || top > Height) continue;
             bool hovered = i == _hoverRow;
-            if (hovered) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(new Rectangle(6, top + 3, Width - 12, RowH - 6), 6); g.FillPath(hb, hp); }
+            if (hovered && Theme.ShowHover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(new Rectangle(6, top + 3, Width - 12, RowH - 6), 6); g.FillPath(hb, hp); }
             var (t, art, at) = _items[i];
             var ar = new Rectangle(Pad, top + (RowH - Art) / 2, Art, Art);
             using (var clip = Theme.RoundedRect(new RectangleF(ar.X, ar.Y, ar.Width, ar.Height), Math.Max(3, ar.Width * Theme.TileFrac)))
@@ -230,7 +230,7 @@ internal sealed class HistoryPanel : Control
     private void UpdateHover(Point p)
     {
         int row = RowAt(p.Y);
-        if (row != _hoverRow) { _hoverRow = row; Cursor = row >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        if (row != _hoverRow) { _hoverRow = row; Cursor = row >= 0 ? Theme.HandCursor : Cursors.Default; Invalidate(); }
     }
 
     protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if (_thumbDrag) { _thumbDrag = false; Invalidate(); } }

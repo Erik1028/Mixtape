@@ -133,7 +133,7 @@ internal sealed class LyricsStage : Control
             if (_volDrag) { _volume = VolFrac(e.X); VolumeRequested?.Invoke(_volume); Invalidate(); return; }
             var h = HitAt(e.Location);
             int hv = _synced && h == Hit.None ? LineAt(e.Location) : -1;
-            if (h != _hot || hv != _hover) { _hot = h; _hover = hv; Cursor = h != Hit.None || hv >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            if (h != _hot || hv != _hover) { _hot = h; _hover = hv; Cursor = h != Hit.None || hv >= 0 ? Theme.HandCursor : Cursors.Default; Invalidate(); }
         };
         MouseLeave += (_, _) => { _hot = Hit.None; _hover = -1; Cursor = Cursors.Default; Invalidate(); };
         MouseDown += (_, e) =>
@@ -734,7 +734,7 @@ internal sealed class LyricsStage : Control
             var b = NowPlayingBar.Centered(r, 26, 26);
             NowPlayingBar.ClassicToolButton(g, b, hover: hot);
             using var k = new SolidBrush(Theme.FaceDark);
-            using var face = new SolidBrush(hot ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face);
+            using var face = new SolidBrush(Theme.Face);
             int x = b.X + 7, y = b.Y + 7;
             g.FillRectangle(k, x + 3, y, 8, 2); g.FillRectangle(k, x + 10, y + 2, 1, 5); g.FillRectangle(k, x + 8, y + 6, 2, 1);   // the one behind
             g.FillRectangle(face, x, y + 3, 8, 7);
