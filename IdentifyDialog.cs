@@ -76,7 +76,7 @@ internal sealed class IdentifyDialog : CardDialog
             _c = c;
             Index = c.Count > 0 ? 0 : -1;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-            MouseMove += (_, e) => { int h = RowAt(e.Y); if (h != _hover) { _hover = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); } };
+            MouseMove += (_, e) => { int h = RowAt(e.Y); if (h != _hover) { _hover = h; Cursor = h >= 0 ? Theme.HandCursor : Cursors.Default; Invalidate(); } };
             MouseLeave += (_, _) => { if (_hover >= 0) { _hover = -1; Cursor = Cursors.Default; Invalidate(); } };
             MouseWheel += (_, e) =>
             {
@@ -119,7 +119,7 @@ internal sealed class IdentifyDialog : CardDialog
                 if (y + RowH < 0 || y > Height) continue;
                 var row = new Rectangle(6, y, Width - 12, RowH - 2);
                 bool sel = i == Index;
-                if (sel || i == _hover)
+                if (sel || (i == _hover && Theme.ShowHover))
                 {
                     using var hb = new SolidBrush(sel ? (Theme.Classic ? Theme.ClassicNavy : Color.FromArgb(48, Theme.Accent)) : Theme.RowHover);
                     using var hp = Theme.RoundedRect(row, Theme.RadControl);

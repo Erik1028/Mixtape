@@ -17,7 +17,7 @@ internal sealed class EqBandsControl : Control
         DoubleBuffered = true;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw, true);
         BackColor = Theme.PanelBg;
-        Cursor = Cursors.Hand;
+        Cursor = Theme.HandCursor;
         SetGains(gains);
         MouseDown += (_, e) => { _drag = BandAt(e.X); if (_drag >= 0) SetFromY(_drag, e.Y); };
         MouseMove += (_, e) => { if (_drag >= 0) SetFromY(_drag, e.Y); };

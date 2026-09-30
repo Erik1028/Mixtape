@@ -164,7 +164,7 @@ internal sealed class UpNextPanel : Control
             int top = RowTop(i);
             if (top + RowH < ListTop || top > Height) continue;   // off-screen
             bool hovered = i == _hoverRow && !_dragging;
-            if (hovered) { using var hb = new SolidBrush(Theme.RowHover); g.FillRectangle(hb, new Rectangle(6, top + 3, Width - 12, RowH - 6)); }
+            if (hovered && Theme.ShowHover) { using var hb = new SolidBrush(Theme.RowHover); g.FillRectangle(hb, new Rectangle(6, top + 3, Width - 12, RowH - 6)); }
             int cy = top + (RowH - Art) / 2;
             DrawArt(g, _items[i].art, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad - (hovered ? 24 : 0);
@@ -240,7 +240,7 @@ internal sealed class UpNextPanel : Control
             g.SmoothingMode = sm0;
             return;
         }
-        if (hover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, r.Width / 2f); g.FillPath(hb, hp); }
+        if (hover && Theme.ShowHover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(r, r.Width / 2f); g.FillPath(hb, hp); }
         using var pen = new Pen(hover ? Theme.TextCol : Theme.Subtle, 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f, s = 4.5f;
         g.DrawLine(pen, cx - s, cy - s, cx + s, cy + s);
@@ -299,7 +299,7 @@ internal sealed class UpNextPanel : Control
         if (hc != _hoverClose || hcl != _hoverClear || row != _hoverRow || hr != _hoverRemove)
         {
             _hoverClose = hc; _hoverClear = hcl; _hoverRow = row; _hoverRemove = hr;
-            Cursor = (hc || hcl || hr || row >= 0) ? Cursors.Hand : Cursors.Default;
+            Cursor = (hc || hcl || hr || row >= 0) ? Theme.HandCursor : Cursors.Default;
             Invalidate();
         }
     }

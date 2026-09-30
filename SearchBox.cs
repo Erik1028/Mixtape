@@ -87,7 +87,7 @@ internal sealed class SearchBox : Panel
         if (_tb.Text.Length > 0)
         {
             var cr = ClearRect;
-            if (_clearHover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(cr, cr.Width / 2f); g.FillPath(hb, hp); }
+            if (_clearHover && Theme.ShowHover) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(cr, cr.Width / 2f); g.FillPath(hb, hp); }
             using var xpen = new Pen(_clearHover ? Theme.TextCol : Theme.Faint, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
             int m = 5;
             g.DrawLine(xpen, cr.Left + m + 0.5f, cr.Top + m + 0.5f, cr.Right - m + 0.5f, cr.Bottom - m + 0.5f);

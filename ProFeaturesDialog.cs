@@ -16,7 +16,7 @@ internal sealed class DurationSlider : Control
         DoubleBuffered = true;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
-        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;
+        Cursor = Theme.HandCursor;
         Size = new Size(200, 30);
         _value = Math.Clamp(seconds, Min, Max);
         MouseDown += (_, e) => { _drag = true; SetFromX(e.X); };

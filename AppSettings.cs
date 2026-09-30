@@ -15,6 +15,8 @@ internal sealed class AppSettings
     public bool ClassicSkin { get; set; }
     /// <summary>The Windows 95 look's covers in 256 colours (dithered onto the halftone palette). Live.</summary>
     public bool DitherCovers { get; set; } = true;
+    public bool ShowWelcome { get; set; } = true;   // Classic: 1995's welcome screen greets each start (its own box turns it off)
+    public int WelcomeTip { get; set; }             // the tip the welcome screen shows next
     public bool Compact { get; set; }          // false = comfortable (52px rows + art), true = compact (28px, text-only)
     public bool ShowArtwork { get; set; } = true;
     /// <summary>UI language code: "en" | "hu". Empty = auto (follow the OS language). Applied at startup;

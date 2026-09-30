@@ -392,7 +392,7 @@ internal sealed class CoverFlowView : Control
         if (nh != _npChipHover) { _npChipHover = nh; Invalidate(_npChip); }
         int mh = -1; for (int i = 0; i < 3; i++) if (_modeRects[i].Contains(e.Location)) { mh = i; break; }
         if (mh != _modeHover) { _modeHover = mh; Invalidate(); }
-        Cursor = (ch || nh || mh >= 0 || HitTest(e.Location) >= 0) ? Cursors.Hand : Cursors.Default;
+        Cursor = (ch || nh || mh >= 0 || HitTest(e.Location) >= 0) ? Theme.HandCursor : Cursors.Default;
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -1382,7 +1382,7 @@ internal sealed class CoverFlowView : Control
         }
         else
         {
-            using (var b = new SolidBrush(_cHover == i && !held ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(b, r);
+            using (var b = new SolidBrush(Theme.Face)) g.FillRectangle(b, r);
             Theme.Bevel(g, r, raised: !held);
         }
         var tr = r;

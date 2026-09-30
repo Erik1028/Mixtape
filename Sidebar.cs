@@ -104,7 +104,7 @@ internal sealed class Sidebar : Panel
         {
             var ej = EjectHitTest(e.Location);
             bool add = AddHitTest(e.Location) is not null;
-            Cursor = (ej is not null || add) ? Cursors.Hand : Cursors.Default;
+            Cursor = (ej is not null || add) ? Theme.HandCursor : Cursors.Default;
             var r = HitTest(e.Location);
             if (!ReferenceEquals(r, _hover)) SetRowHover(r);
             if (!ReferenceEquals(ej, _ejectHover) || add != _addHover) { _ejectHover = ej; _addHover = add; Invalidate(); }
@@ -495,7 +495,7 @@ internal sealed class Sidebar : Panel
                     pill = new Rectangle(pill.X, (int)Math.Round(_pillY), pill.Width, (int)Math.Round(_pillH));
                     _pillScroll = _scroll;
                 }
-                if (row.Active || hover)
+                if (row.Active || (hover && Theme.ShowHover))
                 {
                     // Active = translucent teal wash (a tinted pill, not a solid block);
                     // hover = a faint grey lift. Both rounded, à la Apple Music.
@@ -734,7 +734,7 @@ internal sealed class Sidebar : Panel
             {
                 var ej = new Rectangle(right - 18, ry, 18, rh);
                 _ejectHit.Add((ej, row));
-                using var eb = new SolidBrush(ReferenceEquals(row, _ejectHover) ? Theme.ClassicNavy : Theme.FaceDark);
+                using var eb = new SolidBrush(Theme.FaceDark);
                 int ex = ej.X + ej.Width / 2, ey = ry + rh / 2;
                 for (int k = 0; k < 4; k++) g.FillRectangle(eb, ex - k, ey - 5 + k, 2 * k + 1, 1);   // the triangle
                 g.FillRectangle(eb, ex - 4, ey + 1, 9, 2);                                           // the bar under it

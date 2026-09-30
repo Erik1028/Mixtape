@@ -87,7 +87,7 @@ internal static class Theme
         PaintClassicPicture(g, cover, art);
         var tr = new Rectangle(cover.X, cover.Bottom + 6, cover.Width, 18);
         var flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-        if (hot)
+        if (hot && ShowHover)
         {
             int tw = Math.Min(cover.Width, TextRenderer.MeasureText(g, title, fTitle, new Size(int.MaxValue, 18), flags | TextFormatFlags.NoPadding).Width + 6);
             using (var nb = new SolidBrush(ClassicNavy)) g.FillRectangle(nb, tr.X - 2, tr.Y + 1, tw, tr.Height - 2);
@@ -224,6 +224,14 @@ internal static class Theme
     /// <summary>DWMWA_WINDOW_CORNER_PREFERENCE for a window that asks for <paramref name="modern"/>: Classic
     /// asks Windows 11 NOT to round it (DWMWCP_DONOTROUND), since a 95 window was a rectangle.</summary>
     public static int DwmCorner(int modern) => Classic ? 1 : modern;
+
+    /// <summary>The pointer over something clickable: the hand - or, Classic, the arrow, which 1995 pointed at
+    /// everything with (the hand arrived with the web).</summary>
+    public static Cursor HandCursor => Classic ? Cursors.Default : Cursors.Hand;
+
+    /// <summary>Whether anything lights up under the pointer. Not in Classic: 1995's buttons, lists and icons did not
+    /// hot-track - they went in when pressed and turned navy when selected, and that was all.</summary>
+    public static bool ShowHover => !Classic;
 
     /// <summary>
     /// Classic: take Windows 11's own open / close / minimize animation off a window (its DWM transitions) - the windows
@@ -1081,7 +1089,7 @@ internal sealed class ThemedButton : Button
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         ForeColor = Theme.TextCol;
-        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;   // 1995 pointed at a button with an arrow
+        Cursor = Theme.HandCursor;   // 1995 pointed at a button with an arrow
         Font = Theme.UiFont(Theme.SzTitle, Theme.Classic ? FontStyle.Regular : FontStyle.Bold);   // a 95 button's label was regular weight
         Height = 34;
         MouseEnter += (_, _) => { if (Enabled && !IsBlocked) AnimHover(1f); };
@@ -1229,7 +1237,7 @@ internal sealed class ThemedButton : Button
 
         if (Ghost)
         {
-            if (!disabled && (hover > 0.35f || held)) Theme.FaceBevel(g, full, raised: !held, thin: true);
+            if (!disabled) Theme.FaceBevel(g, full, raised: !held);   // 1995's toolbar buttons stood raised all the time
             var gr = full;
             if (held) gr.Offset(1, 1);
             Color gi = disabled ? Theme.FaceShadow : Theme.TextCol;
@@ -1245,8 +1253,7 @@ internal sealed class ThemedButton : Button
             g.DrawRectangle(dk, full.X, full.Y, full.Width - 1, full.Height - 1);
             face = Rectangle.Inflate(full, -1, -1);
         }
-        using (var b = new SolidBrush(hover > 0.01f && !disabled && !held ? Theme.Blend(Theme.Face, Color.White, 0.22 * hover) : Theme.Face))
-            g.FillRectangle(b, face);
+        using (var b = new SolidBrush(Theme.Face)) g.FillRectangle(b, face);   // no lighter face under the pointer: 1995 had none
         Theme.Bevel(g, face, raised: !held);
 
         var tr = face;

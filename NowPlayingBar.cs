@@ -19,6 +19,8 @@ internal sealed class NowPlayingBar : Panel
     public event Action<Rectangle>? EqualizerRequested;   // arg = the button's screen rect (flyout anchor)
     public event Action<Rectangle>? ProRequested;         // opened the Pro-features hub
     public event Action<Rectangle>? QueueRequested;       // opened the Up Next queue popover (arg = button screen rect)
+    /// <summary>Classic: the speaker opens 1995's little volume window instead of muting (arg = the speaker, on screen).</summary>
+    public event Action<Rectangle>? VolumePopupRequested;
     public event Action<Rectangle>? LyricsRequested;      // opened the live-lyrics popover (arg = button screen rect)
     public event Action? ModesChanged;   // user toggled shuffle/repeat — the host persists it
     public event Action? ArtistClicked, AlbumClicked;   // deck: the card's subtitle links (artist / album)
@@ -206,6 +208,8 @@ internal sealed class NowPlayingBar : Panel
     public Track? NowTrack => _track;
     public bool Playing => _playing;
     public bool Muted => _muted;
+    /// <summary>Where the volume slider sits, 0..1, also while muted (the 95 volume window keeps its place too).</summary>
+    public double VolumeSetting => _volume;
     public double VolumeLevel => _muted ? 0 : _volume;
     public double PositionSeconds => _engine.IsOpen ? _engine.Position.TotalSeconds : 0;
 
@@ -1215,6 +1219,7 @@ internal sealed class NowPlayingBar : Panel
         if (l.ShowOverflow && l.Overflow.Contains(e.Location)) { OverflowRequested?.Invoke(RectangleToScreen(l.Overflow)); return; }
         if (l.ShowSpeaker && l.Speaker.Contains(e.Location))
         {
+            if (Theme.Classic && VolumePopupRequested is not null) { VolumePopupRequested(RectangleToScreen(l.Speaker)); return; }   // 1995: the tray's volume window
             _muted = !_muted;
             if (!_muted && _volume <= 0.001) _volume = _lastVol > 0.001 ? _lastVol : 0.5;
             _engine.Volume = _muted ? 0 : _volume;
@@ -1275,7 +1280,7 @@ internal sealed class NowPlayingBar : Panel
             : l.Prev.Contains(e.Location) ? Hit.Prev
             : l.Next.Contains(e.Location) ? Hit.Next
             : Hit.None;
-        if (h != _hover) { _hover = h; RetargetKnobs(); Cursor = h is Hit.Cover or Hit.Artist or Hit.Album or Hit.Times or Hit.Stars ? Cursors.Hand : Cursors.Default; UpdateTip(h, l); Invalidate(); }
+        if (h != _hover) { _hover = h; RetargetKnobs(); Cursor = h is Hit.Cover or Hit.Artist or Hit.Album or Hit.Times or Hit.Stars ? Theme.HandCursor : Cursors.Default; UpdateTip(h, l); Invalidate(); }
         int sh = h == Hit.Stars && l.StarsR.Width > 0 ? Math.Clamp((e.X - l.StarsR.X) * 5 / l.StarsR.Width + 1, 1, 5) : -1;
         if (sh != _starHover) { _starHover = sh; Invalidate(l.StarsR); }
         // The time under the pointer while it rides the seek line (the card's elapsed slot reads it in the accent).
@@ -1298,7 +1303,7 @@ internal sealed class NowPlayingBar : Panel
             case Hit.Queue: t = Loc.T("Up Next"); r = l.Queue; break;
             case Hit.Pro: t = Loc.T("Pro features"); r = l.Pro; break;
             case Hit.Eq: t = Loc.T("Equalizer"); r = l.Eq; break;
-            case Hit.Speaker: t = _muted ? Loc.T("Unmute") : Loc.T("Mute"); r = l.Speaker; break;
+            case Hit.Speaker: t = Theme.Classic ? Loc.T("Volume") : _muted ? Loc.T("Unmute") : Loc.T("Mute"); r = l.Speaker; break;
             case Hit.Cover: t = Loc.T("Show in list"); r = l.Cover; break;
             case Hit.Overflow: t = Loc.T("More"); r = l.Overflow; break;
             case Hit.Flow: t = Loc.T("Cover Flow"); r = l.Flow; break;
@@ -1863,7 +1868,7 @@ internal sealed class NowPlayingBar : Panel
         var sm = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.None;
         var b = Rectangle.Inflate(r, -2, -2);
-        using (var face = new SolidBrush(hover && !dim ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(face, b);
+        using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, b);
         Theme.Bevel(g, b, raised: true);
         int cx = b.X + b.Width / 2, cy = b.Y + b.Height / 2;
         void Glyph(int ox, int oy, Color c)
@@ -1909,7 +1914,7 @@ internal sealed class NowPlayingBar : Panel
         }
         else
         {
-            using (var fb = new SolidBrush(hover ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(fb, r);
+            using (var fb = new SolidBrush(Theme.Face)) g.FillRectangle(fb, r);   // (no lighter face under the pointer: 1995 had none)
             Theme.Bevel(g, r, raised: true);
         }
         g.SmoothingMode = sm;

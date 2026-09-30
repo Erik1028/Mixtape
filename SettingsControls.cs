@@ -18,7 +18,7 @@ internal sealed class ToggleSwitch : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         Size = new Size(46, 26);
-        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;
+        Cursor = Theme.HandCursor;
         Click += (_, _) => Checked = !Checked;
     }
 
@@ -112,7 +112,7 @@ internal sealed class AccentPicker : Control, IEdgeInset
         BackColor = Color.Transparent;
         Height = D + Pad * 2;                                    // full room for the ring, top and bottom
         Width = (CountSwatches - 1) * (D + Gap) + D + Pad * 2;   // last dot + its ring room lines up on the right edge
-        Cursor = Cursors.Hand;
+        Cursor = Theme.HandCursor;
         Click += OnClick;
         MouseMove += (_, e) => { int h = HitAt(e.X); if (h != _hover) { _hover = h; Invalidate(); } };
         MouseLeave += (_, _) => { if (_hover != -1) { _hover = -1; Invalidate(); } };
@@ -644,7 +644,7 @@ internal sealed class SegmentedControl : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         Height = 30;
-        Cursor = Theme.Classic ? Cursors.Default : Cursors.Hand;
+        Cursor = Theme.HandCursor;
         Font = Theme.UiFont(9f, Theme.Classic ? FontStyle.Regular : FontStyle.Bold);
         MouseMove += (_, e) => { int h = SegAt(e.X); if (h != _hover) { _hover = h; Invalidate(); } };
         MouseLeave += (_, _) => { _hover = -1; Invalidate(); };
@@ -763,7 +763,7 @@ internal sealed class SegmentedControl : Control
         int w = SegW;
 
         // Hover wash on a non-selected segment the mouse is over.
-        if (_hover >= 0 && Math.Abs(_hover - _visSel) > 0.02f)
+        if (Theme.ShowHover && _hover >= 0 && Math.Abs(_hover - _visSel) > 0.02f)
         {
             var hseg = new RectangleF(_hover * w + 2, 2, w - 4, Height - 4);
             using var hb = new SolidBrush(Theme.RowHover);

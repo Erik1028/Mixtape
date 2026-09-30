@@ -342,7 +342,7 @@ internal sealed class PhotoGridView : Panel
         var img = new Rectangle(rect.X, rect.Y, rect.Width, rect.Height);
         using (var path = Theme.RoundedRect(img, 10))
         {
-            using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Theme.RowHover, lift))) g.FillPath(bg, path);
+            using (var bg = new SolidBrush(Theme.Blend(Theme.PanelBg, Theme.RowHover, Theme.ShowHover ? lift : 0))) g.FillPath(bg, path);
             if (t.Thumb is not null)
             {
                 if (t.Fade < 1f)   // placeholder glyph shows through while the freshly-decoded thumb dissolves in

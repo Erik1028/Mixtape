@@ -105,7 +105,7 @@ internal sealed class StatsView : Panel
         if (!ReferenceEquals(h, _hover) || bh != _barHover)
         {
             _hover = h; _barHover = bh;
-            Cursor = h is not null ? Cursors.Hand : Cursors.Default;
+            Cursor = h is not null ? Theme.HandCursor : Cursors.Default;
             Invalidate();
         }
     }
@@ -246,7 +246,7 @@ internal sealed class StatsView : Panel
             var b = sec.Bars[i];
             var row = new Rectangle(card.X + 6, card.Y + LabelH + i * RowH, card.Width - 12, RowH);
             bool hot = b.Target is not null && ReferenceEquals(_hover, b.Target);
-            if (hot)
+            if (hot && Theme.ShowHover)
             {
                 using var hb = new SolidBrush(Theme.RowHover);
                 using var hp = Theme.RoundedRect(row, Theme.RadControl);

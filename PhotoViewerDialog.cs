@@ -211,7 +211,7 @@ internal sealed class PhotoViewerDialog : Form
     /// <summary>Classic: a 95 push button - lit a little under the pointer, its label embossed when it can do nothing.</summary>
     private void ClassicPush(Graphics g, Rectangle r, string text, bool enabled, bool hover)
     {
-        using (var b = new SolidBrush(enabled && hover ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(b, r);
+        using (var b = new SolidBrush(Theme.Face)) g.FillRectangle(b, r);
         Theme.Bevel(g, r, raised: true);
         const TextFormatFlags f = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
         if (enabled) { TextRenderer.DrawText(g, text, _fClassicBtn, r, Theme.TextCol, f); return; }

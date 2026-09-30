@@ -81,7 +81,7 @@ internal sealed class TagTidyDialog : CardDialog
         {
             _g = groups; _on = on;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-            MouseMove += (_, e) => { int h = RowAt(e.Y); if (h != _hover) { _hover = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); } };
+            MouseMove += (_, e) => { int h = RowAt(e.Y); if (h != _hover) { _hover = h; Cursor = h >= 0 ? Theme.HandCursor : Cursors.Default; Invalidate(); } };
             MouseLeave += (_, _) => { if (_hover >= 0) { _hover = -1; Cursor = Cursors.Default; Invalidate(); } };
             MouseWheel += (_, e) =>
             {
@@ -129,7 +129,7 @@ internal sealed class TagTidyDialog : CardDialog
                 int y = 6 + i * RowH - _scroll;
                 if (y + RowH < 0 || y > Height) continue;
                 var row = new Rectangle(6, y, Width - 12, RowH - 2);
-                if (i == _hover)
+                if (i == _hover && Theme.ShowHover)
                 {
                     using var hb = new SolidBrush(Theme.RowHover);
                     using var hp = Theme.RoundedRect(row, Theme.RadControl);

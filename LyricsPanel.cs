@@ -155,7 +155,7 @@ internal sealed class LyricsPanel : Control
                 if (ph != _pickHover || hm0 != _hoverMore || hc0 != _hoverClose)
                 {
                     _pickHover = ph; _hoverMore = hm0; _hoverClose = hc0;
-                    Cursor = hc0 || hm0 || ph >= 0 ? Cursors.Hand : Cursors.Default;
+                    Cursor = hc0 || hm0 || ph >= 0 ? Theme.HandCursor : Cursors.Default;
                     Invalidate();
                 }
                 return;
@@ -170,7 +170,7 @@ internal sealed class LyricsPanel : Control
             if (h != _hover || hc != _hoverClose || hs != _hotSync || hm != _hoverMore || hx != _hoverExpand)
             {
                 _hover = h; _hoverClose = hc; _hotSync = hs; _hoverMore = hm; _hoverExpand = hx;
-                Cursor = hc || hm || hx || hs > 0 || (h >= 0 && _synced) ? Cursors.Hand : Cursors.Default;
+                Cursor = hc || hm || hx || hs > 0 || (h >= 0 && _synced) ? Theme.HandCursor : Cursors.Default;
                 Invalidate();
             }
         };
@@ -853,7 +853,7 @@ internal sealed class LyricsPanel : Control
     /// <summary>The hover chip behind a header or sync button. Classic: a toolbar button's thin raised edge.</summary>
     private void HotChip(Graphics g, Rectangle r)
     {
-        if (Theme.Classic) { Theme.Bevel(g, r, raised: true, thin: true); return; }
+        if (Theme.Classic) return;   // Classic: nothing lights up under the pointer
         using var path = Theme.RoundedRect(r, 6);
         using var back = new SolidBrush(Theme.Blend(Surface, Theme.TextCol, 0.14f));
         g.FillPath(back, path);
@@ -889,7 +889,7 @@ internal sealed class LyricsPanel : Control
     {
         var sm = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.None;
-        using (var face = new SolidBrush(hot ? Theme.Blend(Theme.Face, Color.White, 0.22) : Theme.Face)) g.FillRectangle(face, r);
+        using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, r);
         Theme.Bevel(g, r, raised: true);
         using var k = new SolidBrush(Theme.FaceDark);
         int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
