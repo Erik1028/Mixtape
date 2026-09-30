@@ -42,7 +42,9 @@ internal sealed class FrameClock : IDisposable
     private double _paintMs;       // how long that paint took
 
     /// <param name="target">The control to repaint; also the thread to marshal onto.</param>
-    public FrameClock(Control target)
+    /// <param name="due">Asked on the UI thread each display frame: would the next frame show anything new? A view
+    /// that is mostly still paints only when it changes, instead of redrawing the same picture at the refresh rate.</param>
+    public FrameClock(Control target, Func<bool>? due = null)
     {
         _target = target;
         _tick = () =>
@@ -54,7 +56,7 @@ internal sealed class FrameClock : IDisposable
             // intro tween never ticked (the stage stayed at its first, blank frame), clicks were not read: a freeze.
             try
             {
-                if (_run && !_target.IsDisposed && _target.Visible)
+                if (_run && !_target.IsDisposed && _target.Visible && (due?.Invoke() ?? true))
                 {
                     _tickAt = Stopwatch.GetTimestamp();
                     _target.Invalidate();

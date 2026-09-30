@@ -120,7 +120,7 @@ internal sealed class LyricsStage : Control
         // 20 ms -- 40 fps, visibly stepping, on a 180 Hz panel. Raising the multimedia timer period did
         // nothing for it; measured, with and without, at the same 27 ms. FrameClock waits on the vertical
         // blank instead and lands every frame inside 7.6 ms at the 99th percentile.
-        _clockPump = new FrameClock(this);
+        _clockPump = new FrameClock(this, FrameDue);
         VisibleChanged += (_, _) =>
         {
             if (Visible) _clockPump?.Start();
@@ -236,7 +236,7 @@ internal sealed class LyricsStage : Control
         _reported = pos < TimeSpan.Zero ? TimeSpan.Zero : pos;
         _duration = duration; _playing = playing;
         _since.Restart();
-        Invalidate();
+        if (_clockPump is not { Running: true }) Invalidate();   // with the clock running, its next frame decides
     }
 
     public void SetOffsetMs(int ms) { _offset = TimeSpan.FromMilliseconds(ms); Invalidate(); }
@@ -471,6 +471,8 @@ internal sealed class LyricsStage : Control
             Theme.CarveCardCorners(g, this, Theme.RadShell, true, true, true, true);   // it IS the content card: same corners
         }
         else DrawClose(g, a);
+        _paintedAt = _clock.Elapsed.TotalMilliseconds;
+        _paintedSig = Sig(_paintedTop);
     }
 
     private static Color W(double alpha) => Color.FromArgb(Math.Clamp((int)Math.Round(alpha * 255), 0, 255), 255, 255, 255);
@@ -813,6 +815,87 @@ internal sealed class LyricsStage : Control
         return span <= 0.01 ? 1 : Math.Clamp((now - _lines[i].At).TotalSeconds / span, 0, 1);
     }
 
+    /// <summary>Where the followed sheet is heading at <paramref name="now"/>: the sung line at the focus, drifting
+    /// through it toward the next one (Classic: jumping from line to line).</summary>
+    private double TargetScroll(TimeSpan now, int cur)
+    {
+        int aim = cur;
+        while (aim >= 0 && aim < _rows.Length && _rows[aim].Words.Count == 0) aim++;
+        if (aim >= _rows.Length) { aim = cur; while (aim > 0 && _rows[aim].Words.Count == 0) aim--; }
+        if (_synced && cur >= 0 && cur < _rows.Length && _rows[cur].Beat && cur + 1 < _lines.Count
+            && (_lines[cur + 1].At - now).TotalSeconds > 0.9) aim = cur;
+        int tt = cur >= 0 ? aim : 0;
+        double target = _rows[tt].Top;
+        // Classic: 1995 karaoke - no drift through the line, no glide to the next; the sheet jumps as a line starts
+        if (cur >= 0 && tt == cur && cur + 1 < _rows.Length && !Theme.Classic)
+            target += (_rows[cur + 1].Top - _rows[cur].Top) * LineProgress(cur, now);
+        return target - FocusY;
+    }
+
+    // ---- frame scheduling ----
+    // The frame clock ticks with the display (100 Hz and more). Painting every tick redrew the same picture most of the
+    // time - the words sit on whole pixels and move one every ~40 ms, the wash drifts a fraction of a pixel, and the
+    // Classic stage moves nothing at all between lines - and kept half a core busy with the stage merely open. Each
+    // tick now asks whether the next frame would show anything new, and paints only then.
+    private int _paintedTop = int.MinValue;
+    private double _paintedAt = double.NegativeInfinity;
+    private (int cur, int top, int sec, int rem, int seek, int beat, bool playing, int vol) _paintedSig;
+
+    /// <summary>Everything a frame shows that moves with time, quantised to what can be seen: the sung line, the
+    /// sheet's whole-pixel scroll, the times (rounded to the second, as printed), the seek bar, the beat dots.</summary>
+    private (int cur, int top, int sec, int rem, int seek, int beat, bool playing, int vol) Sig(int top)
+    {
+        var now = Now;
+        int cur = _synced && _lines.Count > 0 ? LyricsLookup.IndexAt(_lines, now) : -1;
+        double dur = _duration.TotalSeconds, pos = Math.Clamp((_reported + (_playing ? _since.Elapsed : TimeSpan.Zero)).TotalSeconds, 0, Math.Max(0, dur));
+        int seek = dur > 0 ? (int)(pos / dur * SeekRect.Width * (Theme.Classic ? 1 : 4)) : 0;   // whole pixels; quarter pixels for the anti-aliased modern fill
+        double beat = -1;
+        if (_synced && _lines.Count > 0 && _rows.Length == _lines.Count)
+        {
+            if (cur < 0 && _lines[0].At.TotalSeconds >= BeatSeconds) beat = now.TotalSeconds / _lines[0].At.TotalSeconds;
+            else if (cur >= 0 && _rows[cur].Beat && cur + 1 < _lines.Count)
+            {
+                double span = (_lines[cur + 1].At - _lines[cur].At).TotalSeconds;
+                beat = span <= 0 ? 1 : (now - _lines[cur].At).TotalSeconds / span;
+            }
+        }
+        return (cur, top, (int)Math.Round(pos), dur > 0 ? (int)Math.Round(dur - pos) : -1, seek,
+                beat < 0 ? -1 : (int)(Math.Clamp(beat, 0, 1) * 96), _playing, (int)Math.Round(_volume * 1000));
+    }
+
+    /// <summary>The sheet's whole-pixel scroll the next frame would paint: the same glide step the paint takes.</summary>
+    private int PredictTop()
+    {
+        if (_sheetShown <= 0.01 || _lines.Count == 0 || _measuredFor < 0 || _rows.Length != _lines.Count) return _paintedTop;
+        double us = _userScroll;
+        if (_synced && _clock.Elapsed.TotalMilliseconds - _lastUserScrollTick > 4000) us = Theme.Classic ? 0 : us * 0.86;
+        double s = _scroll;
+        if (_synced)
+        {
+            var now = Now;
+            double target = TargetScroll(now, LyricsLookup.IndexAt(_lines, now));
+            double dt = Math.Min(0.05, _frameTime.Elapsed.TotalSeconds);
+            s = !_landed || Theme.Classic ? target : s + (target - s) * (1 - Math.Exp(-dt / 0.22));
+        }
+        return (int)Math.Round(s + us);
+    }
+
+    /// <summary>Asked by the frame clock every display frame: would the next frame show anything new?</summary>
+    private bool FrameDue()
+    {
+        double ms = _clock.Elapsed.TotalMilliseconds;
+        if (_intro < 1f || Swap < 1f || (_sheetShown > 0.001 && _sheetShown < 0.999) || _seeking || _volDrag) return true;   // mid-motion: every frame
+        bool easingHome = _synced && Math.Abs(_userScroll) > 0.5 && ms - _lastUserScrollTick > 4000;   // a peek going back to the sung line
+        if (easingHome) return true;
+        if (Anim.MotionEnabled)
+        {
+            if (_handoffT0 > 0 && ms - _handoffT0 < HandoffMs) return true;   // the sung line changing hands
+            if (ms - _revealT0 < 260) return true;                           // a new sheet fading in
+            if (ms - _paintedAt >= 33) return true;                          // the wash and the breathing dots: slow and soft, 30 frames a second show all of it
+        }
+        return !Sig(PredictTop()).Equals(_paintedSig);
+    }
+
     private void DrawSheet(Graphics g, float a)
     {
         var sr = SheetRect;
@@ -834,25 +917,16 @@ internal sealed class LyricsStage : Control
         // ---- scroll ----
         // Only a followed sheet has a home to ease back to; an untimed one stays where the reader left it.
         if (_synced && _clock.Elapsed.TotalMilliseconds - _lastUserScrollTick > 4000) _userScroll = Theme.Classic ? 0 : _userScroll * 0.86;   // Classic: back in one go
-        int aim = cur;
-        while (aim >= 0 && aim < _rows.Length && _rows[aim].Words.Count == 0) aim++;
-        if (aim >= _rows.Length) { aim = cur; while (aim > 0 && _rows[aim].Words.Count == 0) aim--; }
-        if (_synced && cur >= 0 && cur < _rows.Length && _rows[cur].Beat && cur + 1 < _lines.Count
-            && (_lines[cur + 1].At - now).TotalSeconds > 0.9) aim = cur;
         double dt = Math.Min(0.05, _frameTime.Elapsed.TotalSeconds);
         _frameTime.Restart();
         if (_synced)
         {
-            int tt = cur >= 0 ? aim : 0;
-            double target = _rows[tt].Top;
-            // Classic: 1995 karaoke - no drift through the line, no glide to the next; the sheet jumps as a line starts
-            if (cur >= 0 && tt == cur && cur + 1 < _rows.Length && !Theme.Classic)
-                target += (_rows[cur + 1].Top - _rows[cur].Top) * LineProgress(cur, now);
-            target -= FocusY;
+            double target = TargetScroll(now, cur);
             if (!_landed || Theme.Classic) { _scroll = target; _landed = true; }
             else _scroll += (target - _scroll) * (1 - Math.Exp(-dt / 0.22));
         }
         double top = _scroll + _userScroll;
+        _paintedTop = (int)Math.Round(top);
 
         g.SetClip(new Rectangle(sr.X - 8, 0, sr.Width + 16, Height));
 

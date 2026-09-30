@@ -1055,6 +1055,127 @@ internal sealed class MainForm : Form, IMessageFilter
         return sb.ToString();
     }
 
+    /// <summary>Harness (MIX_PAINTBENCH=n, with MIX_LIVE): what a frame of the current page costs. n full repaints of
+    /// the whole window (every control, synchronously), then n wheel notches down the page and n back up, each notch
+    /// timed through its paint - with motion paused, so a notch is exactly one frame of a glide (notches that no longer
+    /// move the page, at either end, are left out). Also what one notch leaves to repaint, what the frames allocate,
+    /// whether the window's GDI and USER objects grow (a leak per paint would show there), and the dearest controls.</summary>
+    internal string PreviewPaintBench(int n)
+    {
+        const uint RDW_INVALIDATE = 0x1, RDW_ERASE = 0x4, RDW_NOCHILDREN = 0x40, RDW_ALLCHILDREN = 0x80, RDW_UPDATENOW = 0x100;
+        Control page = new Control?[] { _photoView, _deviceView, _browseView, _statsView, _homeView }.FirstOrDefault(c => c is { Visible: true }) ?? _tracks;
+        IntPtr me = GetCurrentProcess();
+        void Full() => RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        static string Stats(List<double> v)
+        {
+            if (v.Count == 0) return "(no frames)";
+            var s = v.OrderBy(x => x).ToList();
+            return $"median {s[s.Count / 2]:0.00} ms, p90 {s[Math.Min(s.Count - 1, (int)(s.Count * 0.9))]:0.00}, max {s[^1]:0.00} ({s.Count} frames)";
+        }
+        for (int i = 0; i < 3; i++) Full();   // warm-up: JIT, caches, first-use work
+        Application.DoEvents();
+        uint gdi0 = GetGuiResources(me, 0), user0 = GetGuiResources(me, 1);
+        int gc0 = GC.CollectionCount(0), gc2 = GC.CollectionCount(2);
+        long a0 = GC.GetAllocatedBytesForCurrentThread();
+        var full = new List<double>();
+        for (int i = 0; i < n; i++) { long t = System.Diagnostics.Stopwatch.GetTimestamp(); Full(); full.Add(System.Diagnostics.Stopwatch.GetElapsedTime(t).TotalMilliseconds); }
+        long aFull = GC.GetAllocatedBytesForCurrentThread() - a0;
+        bool motion = Anim.MotionEnabled; Anim.MotionEnabled = false;
+        var pt = page.PointToScreen(new Point(page.Width / 2, page.Height / 2));
+        IntPtr at = (IntPtr)((pt.Y << 16) | (pt.X & 0xFFFF));
+        int paints = 0;
+        PaintEventHandler count = (_, _) => paints++;
+        page.Paint += count;
+        var down = new List<double>(); var up = new List<double>();
+        string dirtied = "";
+        long a1 = GC.GetAllocatedBytesForCurrentThread();
+        foreach (int delta in new[] { -120, 120 })   // n notches down the page, then n back up
+            for (int i = 0; i < n; i++)
+            {
+                int p0 = paints;
+                long t = System.Diagnostics.Stopwatch.GetTimestamp();
+                SendMessage(page.Handle, 0x020A, (IntPtr)(delta << 16), at);   // WM_MOUSEWHEEL
+                bool dirty = GetUpdateRect(page.Handle, IntPtr.Zero, false);   // (the owner-drawn pages paint without raising Paint)
+                if (i == 3) dirtied += (delta < 0 ? "down: " : "; up: ") + DirtyReport();   // what one notch mid-page leaves to repaint
+                RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_ALLCHILDREN | RDW_UPDATENOW);   // paint exactly what the notch invalidated
+                double ms = System.Diagnostics.Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+                if (i != 3 && (dirty || paints > p0)) (delta < 0 ? down : up).Add(ms);
+            }
+        long aScroll = GC.GetAllocatedBytesForCurrentThread() - a1;
+        page.Paint -= count;
+        Anim.MotionEnabled = motion;
+        Application.DoEvents();
+        uint gdi1 = GetGuiResources(me, 0), user1 = GetGuiResources(me, 1);
+        // where a full repaint goes: every visible control painted on its own (children excluded), the dearest first
+        var own = new List<(double ms, string what)>();
+        void Walk(Control c)
+        {
+            foreach (Control k in c.Controls)
+            {
+                if (!k.Visible || !k.IsHandleCreated || k.Width <= 0 || k.Height <= 0) continue;
+                var v = new List<double>();
+                for (int i = 0; i < 5; i++)
+                {
+                    long t = System.Diagnostics.Stopwatch.GetTimestamp();
+                    RedrawWindow(k.Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
+                    v.Add(System.Diagnostics.Stopwatch.GetElapsedTime(t).TotalMilliseconds);
+                }
+                v.Sort();
+                own.Add((v[2], $"{k.GetType().Name}{(k.Name.Length > 0 ? " '" + k.Name + "'" : "")} {k.Width}x{k.Height}"));
+                Walk(k);
+            }
+        }
+        Walk(this);
+        var top = own.OrderByDescending(x => x.ms).Take(10).Select(x => $"    {x.ms,6:0.00} ms  {x.what}");
+        return $"page: {page.GetType().Name}, window {ClientSize.Width}x{ClientSize.Height}, look: {(Theme.Classic ? "Windows 95" : "modern")}" + Environment.NewLine
+            + $"full repaint: {Stats(full)}; {aFull / Math.Max(1, n) / 1024.0:0.0} KB allocated per frame" + Environment.NewLine
+            + $"wheel notch down: {Stats(down)}" + Environment.NewLine
+            + $"wheel notch up:   {Stats(up)}; {aScroll / Math.Max(1, down.Count + up.Count) / 1024.0:0.0} KB allocated per notch" + Environment.NewLine
+            + $"one notch leaves to repaint: {dirtied}" + Environment.NewLine
+            + $"GC: gen0 +{GC.CollectionCount(0) - gc0}, gen2 +{GC.CollectionCount(2) - gc2}; GDI objects {gdi0} -> {gdi1}, USER objects {user0} -> {user1}" + Environment.NewLine
+            + $"dearest controls on their own ({own.Count} painted, {own.Sum(x => x.ms):0.0} ms together):" + Environment.NewLine
+            + string.Join(Environment.NewLine, top) + Environment.NewLine;
+    }
+
+    /// <summary>Every window with something waiting to repaint: the box around it, and the bands it is made of.</summary>
+    private string DirtyReport()
+    {
+        var parts = new List<string>();
+        void Walk(Control c)
+        {
+            foreach (Control k in c.Controls)
+            {
+                if (!k.Visible || !k.IsHandleCreated) continue;
+                if (GetUpdateBox(k.Handle, out RECT r, false))
+                {
+                    string pieces = "";
+                    IntPtr rgn = CreateRectRgn(0, 0, 0, 0);
+                    if (GetUpdateRgn(k.Handle, rgn, false) > 1)   // SIMPLEREGION / COMPLEXREGION
+                    {
+                        using var reg = Region.FromHrgn(rgn);
+                        using var id = new System.Drawing.Drawing2D.Matrix();
+                        var scans = reg.GetRegionScans(id);
+                        pieces = " = " + string.Join(" + ", scans.Take(6).Select(s => $"{s.Width}x{s.Height}@{s.Y}")) + (scans.Length > 6 ? $" (+{scans.Length - 6} more)" : "");
+                    }
+                    DeleteObject(rgn);
+                    parts.Add($"{k.GetType().Name} box {r.right - r.left}x{r.bottom - r.top} at y {r.top}{pieces}");
+                }
+                Walk(k);
+            }
+        }
+        if (GetUpdateBox(Handle, out RECT f, false)) parts.Add($"form {f.right - f.left}x{f.bottom - f.top}");
+        Walk(this);
+        return parts.Count == 0 ? "nothing" : string.Join("; ", parts);
+    }
+    [DllImport("user32.dll")] private static extern bool GetUpdateRect(IntPtr hWnd, IntPtr rect, bool erase);
+    [DllImport("user32.dll", EntryPoint = "GetUpdateRect")] private static extern bool GetUpdateBox(IntPtr hWnd, out RECT rect, bool erase);
+    [DllImport("user32.dll")] private static extern int GetUpdateRgn(IntPtr hWnd, IntPtr hRgn, bool erase);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+    [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hWnd, IntPtr rect, IntPtr rgn, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetGuiResources(IntPtr process, uint flags);
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+
     private bool ShowsPlay(Bitmap shot, int row)   // enough ink in the row's play zone to be its play button
     {
         var p = RowPlayRect(_tracks.GetRowDisplayRectangle(row, false));
@@ -2259,6 +2380,20 @@ internal sealed class MainForm : Form, IMessageFilter
     public int PreviewLocalCount => _localTracks.Count;
 
     /// <summary>Harness (MIX_PLAY_LOCAL=&lt;title part | index&gt;): REALLY play a PC-library song through the engine, muted.</summary>
+    /// <summary>Harness (MIX_FIND_SYNCED=1): the PC songs that have synced lyrics on hand (offline), by the index
+    /// MIX_PLAY_LOCAL takes - for picking a song to measure the lyrics views with.</summary>
+    internal string PreviewFindSynced()
+    {
+        var hits = new List<string>();
+        int i = 0;
+        foreach (var t in _localTracks.Where(x => MediaType.IsAudio(x.MediaType)))
+        {
+            try { LyricsLookup.Find(t.Artist, t.DisplayTitle, LyricsDuration(t), t.LocalPath, false, out bool synced); if (synced) hits.Add($"{i}: {t.Artist} - {t.DisplayTitle}"); } catch { }
+            i++;
+        }
+        return $"{i} songs, synced lyrics for {hits.Count}:" + Environment.NewLine + string.Join(Environment.NewLine, hits);
+    }
+
     public bool PreviewPlayLocal(string sel)
     {
         var audio = _localTracks.Where(x => MediaType.IsAudio(x.MediaType)).ToList();
@@ -7386,7 +7521,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 case APPCOMMAND_MEDIA_STOP: _nowPlaying.Pause(); m.Result = (IntPtr)1; return;
             }
         }
-        if (m.Msg == WM_DEVICECHANGE)
+        if (m.Msg == WM_DEVICECHANGE && _autoDetect)   // (a render/test window holds a sandbox iPod: a re-scan would drop it)
         {
             int ev = (int)m.WParam;
             if (ev == DBT_DEVICEARRIVAL) _ejectedRoots.Clear(); // a fresh plug-in → resume detecting those drives
