@@ -4746,6 +4746,9 @@ internal sealed class MainForm : Form, IMessageFilter
             artBtn.Click += (_, _) => RebuildArtwork(dev);
             options.AddRow(Loc.T("Album artwork"), Loc.T("Write cover art onto every song already on the iPod (from each file's embedded cover). Handy after copying songs from an older version."), artBtn, 64);
         }
+        var lyricsBtn = new ThemedButton { Text = Loc.T("Add lyrics…"), Pill = true, Width = 150, Height = 30, Enabled = dev.Profile.CanWrite };
+        lyricsBtn.Click += (_, _) => AddLyricsToIpod(dev);
+        options.AddRow(Loc.T("Lyrics"), Loc.T("Put lyrics into the songs already on the iPod, so it shows them while a song plays (press the centre button)."), lyricsBtn, 64);
         var notesBtn = new ThemedButton { Text = Loc.T("Notes…"), Pill = true, Width = 120, Height = 30 };
         notesBtn.Click += (_, _) => { using var d = new NotesDialog(dev.MountRoot); d.ShowDialog(this); };
         // Plain files at the drive's root, not the music database - so this works even on an iPod that is read-only for music.
@@ -4867,6 +4870,71 @@ internal sealed class MainForm : Form, IMessageFilter
             (result.noArt > 0 ? Loc.T("\n{0} song(s) had no embedded cover in the file.", result.noArt) : "") +
             Loc.T("\n\nEject the iPod, then check the Now Playing screen."),
             Loc.T("Rebuild artwork"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>Lyrics for a song being added, from what is already on this PC only (a .lrc beside the file, the
+    /// lyrics cache, the file's own tags) - adding a hundred songs must not mean a hundred web lookups.</summary>
+    private static string? OfflineLyricsFor(string path, NewTrack nt)
+        => IpodLyrics.PlainText(LyricsLookup.Find(nt.Artist, nt.Title, TimeSpan.FromMilliseconds(nt.LengthMs), path, online: false, out _));
+
+    /// <summary>Put lyrics into the songs already on the iPod: each song without them is looked up (the lyrics
+    /// cache, then LRCLIB when online lyrics are on), the words are written into the iPod's copy of the file and
+    /// its row is flagged. Stoppable; what was done before a stop is saved.</summary>
+    private void AddLyricsToIpod(IPodDevice dev)
+    {
+        if (!dev.Profile.CanWrite) return;
+        bool online = _settings.OnlineLyrics;
+        if (MessageDialog.Show(this,
+            Loc.T("This puts lyrics into the songs on the iPod that have none, so the iPod shows them while a song plays (press the centre button).") + "\n\n" +
+            (online ? Loc.T("Songs are looked up in the public LRCLIB database (only the artist, title and length are sent), so this can take a few minutes. You can stop at any time.")
+                    : Loc.T("Online lyrics are off, so only lyrics already on this PC are used. Turn them on in Settings to look up the rest.")) +
+            Loc.T("\n\nOnly the copies on the iPod change. Mixtape backs up the database first. Continue?"),
+            Loc.T("Add lyrics"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+
+        MarkIpodWrite(dev);
+        int added = 0, had = 0, missing = 0;
+        using (var prog = new CopyProgressDialog(Loc.T("Adding lyrics to your iPod"), 1000, (report, cancelled) =>
+        {
+            var lib = IpodLibrary.Load(dev);
+            var songs = lib.View.Tracks.Where(t => !MediaType.IsVideo(t.MediaType)).ToList();
+            int changed = 0;
+            for (int i = 0; i < songs.Count; i++)
+            {
+                if (cancelled()) break;
+                var t = songs[i];
+                report((int)((long)i * 1000 / Math.Max(1, songs.Count)), Loc.T("Looking up lyrics {0} of {1}   ·   {2}", i + 1, songs.Count, t.DisplayTitle));
+                if (t.HasLyrics) { had++; continue; }
+                string? path = t.ResolveFilePath(dev.MountRoot);
+                if (path is null || !IpodLyrics.Supports(path) || !File.Exists(path)) { missing++; continue; }
+                if (IpodLyrics.HasEmbedded(path))
+                {
+                    // The file brought its lyrics along, but nothing told the iPod.
+                    if (lib.Raw.SetTrackLyrics(t.UniqueId, 0)) { added++; changed++; }
+                    continue;
+                }
+                var sheet = LyricsLookup.Find(t.Artist, t.Title, t.Duration, path, online, out _);
+                if (IpodLyrics.PlainText(sheet) is { } text && IpodLyrics.Embed(path, text)
+                    && lib.Raw.SetTrackLyrics(t.UniqueId, (uint)new FileInfo(path).Length))
+                { added++; changed++; }
+                else missing++;
+            }
+            if (changed > 0) { report(1000, Loc.T("Saving the iPod database…")); lib.Save(); }
+        }, CopyFlight.ToIPod))
+        {
+            prog.ShowDialog(this);
+            if (ReferenceEquals(_device, dev)) LoadDevice(dev);
+
+            if (prog.Error is not null)
+            {
+                MessageDialog.Show(this, Loc.T("Writing the database failed (a backup was kept as iTunesDB.bak):\n\n{0}", prog.Error.Message), Loc.T("Add lyrics"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            string msg = (prog.WasCancelled ? Loc.T("Stopped.") + " " : "") + Loc.T("Put lyrics on {0} song(s).", added);
+            if (had > 0) msg += Loc.T("\n{0} song(s) already had lyrics.", had);
+            if (missing > 0) msg += Loc.T("\nNo lyrics found for {0} song(s).", missing);
+            if (added > 0) msg += Loc.T("\n\nEject the iPod, play a song and press the centre button until the lyrics show.");
+            MessageDialog.Show(this, msg, Loc.T("Add lyrics"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
     }
 
     /// <summary>Library Doctor: scan the library for problems (off the UI thread), let the user pick safe
@@ -5601,6 +5669,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int ok = 0;
         var errors = new List<string>();
         string tempDir = Path.Combine(Path.GetTempPath(), "mixtape-audio");
+        _lib.Lyrics = _settings.LyricsToIpod ? OfflineLyricsFor : null;
 
         // *100 scale so transcoding shows a percentage; copy-only files just jump to the next step.
         using (var prog = new CopyProgressDialog(Loc.T("Adding music to your iPod"), files.Length * 100, (report, cancelled) =>
@@ -5630,7 +5699,7 @@ internal sealed class MainForm : Form, IMessageFilter
                             cancelled);
                         report(baseP + 99, Loc.T("Copying {0} of {1}   ·   {2}", i + 1, files.Length, name));
                         // ffmpeg preserved the tags into the .m4a; keep the source's title as a safety net.
-                        _lib!.AddMediaFile(temp, MediaType.Audio, MetadataExtractor.Read(src).Title, dur);
+                        _lib!.AddMediaFile(temp, MediaType.Audio, MetadataExtractor.Read(src).Title, dur, originalPath: src);
                     }
                     else
                     {

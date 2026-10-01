@@ -251,6 +251,22 @@ internal sealed class RawDb
         return false;
     }
 
+    /// <summary>Mark an EXISTING track as carrying lyrics after they were written into its file on the iPod:
+    /// lyrics_flag @0xB0, and the file size @0x24, which the tag write changed. Returns false if the track
+    /// isn't found or its header is too short for the flag.</summary>
+    public bool SetTrackLyrics(uint uniqueId, uint fileSize)
+    {
+        var tracks = Datasets.FirstOrDefault(d => d.Type == 1)?.Tracks;
+        if (tracks is null) return false;
+        int i = IndexOfTrack(tracks, uniqueId);
+        if (i < 0) return false;
+        var h = tracks[i];
+        if (h.Length < 0xB4 || (int)ReadU32(h, 0x04) < 0xB4) return false;
+        h[0xB0] = 1;                    // lyrics_flag
+        if (fileSize > 0) PatchU32(h, 0x24, fileSize);
+        return true;
+    }
+
     /// <summary>Clear the cover-art link on EVERY track (has_artwork=2/no, count/size/mhii_link=0) so a
     /// clean artwork rebuild can re-link only the tracks it actually writes art for.</summary>
     public void ClearAllTrackArtwork()
@@ -624,6 +640,7 @@ internal sealed class RawDb
             h[0xA6] = 1;  // remember_playback_position — resume where you left off
             h[0xB1] = 1;  // movie_flag — "this is a movie, not audio"
         }
+        if (t.HasLyrics) h[0xB0] = 1;         // lyrics_flag: the file carries lyrics the iPod can show
 
         var mhods = new List<byte[]>();
         void Add(uint type, string? s) { if (!string.IsNullOrEmpty(s)) mhods.Add(BuildStringMhod(type, s!)); }
@@ -802,4 +819,7 @@ internal sealed class NewTrack
     public bool HasArtwork;
     public uint MhiiLink;                 // the ArtworkDB image id (mhii @0x10) this track links to
     public uint ArtworkSize;              // total bytes of this track's thumbnails (mhit @0x80)
+
+    /// <summary>The copied file carries lyrics in its tags (mhit lyrics_flag @0xB0) — see <see cref="IpodLyrics"/>.</summary>
+    public bool HasLyrics;
 }

@@ -121,6 +121,7 @@ internal static class ITunesDbReader
         };
         // mediaType lives at 0xD0, only present on newer (longer) mhit headers.
         if (headerLen >= 0xD4) t.MediaType = r.U32(off + 0xD0);
+        if (headerLen >= 0xB4) t.HasLyrics = r.U8(off + 0xB0) != 0;
 
         int p = off + (int)headerLen;
         for (uint i = 0; i < mhodCount && p + 16 <= r.Length; i++)

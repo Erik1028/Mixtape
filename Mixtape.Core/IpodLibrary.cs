@@ -31,6 +31,11 @@ internal sealed class IpodLibrary
     /// <summary>Optional cover-art writer (set by the host on colour-screen devices). Null = no artwork sync.</summary>
     public IArtworkSink? Artwork { get; set; }
 
+    /// <summary>Optional lyrics source for songs being added: given the song's own file on the PC (for a .lrc
+    /// beside it) and its tags, the plain text to put on the iPod, or null. Null = only lyrics the file already
+    /// carries are flagged. See <see cref="IpodLyrics"/>.</summary>
+    public Func<string, NewTrack, string?>? Lyrics { get; set; }
+
     private IpodLibrary(IPodDevice device, RawDb raw, ITunesDb view)
     {
         Device = device;
@@ -60,7 +65,8 @@ internal sealed class IpodLibrary
     /// mhit media kind (audio vs movie/music-video/TV-show). <paramref name="titleOverride"/> sets a
     /// nicer title when the copied file is a tagless transcode. Does not save.
     /// </summary>
-    public string AddMediaFile(string fileToCopy, uint mediaType, string? titleOverride = null, double durationSecHint = 0)
+    public string AddMediaFile(string fileToCopy, uint mediaType, string? titleOverride = null, double durationSecHint = 0,
+                               string? originalPath = null)
     {
         var nt = MetadataExtractor.Read(fileToCopy, isVideo: MediaType.IsVideo(mediaType));
         if (!string.IsNullOrWhiteSpace(titleOverride)) nt.Title = titleOverride;
@@ -68,8 +74,9 @@ internal sealed class IpodLibrary
         // transcoded container, fall back to the duration ffmpeg already measured.
         if (nt.LengthMs == 0 && durationSecHint > 0) nt.LengthMs = (uint)Math.Round(durationSecHint * 1000);
         nt.MediaType = mediaType;
-        var (location, _) = MusicCopier.Copy(Device, fileToCopy);
+        var (location, dest) = MusicCopier.Copy(Device, fileToCopy);
         nt.Location = location;
+        if (!MediaType.IsVideo(mediaType)) AttachLyrics(nt, dest, originalPath ?? fileToCopy);
         uint maxId = Raw.MaxUniqueId();
         if (maxId == uint.MaxValue) throw new InvalidOperationException("This iPod's track-id space is exhausted; can't add more tracks.");
         nt.UniqueId = maxId + 1;   // guard the +1: wrapping to 0 would collide with an unset id
@@ -83,6 +90,22 @@ internal sealed class IpodLibrary
         }
         Raw.AddTrack(RawDb.BuildMhitChunk(nt), nt.UniqueId);
         return string.IsNullOrEmpty(nt.Title) ? Path.GetFileName(fileToCopy) : nt.Title!;
+    }
+
+    /// <summary>Flag a just-copied song whose file carries lyrics, or put lyrics into the iPod's copy when
+    /// <see cref="Lyrics"/> finds some. Best-effort: a failure leaves the song exactly as copied.</summary>
+    private void AttachLyrics(NewTrack nt, string dest, string originalPath)
+    {
+        try
+        {
+            if (!IpodLyrics.Supports(dest)) return;
+            if (IpodLyrics.HasEmbedded(dest)) { nt.HasLyrics = true; return; }
+            if (Lyrics?.Invoke(originalPath, nt) is not { Length: > 0 } text) return;
+            if (!IpodLyrics.Embed(dest, text)) return;
+            nt.HasLyrics = true;
+            nt.FileSize = (uint)new FileInfo(dest).Length;   // the tag write changed it
+        }
+        catch { /* the song itself is on the iPod either way */ }
     }
 
     /// <summary>Remove a track from the database (and optionally delete its audio file). Does not save.</summary>

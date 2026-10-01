@@ -330,6 +330,9 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Row(Loc.T("Play count column"), Loc.T("Show how many times each song has been played."), Toggle(_s.ShowPlays, v => { _s.ShowPlays = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Date added column"), Loc.T("Show when each song was added to the iPod."), Toggle(_s.ShowDateAdded, v => { _s.ShowDateAdded = v; _s.Save(); _applyChanged(); }));
         Row(Loc.T("Time column"), Loc.T("Show the Time column in the song list."), Toggle(_s.ShowTime, v => { _s.ShowTime = v; _s.Save(); _applyChanged(); }));
+        Group(Loc.T("Lyrics"));
+        Row(Loc.T("Lyrics on the iPod"), Loc.T("When adding songs, put their lyrics into the iPod's copy so the iPod shows them (press the centre button while a song plays). Uses lyrics already on this PC; your own files are never changed."),
+            Toggle(_s.LyricsToIpod, v => { _s.LyricsToIpod = v; _s.Save(); _applyChanged(); }));
         Group(Loc.T("Internet"));
         Row(Loc.T("Online lyrics"), Loc.T("When a song has no lyrics of its own, look up time-synced lyrics from the public LRCLIB database. Only the artist, title and length are sent, and only while the lyrics panel is open."),
             Toggle(_s.OnlineLyrics, v => { _s.OnlineLyrics = v; _s.Save(); _applyChanged(); }));
