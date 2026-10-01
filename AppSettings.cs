@@ -98,6 +98,10 @@ internal sealed class AppSettings
     /// the lyrics panel is open, and only the artist + title + length are sent. A .lrc file next to the
     /// audio, or lyrics embedded in its tags, are always preferred and need no network at all.</summary>
     public bool OnlineLyrics { get; set; } = true;
+    /// <summary>Put a song's lyrics into the iPod's copy of it while adding, so the iPod can show them. Only
+    /// lyrics already on this PC are used (a .lrc beside the file, or a sheet shown before); files on the PC
+    /// are never changed.</summary>
+    public bool LyricsToIpod { get; set; } = true;
     /// <summary>Fetch a cover from the internet for albums whose files carry none (artist + album are sent).</summary>
     public bool OnlineCovers { get; set; } = true;
     /// <summary>Also write a downloaded cover into the PC file's own tag (never an iPod file).</summary>

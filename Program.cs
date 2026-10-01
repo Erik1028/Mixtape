@@ -29,6 +29,11 @@ internal static class Program
         // Full offline end-to-end: build a sandbox iPod from a fixture, copy a real audio file
         // in, save, verify, then delete. Usage: --addtest <sourceAudio> <fixtureDb> → ipod-addtest.txt
         if (args.Length >= 3 && args[0] == "--addtest") { RunAddTest(args[1], args[2]); return; }
+        // Lyrics on the iPod: add a song with a .lrc beside it and one without, then put lyrics on the second the
+        // way the device page does. Checks the words land in the iPod's copy (never the source), the row's lyrics
+        // flag and file size, and that no other song changes. Usage: --lyricstest <sourceAudio> <fixtureDb>
+        //   → ipod-lyricstest.txt. The source is copied to a temp file first; the original is only read.
+        if (args.Length >= 3 && args[0] == "--lyricstest") { RunLyricsTest(args[1], args[2]); return; }
         // Smart-playlist write roundtrip: build a sandbox from a fixture, create a smart playlist, evaluate rules,
         // set members, save+reload, verify membership/order/idempotency/replace + no DB corruption. → ipod-smarttest.txt
         if (args.Length >= 2 && args[0] == "--smarttest") { RunSmartTest(args[1]); return; }
@@ -3337,6 +3342,107 @@ internal static class Program
             log.AppendLine("RESULT: FAILED - " + ex);
         }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-addtest.txt"), log.ToString());
+    }
+
+    private static void RunLyricsTest(string sourceAudio, string fixtureDb)
+    {
+        var log = new StringBuilder();
+        int failures = 0;
+        void Check(bool ok, string what) { log.AppendLine((ok ? "PASS " : "FAIL ") + what); if (!ok) failures++; }
+        string sandbox = Path.Combine(Path.GetTempPath(), "ipodcmd-lyricstest");
+
+        try
+        {
+            if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);
+            string control = Path.Combine(sandbox, "iPod", "iPod_Control");
+            Directory.CreateDirectory(Path.Combine(control, "iTunes"));
+            Directory.CreateDirectory(Path.Combine(control, "Device"));
+            for (int i = 0; i < 10; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
+            File.Copy(fixtureDb, Path.Combine(control, "iTunes", "iTunesDB"));
+            File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
+
+            // Two PC-side songs: copies of the source with any lyrics stripped, so the test decides what they carry.
+            string pc = Path.Combine(sandbox, "pc");
+            Directory.CreateDirectory(pc);
+            string ext = Path.GetExtension(sourceAudio).ToLowerInvariant();
+            string songA = Path.Combine(pc, "a" + ext), songB = Path.Combine(pc, "b" + ext);
+            byte[] sourceBefore = File.ReadAllBytes(sourceAudio);
+            foreach (var (path, title) in new[] { (songA, "Lyrics test A"), (songB, "Lyrics test B") })
+            {
+                File.Copy(sourceAudio, path);
+                using var f = TagLib.File.Create(path);
+                f.Tag.Lyrics = null;
+                f.Tag.Title = title;
+                f.Save();
+            }
+            // A synced sheet with accents, a verse break (an empty timed line) and a metadata tag.
+            File.WriteAllText(Path.ChangeExtension(songA, ".lrc"),
+                "[ar:Teszt]\n[00:01.00]Első sor, árvíztűrő\n[00:03.00]Második sor\n[00:05.00]\n[00:07.00]Harmadik sor\n");
+            string expected = "Első sor, árvíztűrő\rMásodik sor\r\rHarmadik sor";
+            log.AppendLine($"sandbox: {sandbox}");
+            log.AppendLine($"source : {sourceAudio}");
+
+            var device = DeviceDetector.Build(Path.Combine(sandbox, "iPod"));
+            Check(device is not null && device.Profile.CanWrite, "sandbox recognised as a writable iPod");
+            var lib = IpodLibrary.Load(device!);
+            var beforeIds = lib.View.Tracks.Select(t => t.UniqueId).ToHashSet();
+            var beforeRows = lib.View.Tracks.ToDictionary(t => t.UniqueId, t => (t.HasLyrics, t.FileSize, t.Title));
+            Check(lib.View.Tracks.All(t => !t.HasLyrics), $"fixture: no song flagged for lyrics ({beforeIds.Count} songs)");
+
+            // 1) Adding: A has a .lrc beside it, B has nothing.
+            lib.Lyrics = (path, nt) => IpodLyrics.PlainText(LyricsLookup.Parse(
+                File.Exists(Path.ChangeExtension(path, ".lrc")) ? File.ReadAllText(Path.ChangeExtension(path, ".lrc")) : "", out _));
+            lib.AddFile(songA);
+            lib.AddFile(songB);
+            lib.Save();
+            var added = lib.View.Tracks.Where(t => !beforeIds.Contains(t.UniqueId)).ToList();
+            var a = added.FirstOrDefault(t => t.Title == "Lyrics test A");
+            var b = added.FirstOrDefault(t => t.Title == "Lyrics test B");
+            Check(a is not null && b is not null, "both songs added");
+            string aPath = a!.ResolveFilePath(device!.MountRoot)!, bPath = b!.ResolveFilePath(device.MountRoot)!;
+            Check(a.HasLyrics, "A: lyrics flag set on add");
+            Check(!b.HasLyrics, "B: no lyrics flag (nothing to put on)");
+            string? aText = null;
+            using (var f = TagLib.File.Create(aPath)) aText = f.Tag.Lyrics;
+            Check(aText == expected, $"A: the iPod copy carries the plain words ({(aText ?? "null").Replace("\r", "|")})");
+            Check(a.FileSize == new FileInfo(aPath).Length, $"A: row file size {a.FileSize:N0} = file {new FileInfo(aPath).Length:N0}");
+            using (var f = TagLib.File.Create(songA))
+                Check(string.IsNullOrEmpty(f.Tag.Lyrics), "A: the PC file was left without lyrics");
+            if (ext == ".mp3")
+                using (var f = TagLib.File.Create(aPath))
+                {
+                    var id3 = (TagLib.Id3v2.Tag)f.GetTag(TagLib.TagTypes.Id3v2, false);
+                    var frames = id3.GetFrames<TagLib.Id3v2.UnsynchronisedLyricsFrame>().ToList();
+                    Check(frames.Count == 1 && frames[0].Language == "eng" && frames[0].Description == "",
+                          $"A: one USLT frame, eng, no description (ID3v2.{id3.Version})");
+                }
+
+            // 2) The device-page pass: put lyrics on B after the fact.
+            Check(IpodLyrics.Embed(bPath, "Egy\rKettő"), "B: words written into the iPod copy");
+            Check(lib.Raw.SetTrackLyrics(b.UniqueId, (uint)new FileInfo(bPath).Length), "B: row flagged");
+            lib.Save();
+            var b2 = lib.View.Tracks.First(t => t.UniqueId == b.UniqueId);
+            Check(b2.HasLyrics, "B: lyrics flag survives save + reload");
+            Check(b2.FileSize == new FileInfo(bPath).Length, $"B: row file size {b2.FileSize:N0} = file {new FileInfo(bPath).Length:N0}");
+            Check(IpodLyrics.HasEmbedded(bPath), "B: file reads back as carrying lyrics");
+
+            // 3) Nothing else moved, and the source was only read.
+            var others = lib.View.Tracks.Where(t => beforeIds.Contains(t.UniqueId)).ToList();
+            Check(others.Count == beforeIds.Count, $"every fixture song still there ({others.Count})");
+            Check(others.All(t => beforeRows[t.UniqueId] == (t.HasLyrics, t.FileSize, t.Title)), "no fixture song changed");
+            Check(lib.View.Warnings.Count == 0, $"no reader warnings ({lib.View.Warnings.Count})");
+            Check(File.ReadAllBytes(sourceAudio).AsSpan().SequenceEqual(sourceBefore), "source file byte-identical");
+            Check(IpodLyrics.PlainText(LyricsLookup.Parse("[00:01.00]\n[00:02.00]  \n", out _)) is null, "an empty sheet gives no text");
+
+            log.AppendLine();
+            log.AppendLine(failures == 0 ? "RESULT: OK" : $"RESULT: FAILED ({failures})");
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("RESULT: FAILED - " + ex);
+        }
+        try { Directory.Delete(sandbox, recursive: true); } catch { }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-lyricstest.txt"), log.ToString());
     }
 
     private static void RunPlTest(string pathOrRoot)

@@ -46,6 +46,7 @@ internal sealed class Track
     public uint MediaType;      // 1=audio … (@0xD0)
     public DateTime? DateAdded; // (@0x68)
     public DateTime? LastPlayed;// (@0x58)
+    public bool HasLyrics;      // lyrics_flag (@0xB0): the iPod shows the file's own lyrics
 
     /// <summary>The OS path on this PC, derived from <see cref="Location"/> + the mount root. For convenience only.</summary>
     public string? ResolveFilePath(string mountRoot)
