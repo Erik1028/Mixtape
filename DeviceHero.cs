@@ -23,6 +23,12 @@ internal sealed class DeviceHero : Control
     private int _ringR = 0;          // the donut radius the centre font is sized for; rebuild the font only when it changes
     private Font? _fTotalDyn;        // centre "free" number — scales with the (width-driven) ring radius
 
+    /// <summary>The centre of the ring (or the pie) held down for two seconds: the click wheel's centre button
+    /// in About, which is where the first iPods kept Brick. See Easter.cs.</summary>
+    public event Action? CentreHeld;
+    private Rectangle _hub;
+    private readonly System.Windows.Forms.Timer _hold = new() { Interval = 2000 };
+
     /// <summary>Classic: the line under the pie ("Drive E"), as the 95 drive sheet put "Drive C" under its own.</summary>
     public string? Caption { get; set; }
 
@@ -43,7 +49,18 @@ internal sealed class DeviceHero : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
         Height = 196;
+        _hold.Tick += (_, _) => { _hold.Stop(); CentreHeld?.Invoke(); };
     }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.Button == MouseButtons.Left && _hub.Contains(e.Location)) _hold.Start();
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); _hold.Stop(); }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hold.Stop(); }
+    protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (_hold.Enabled && !_hub.Contains(e.Location)) _hold.Stop(); }
 
     /// <summary>Set the iPod picture (TAKES OWNERSHIP), totals and segments. The LAST segment is treated as the
     /// "free/remainder" base ring; the earlier segments are drawn over it.</summary>
@@ -105,6 +122,7 @@ internal sealed class DeviceHero : Control
             start += sweep;
         }
         int ri = r - ringW;
+        _hub = new Rectangle(cx - ri, cy - ri, ri * 2, ri * 2);
         using (var hole = new SolidBrush(Parent?.BackColor ?? Theme.Bg)) g.FillEllipse(hole, cx - ri, cy - ri, ri * 2, ri * 2);
 
         long shownFree = _sweep >= 1f ? _free : (long)(_free * _sweep);
@@ -181,6 +199,7 @@ internal sealed class DeviceHero : Control
         bool cap = !string.IsNullOrEmpty(Caption);
         int total = ph + depth + (cap ? lineH + 4 : 0);
         int px = left + (room - pw) / 2, py = Math.Max(4, (Height - total) / 2);
+        _hub = new Rectangle(px + pw / 4, py, pw / 2, ph);
         for (int d = depth; d >= 0; d--)   // the side wall from the bottom up, then the top face over it
         {
             var box = new Rectangle(px, py + d, pw, ph);
@@ -205,7 +224,7 @@ internal sealed class DeviceHero : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _tween?.Cancel(); _ipod?.Dispose(); _fTotalDyn?.Dispose(); _fSub.Dispose(); _fLegend.Dispose(); }
+        if (disposing) { _hold.Dispose(); _tween?.Cancel(); _ipod?.Dispose(); _fTotalDyn?.Dispose(); _fSub.Dispose(); _fLegend.Dispose(); }
         base.Dispose(disposing);
     }
 }

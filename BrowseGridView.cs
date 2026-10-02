@@ -280,8 +280,8 @@ internal sealed class BrowseGridView : Panel
         if (Theme.Classic) { Theme.PaintClassicTile(g, new Rectangle(x, y, CoverW, CoverW), c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), c.Title, c.Subtitle, _fTitle, _fSub, ReferenceEquals(c, _hover)); return; }
         float lift = LiftOf(c);
         int grow = (int)Math.Round(5 * lift);        // the cover grows around its own centre
-        var cover = new Rectangle(x - grow, y - grow, CoverW + 2 * grow, CoverW + 2 * grow);
-        int cr = (int)Math.Round(cover.Width * Theme.TileFrac);
+        var cover = Easter.Spin(new Rectangle(x - grow, y - grow, CoverW + 2 * grow, CoverW + 2 * grow), Width, out bool back);
+        int cr = (int)Math.Round(Math.Min(cover.Width, cover.Height) * Theme.TileFrac);
         bool hover = ReferenceEquals(c, _hover);
         if (lift > 0.01f)   // a soft ground shadow: three rings, so it reads as depth and not as a halo
         {
@@ -307,6 +307,7 @@ internal sealed class BrowseGridView : Panel
                 Theme.DrawImageAlpha(g, c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), new RectangleF(cover.X, cover.Y, cover.Width, cover.Height), c.Fade); // incoming dissolves in
             }
             else g.DrawImage(c.Cover ?? Theme.MakeArt(CoverW, c.Seed, c.Initials), cover);
+            Easter.ShadeBack(g, cover, back);
             g.Clip = clip;
         }
         if (lift > 0.01f) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb((int)(36 * lift), 255, 255, 255)); g.FillPath(hb, hp); }

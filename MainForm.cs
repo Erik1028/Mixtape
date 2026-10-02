@@ -1060,6 +1060,37 @@ internal sealed class MainForm : Form, IMessageFilter
     /// timed through its paint - with motion paused, so a notch is exactly one frame of a glide (notches that no longer
     /// move the page, at either end, are left out). Also what one notch leaves to repaint, what the frames allocate,
     /// whether the window's GDI and USER objects grow (a leak per paint would show there), and the dearest controls.</summary>
+    [StructLayout(LayoutKind.Sequential)] private struct NativeMsg { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int x, y; }
+    [DllImport("user32.dll")] private static extern bool PeekMessage(out NativeMsg m, IntPtr hwnd, uint min, uint max, uint remove);
+    [DllImport("user32.dll")] private static extern bool TranslateMessage(ref NativeMsg m);
+    [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref NativeMsg m);
+
+    /// <summary>Harness (MIX_SPINBENCH=1, with MIX_LIVE): the Konami turn, live, through a plain message loop: the count
+    /// is the frames that reached the covers, and the time what the messages that drew them cost.</summary>
+    internal string PreviewSpinBench()
+    {
+        bool motion = Anim.MotionEnabled; Anim.MotionEnabled = true;
+        Easter.SpinFrames = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        double paintMs = 0; int paints = 0;
+        OnKonami();
+        while (_spin is not null && sw.ElapsedMilliseconds < 30000)
+        {
+            // a plain message loop: WM_PAINT comes only when nothing else is queued, exactly as on screen
+            if (PeekMessage(out var m, IntPtr.Zero, 0, 0, 1))
+            {
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                int before = Easter.SpinFrames;
+                TranslateMessage(ref m); DispatchMessage(ref m);
+                if (Easter.SpinFrames != before) { paintMs += System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds; paints++; }
+            }
+            else Thread.Sleep(0);
+        }
+        double secs = sw.Elapsed.TotalSeconds;
+        Anim.MotionEnabled = motion;
+        return $"spin: {Easter.SpinFrames} frames in {secs:0.00} s = {Easter.SpinFrames / secs:0.0} fps; painting a frame {(paints > 0 ? paintMs / paints : 0):0.0} ms";
+    }
+
     internal string PreviewPaintBench(int n)
     {
         const uint RDW_INVALIDATE = 0x1, RDW_ERASE = 0x4, RDW_NOCHILDREN = 0x40, RDW_ALLCHILDREN = 0x80, RDW_UPDATENOW = 0x100;
@@ -1262,6 +1293,7 @@ internal sealed class MainForm : Form, IMessageFilter
     /// works regardless of which child has focus.</summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (msg.Msg == 0x100 && Easter.Konami(keyData)) OnKonami();   // WM_KEYDOWN only; it watches, it never eats the key
         switch (keyData)
         {
             case Keys.Control | Keys.F: _search.FocusInput(); return true;
@@ -4660,6 +4692,7 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             SectionLabel(Loc.T("STORAGE"));
             var hero = new DeviceHero { Width = cardW };
+            hero.CentreHeld += () => { using var d = new BrickDialog(_settings); d.ShowDialog(this); };
             // No iPod picture here — the page header already shows one; the hero centres its capacity donut instead.
             var segs = new List<DeviceHero.Seg>
             {
@@ -4870,6 +4903,33 @@ internal sealed class MainForm : Form, IMessageFilter
             (result.noArt > 0 ? Loc.T("\n{0} song(s) had no embedded cover in the file.", result.noArt) : "") +
             Loc.T("\n\nEject the iPod, then check the Now Playing screen."),
             Loc.T("Rebuild artwork"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private Tween? _spin;
+
+    /// <summary>The Konami code: every cover on show turns over once, a wave from left to right. The Windows 95 look
+    /// (and "Show animations" off) moves nothing, so there it rolls the credits instead.</summary>
+    private void OnKonami()
+    {
+        if (Theme.Classic || !Anim.MotionEnabled)
+        {
+            using var d = new CreditsDialog();
+            d.ShowDialog(this);
+            return;
+        }
+        _spin?.Cancel();
+        _spin = Anim.Run(1500, t => { Easter.SpinT = t; PaintSpinFrame(); },
+            () => { Easter.SpinT = -1; _spin = null; PaintSpinFrame(); }, Easings.Linear);
+    }
+
+    /// <summary>One frame of the turn: only the views that draw covers, painted now, inside the frame. Invalidating the
+    /// whole window left twenty windows to paint between frames that come every 8 ms, and WM_PAINT, which waits for an
+    /// empty queue, hardly ever reached the covers (about one frame a second). Painting here also lets the pacer see
+    /// what a frame really costs and slow down instead of starving the queue.</summary>
+    private void PaintSpinFrame()
+    {
+        foreach (Control v in new Control[] { _homeView, _browseView, _nowPlaying })
+            if (v.Visible && !v.IsDisposed) { v.Invalidate(); v.Update(); }
     }
 
     /// <summary>Lyrics for a song being added, from what is already on this PC only (a .lrc beside the file, the
