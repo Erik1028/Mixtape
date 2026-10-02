@@ -439,7 +439,10 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     private void BuildAbout()
     {
         if (Theme.Classic) { BuildClassicAbout(); return; }
-        Row("Mixtape", Loc.T("Version {0}", AppVersion), null);
+        var icon = new PictureBox { Size = new Size(36, 36), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent };
+        try { if (Environment.ProcessPath is string pth) icon.Image = System.Drawing.Icon.ExtractAssociatedIcon(pth)?.ToBitmap(); } catch { }
+        Easter.ArmCreditsClicks(icon, this);
+        Row("Mixtape", Loc.T("Version {0}", AppVersion), icon);
         Row(Loc.T("A friendly manager for classic iPods"), Loc.T("Copy music, videos and photos; make playlists and mixtapes; choose covers — all written natively, no iTunes."), null);
     }
 
@@ -663,6 +666,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Group(Loc.T("About Mixtape"));
         var icon = new PictureBox { Left = 14, Top = Y + 2, Size = new Size(32, 32), SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Theme.Face };
         try { if (Environment.ProcessPath is string pth) icon.Image = System.Drawing.Icon.ExtractAssociatedIcon(pth)?.ToBitmap(); } catch { }
+        Easter.ArmCreditsClicks(icon, this);
         Host.Controls.Add(icon);
         int tx = 58, tw = HostW - tx - 12;
         var name = ClassicText("Mixtape", tx, Y, tw, 16);

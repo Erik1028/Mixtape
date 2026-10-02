@@ -1137,7 +1137,8 @@ internal sealed class NowPlayingBar : Panel
             Theme.Bevel(g, cr, raised: false, thin: true);
             return;
         }
-        int cvr = (int)Math.Round(cr.Width * Theme.TileFrac);
+        cr = Easter.Spin(cr, 0, out bool back);
+        int cvr = (int)Math.Round(Math.Min(cr.Width, cr.Height) * Theme.TileFrac);
         // Fill + stroke share a half-pixel-inset rect so every corner antialiases identically (no soft bottom-right edge).
         var crF = new RectangleF(cr.X + 0.5f, cr.Y + 0.5f, cr.Width - 1, cr.Height - 1);
         // Soft drop shadow: aligned left/right with the tile and offset only DOWNWARD, so it reads as an even
@@ -1160,6 +1161,7 @@ internal sealed class NowPlayingBar : Panel
                     Theme.DrawImageAlpha(g, nv, new RectangleF(cr.X, cr.Y, cr.Width, cr.Height), fade); // incoming dissolves in
                 }
                 else g.DrawImage(nv, cr);
+                Easter.ShadeBack(g, cr, back);
             }
             g.Clip = saved;
         }

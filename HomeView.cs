@@ -325,8 +325,8 @@ internal sealed class HomeView : Panel
         if (Theme.Classic) { Theme.PaintClassicTile(g, new Rectangle(x, y, cw, cw), t.Cover ?? Theme.MakeArt(cw, t.Seed, t.Initials), t.Title, t.Subtitle, _fTitle, _fSub, ReferenceEquals(t, _hover)); return; }
         float lift = LiftOf(t);
         int grow = (int)Math.Round(5 * lift);
-        var cover = new Rectangle(x - grow, y - grow, cw + 2 * grow, cw + 2 * grow);
-        int cr = (int)Math.Round(cover.Width * Theme.TileFrac);
+        var cover = Easter.Spin(new Rectangle(x - grow, y - grow, cw + 2 * grow, cw + 2 * grow), Width, out bool back);
+        int cr = (int)Math.Round(Math.Min(cover.Width, cover.Height) * Theme.TileFrac);
         if (lift > 0.01f)   // the same ground shadow the album grid uses, so a cover behaves the same everywhere
         {
             for (int i = 3; i >= 1; i--)
@@ -347,6 +347,7 @@ internal sealed class HomeView : Panel
                 Theme.DrawImageAlpha(g, art, new RectangleF(cover.X, cover.Y, cover.Width, cover.Height), t.Fade);
             }
             else g.DrawImage(art, cover);
+            Easter.ShadeBack(g, cover, back);
             g.Clip = clip;
         }
         if (lift > 0.01f) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb((int)(36 * lift), 255, 255, 255)); g.FillPath(hb, hp); }

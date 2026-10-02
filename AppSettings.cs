@@ -102,6 +102,8 @@ internal sealed class AppSettings
     /// lyrics already on this PC are used (a .lrc beside the file, or a sheet shown before); files on the PC
     /// are never changed.</summary>
     public bool LyricsToIpod { get; set; } = true;
+    /// <summary>Brick's best score (see Easter.cs).</summary>
+    public int BrickBest { get; set; }
     /// <summary>Fetch a cover from the internet for albums whose files carry none (artist + album are sent).</summary>
     public bool OnlineCovers { get; set; } = true;
     /// <summary>Also write a downloaded cover into the PC file's own tag (never an iPod file).</summary>

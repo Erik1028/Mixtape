@@ -34,6 +34,8 @@ internal static class Program
         // flag and file size, and that no other song changes. Usage: --lyricstest <sourceAudio> <fixtureDb>
         //   → ipod-lyricstest.txt. The source is copied to a temp file first; the original is only read.
         if (args.Length >= 3 && args[0] == "--lyricstest") { RunLyricsTest(args[1], args[2]); return; }
+        // The easter eggs: Brick's physics played headless, and the Konami matcher. → ipod-eggtest.txt
+        if (args.Length >= 1 && args[0] == "--eggtest") { RunEggTest(); return; }
         // Smart-playlist write roundtrip: build a sandbox from a fixture, create a smart playlist, evaluate rules,
         // set members, save+reload, verify membership/order/idempotency/replace + no DB corruption. → ipod-smarttest.txt
         if (args.Length >= 2 && args[0] == "--smarttest") { RunSmartTest(args[1]); return; }
@@ -1308,6 +1310,7 @@ internal static class Program
         // A render is a still: every tween jumps to its final frame, so a capture can never catch a bar
         // halfway up or a card halfway faded. MIX_MOTION=1 keeps motion on for deliberate mid-animation shots.
         if (Environment.GetEnvironmentVariable("MIX_MOTION") != "1") Anim.MotionEnabled = false;
+        if (double.TryParse(Environment.GetEnvironmentVariable("MIX_SPIN"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double spin)) Easter.SpinT = spin;   // the Konami turn, frozen at this point (0..1)
         var rset = AppSettings.Load();                  // dialogs rendered on their own also deserve the live palette
         Theme.SetSkin(rset.ClassicSkin);   // MIX_CLASSIC=1|0 overrides this in AppSettings.Load
         Theme.DitherCovers = rset.DitherCovers && Environment.GetEnvironmentVariable("MIX_DITHER") != "0";
@@ -1544,7 +1547,7 @@ internal static class Program
         }
 
         // The small modal windows that now wear the app's own card chrome (title strip + round close).
-        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn" or "messagebusy" or "welcome")
+        if (view is "prompt" or "wallpaperpicker" or "smartplaylist" or "copyprogress" or "notes" or "noteeditor" or "tagtidy" or "identify" or "message" or "messagewarn" or "messagebusy" or "welcome" or "brick" or "credits")
         {
             Form dlg = view switch
             {
@@ -1561,6 +1564,8 @@ internal static class Program
                 "noteeditor" => NotesDialog.PreviewEditor(),
                 "message" => MessageDialog.Preview(Loc.T("The look changes after a restart. Restart Mixtape now?"), Loc.T("Restart Mixtape?"), MessageBoxButtons.YesNo, MessageBoxIcon.Question),
                 "messagewarn" => MessageDialog.Preview(Loc.T("The iPod was removed while songs were being copied. Plug it back in and try again."), "Mixtape", MessageBoxButtons.OK, MessageBoxIcon.Warning),
+                "brick" => BrickDialog.Preview(Environment.GetEnvironmentVariable("MIX_BRICK") ?? "ready"),   // MIX_BRICK=ready|play|over
+                "credits" => new CreditsDialog(double.TryParse(Environment.GetEnvironmentVariable("MIX_CREDITS_T"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ct) ? ct : 2.5),   // MIX_CREDITS_T=<seconds into the roll>
                 "welcome" => new WelcomeDialog(int.TryParse(Environment.GetEnvironmentVariable("MIX_TIP"), out int wt) ? wt : 4, true),   // MIX_TIP=<n>: which tip
                 "messagebusy" => MessageDialog.Preview(Loc.T("Mixtape is still writing to the iPod, so it can't restart yet. Your change is saved and takes effect the next time Mixtape starts."), Loc.T("Writing to the iPod"), MessageBoxButtons.OK, MessageBoxIcon.Warning),
                 _ => new CopyProgressDialog("Copying 12 songs to iPod", 12, (report, _) => { report(4, "Higher Ground.mp3"); Thread.Sleep(4000); }, CopyFlight.ToIPod),
@@ -2039,6 +2044,8 @@ internal static class Program
         {
             if (int.TryParse(Environment.GetEnvironmentVariable("MIX_IDLEBENCH"), out int idleSec) && idleSec > 0)   // CPU while the window just sits there (or plays: MIX_PLAY_LOCAL)
                 File.WriteAllText(outPng + ".idle.txt", IdleBench(idleSec));
+            if (Environment.GetEnvironmentVariable("MIX_SPINBENCH") == "1")   // the Konami turn, live: frames that reached the screen
+                File.WriteAllText(outPng + ".spin.txt", form.PreviewSpinBench());
             if (int.TryParse(Environment.GetEnvironmentVariable("MIX_PAINTBENCH"), out int benchN) && benchN > 0)   // what a frame of this page costs
                 File.WriteAllText(outPng + ".bench.txt", form.PreviewPaintBench(benchN));
             if (Environment.GetEnvironmentVariable("MIX_HOVER_SWEEP") == "1")   // a pointer sweep, copied off the screen as it stands
@@ -3342,6 +3349,49 @@ internal static class Program
             log.AppendLine("RESULT: FAILED - " + ex);
         }
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-addtest.txt"), log.ToString());
+    }
+
+    private static void RunEggTest()
+    {
+        var log = new StringBuilder();
+        int failures = 0;
+        void Check(bool ok, string what) { log.AppendLine((ok ? "PASS " : "FAIL ") + what); if (!ok) failures++; }
+        try
+        {
+            AppSettings.Frozen = true;   // a test must never write the user's settings.json (the best score)
+
+            using (var game = new BrickGame(new AppSettings()))
+            {
+                var r = game.Headless(240, follow: true);
+                log.AppendLine($"  following paddle, 240 s: score {r.Score}, lives {r.Lives}, level {r.Level}");
+                Check(r.Escapes == 0, $"ball never left the screen ({r.Escapes})");
+                Check(r.Level >= 2, "a whole wall cleared");
+                Check(r.Lives == 3 && !r.Over, "a paddle under the ball loses nothing");
+            }
+            var best = new AppSettings { BrickBest = 0 };
+            using (var game = new BrickGame(best))
+            {
+                var r = game.Headless(120, follow: false);
+                log.AppendLine($"  paddle parked, 120 s: score {r.Score}, lives {r.Lives}, over {r.Over}");
+                Check(r.Over && r.Lives == 0, "a parked paddle loses all three balls");
+                Check(best.BrickBest == r.Score, $"best score kept ({best.BrickBest})");
+            }
+
+            Keys[] code = { Keys.Up, Keys.Up, Keys.Down, Keys.Down, Keys.Left, Keys.Right, Keys.Left, Keys.Right, Keys.B, Keys.A };
+            bool Feed(IEnumerable<Keys> keys) { Easter.Konami(Keys.X); bool hit = false; foreach (var k in keys) hit = Easter.Konami(k); return hit; }   // X: a clean start
+            Check(Feed(code), "the code");
+            Check(Feed(new[] { Keys.Up }.Concat(code)), "the code after a stray Up (Up Up Up Down...)");
+            Check(Feed(new[] { Keys.X, Keys.Down }.Concat(code)), "the code after other keys");
+            Check(!Feed(code.Take(9).Append(Keys.B)), "B instead of A: nothing");
+            Check(!Feed(code.Take(9).Append(Keys.A | Keys.Control)), "Ctrl+A at the end: nothing");
+            Check(!Feed(code.Take(5)), "half the code: nothing");
+            Check(!Feed(code.Take(5).Concat(new[] { Keys.Space }).Concat(code.Skip(5))), "a key in the middle breaks the run");
+
+            log.AppendLine();
+            log.AppendLine(failures == 0 ? "RESULT: OK" : $"RESULT: FAILED ({failures})");
+        }
+        catch (Exception ex) { log.AppendLine("RESULT: FAILED - " + ex); }
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-eggtest.txt"), log.ToString());
     }
 
     private static void RunLyricsTest(string sourceAudio, string fixtureDb)
