@@ -349,7 +349,7 @@ internal sealed class UpNextFlyout : FlyoutForm
     public UpNextFlyout()
     {
         GlassEnabled = Glass.PopupsEnabled;   // frosted-glass backdrop (Settings → "Frosted popups")
-        ClientSize = new Size(Wide, 420);
+        ClientSize = new Size(Wide + Padding.Horizontal, 420 + Padding.Vertical);
         _panel = new UpNextPanel { Dock = DockStyle.Fill };
         _panel.CloseRequested += Close;                                  // the × closes the popover
         _panel.ClearRequested += () => ClearRequested?.Invoke();
@@ -366,7 +366,7 @@ internal sealed class UpNextFlyout : FlyoutForm
         if (!Visible)
         {
             int h = Math.Clamp(UpNextPanel.DesiredHeight(items.Count, now is not null, hint is not null), MinH, MaxH);
-            ClientSize = new Size(Wide, h);
+            ClientSize = new Size(Wide + Padding.Horizontal, h + Padding.Vertical);   // Classic: the frame comes on top
         }
         _panel.SetData(now, nowArt, items, hint);
     }

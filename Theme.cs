@@ -154,7 +154,7 @@ internal static class Theme
         {
             // One accent only: selection navy. A Win95 program had no accent colour to choose.
             Accent = ClassicNavy;
-            AccentBright = Color.FromArgb(16, 132, 208);   // the hot blue of a selected caption / a progress fill
+            AccentBright = ClassicNavy;   // no lighter "hot" shade: 1995 had one highlight colour, and nothing lit up under the pointer
             AccentDim = Color.FromArgb(0, 0, 80);
             OnAccent = Color.White;
         }

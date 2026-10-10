@@ -1512,19 +1512,18 @@ internal static class Program
         // The Up Next queue panel renders on its own with synthetic tracks.
         if (view == "upnext")
         {
-            // Preview the panel content at the floating flyout's content size (DWM corner-rounding is live-only).
-            using var f = new Form { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), FormBorderStyle = FormBorderStyle.None, Size = new Size(304, UpNextPanel.DesiredHeight(8, true, false)), BackColor = Theme.PanelBg };
-            var panel = new UpNextPanel { Dock = DockStyle.Fill };
-            f.Controls.Add(panel);
-            f.Show();
+            // The real flyout, its chrome included (DWM corner-rounding is live-only); shown without activation, as
+            // deactivating it closes it.
+            using var f = new UpNextFlyout { Location = new Point(-2600, -2600) };
             var now = new Track { Title = "A Moment Apart", Artist = "ODESZA", MediaType = 1 };
             string[] titles = { "Higher Ground", "Late Night", "Loyal", "Corners of the Earth", "Just a Memory", "Across the Room", "Line of Sight", "Falls" };
             var items = new List<(Track, Bitmap?)>();
             for (int i = 0; i < titles.Length; i++) items.Add((new Track { Title = titles[i], Artist = "ODESZA", MediaType = 1 }, CoverArt.Generate(i * 7 + 3, 48)));
-            panel.SetData(now, CoverArt.Generate(45, 48), items, null);
+            f.SetData(now, CoverArt.Generate(45, 48), items, null);
+            ShowWindow(f.Handle, 8 /* SW_SHOWNA */);
             for (int i = 0; i < 4; i++) { Application.DoEvents(); Thread.Sleep(40); }
-            using var bmp = new Bitmap(panel.Width, panel.Height);
-            panel.DrawToBitmap(bmp, new Rectangle(0, 0, panel.Width, panel.Height));
+            using var bmp = new Bitmap(f.Width, f.Height);
+            f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height));
             bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
             return;
         }
@@ -1552,7 +1551,7 @@ internal static class Program
             Form dlg = view switch
             {
                 "prompt" => PromptDialog.Build(Loc.T("New playlist"), Loc.T("Playlist name:"), Loc.T("New Playlist"), out _),
-                "wallpaperpicker" => new WallpaperPickerDialog(),
+                "wallpaperpicker" => WallpaperPickerDialog.Preview(Environment.GetEnvironmentVariable("MIX_WP_SEL")),   // MIX_WP_SEL=1,2: designs already picked
                 "smartplaylist" => new SmartPlaylistDialog(new List<Track>
                 {
                     new() { Title = "Higher Ground", Artist = "ODESZA", Album = "A Moment Apart", Genre = "Electronic", Year = 2017, Rating = 80 },

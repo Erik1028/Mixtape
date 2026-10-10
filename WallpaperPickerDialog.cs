@@ -39,6 +39,17 @@ internal sealed class WallpaperPickerDialog : CardDialog
         AdoptCard();
     }
 
+    /// <summary>The render harness: the dialog with the designs in <paramref name="spec"/> (a comma list, e.g. "1,2")
+    /// already picked.</summary>
+    internal static WallpaperPickerDialog Preview(string? spec)
+    {
+        var d = new WallpaperPickerDialog();
+        foreach (var part in (spec ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+            if (int.TryParse(part, out int i)) d._grid.PreviewPick(i);
+        d.UpdateAdd();
+        return d;
+    }
+
     private void UpdateAdd()
     {
         int n = _grid.Selected.Count;
@@ -85,6 +96,8 @@ internal sealed class WallpaperGrid : Panel
 
     private int HitAt(Point p) { foreach (var (r, i) in _hit) if (r.Contains(p)) return i; return -1; }
 
+    internal void PreviewPick(int i) { if (i >= 0 && i < _thumbs.Length) _sel.Add(i); }   // the render harness
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
@@ -94,9 +107,11 @@ internal sealed class WallpaperGrid : Panel
         for (int i = 0; i < _thumbs.Length; i++)
         {
             int col = i % Cols, row = i / Cols;
-            int x = Pad + col * (TileW + Gap), y = Pad + row * (TileH + NameH + Gap);
+            int x0 = (Width - (Cols * TileW + (Cols - 1) * Gap)) / 2;   // centred: the panel is narrower inside the Classic frame
+            int x = x0 + col * (TileW + Gap), y = Pad + row * (TileH + NameH + Gap);
             var rect = new Rectangle(x, y, TileW, TileH);
             _hit.Add((rect, i));
+            if (Theme.Classic) { PaintClassic(g, rect, i); continue; }
 
             using (var path = Theme.RoundedRect(rect, 9))
             {
@@ -128,6 +143,39 @@ internal sealed class WallpaperGrid : Panel
                 g.DrawPath(pen, sp);
             }
         }
+    }
+
+    /// <summary>Classic: a tile the way the era's Thumbnails view drew one - the picture in a sunken picture box
+    /// (256 colours when that is on); a chosen one framed in the selection navy, square and clear of the box's edge,
+    /// with its name in the navy band of a selected icon's label. Nothing changes under the pointer.</summary>
+    private void PaintClassic(Graphics g, Rectangle rect, int i)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        Theme.PaintClassicPicture(g, rect, _thumbs[i]);
+        bool on = _sel.Contains(i);
+        if (on) ClassicSelectionFrame(g, rect);
+        string name = Loc.T(Wallpaper.Names[i]);
+        var flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+        var nr = new Rectangle(rect.X, rect.Bottom + 6, rect.Width, NameH - 2);
+        if (on)
+        {
+            int tw = Math.Min(rect.Width, TextRenderer.MeasureText(g, name, _fName, new Size(int.MaxValue, NameH), flags | TextFormatFlags.NoPadding).Width + 6);
+            using var nb = new SolidBrush(Theme.ClassicNavy);
+            g.FillRectangle(nb, rect.X + (rect.Width - tw) / 2, nr.Y, tw, nr.Height);
+        }
+        CrispText.DrawText(g, name, _fName, nr, on ? Color.White : Theme.TextCol, flags);
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>Classic: the selection-navy frame of a chosen picture - two pixels, square, just outside its
+    /// picture box's sunken edge. Shared with the cover picker.</summary>
+    internal static void ClassicSelectionFrame(Graphics g, Rectangle picture)
+    {
+        var f = Rectangle.Inflate(picture, 4, 4);
+        using var np = new Pen(Theme.ClassicNavy);
+        g.DrawRectangle(np, f.X, f.Y, f.Width - 1, f.Height - 1);
+        g.DrawRectangle(np, f.X + 1, f.Y + 1, f.Width - 3, f.Height - 3);
     }
 
     protected override void Dispose(bool disposing)

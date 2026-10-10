@@ -1047,7 +1047,7 @@ internal sealed class LyricsFlyout : FlyoutForm
     public LyricsFlyout()
     {
         GlassEnabled = Glass.PopupsEnabled;
-        ClientSize = new Size(Wide, Tall);
+        ClientSize = new Size(Wide + Padding.Horizontal, Tall + Padding.Vertical);   // Classic: the frame comes on top
         _panel = new LyricsPanel { Dock = DockStyle.Fill };
         _panel.CloseRequested += Close;
         _panel.SeekRequested += t => SeekRequested?.Invoke(t);

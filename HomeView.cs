@@ -113,7 +113,7 @@ internal sealed class HomeView : Panel
     public string? ResumeKey { get; set; }
 
     // ---- geometry ----
-    private int AvailW => Math.Max(0, Width - Pad * 2);
+    private int AvailW => Math.Max(0, Width - Pad * 2 - (Theme.Classic ? BarZone : 0));   // Classic: the page scrollbar is a real bar, not an overlay
     private int Cols => Math.Clamp((AvailW + Gap) / (TargetCover + Gap), MinCols, MaxCols);
     private int CoverW => Math.Clamp((AvailW - (Cols - 1) * Gap) / Cols, 64, MaxCover);
     private int TileH => CoverW + TextH;
