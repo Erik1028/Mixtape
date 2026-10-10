@@ -61,8 +61,8 @@ internal sealed class WelcomeDialog : CardDialog
             string lead = Loc.T("Welcome to ");
             const TextFormatFlags f = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
             int w = TextRenderer.MeasureText(e.Graphics, lead, _fWelcome, new Size(int.MaxValue, 34), f).Width;
-            TextRenderer.DrawText(e.Graphics, lead, _fWelcome, new Rectangle(0, 0, w + 2, 34), Theme.TextCol, f);
-            TextRenderer.DrawText(e.Graphics, "Mixtape", _fWelcomeBold, new Rectangle(w, 0, 300, 34), Theme.TextCol, f);
+            CrispText.DrawText(e.Graphics, lead, _fWelcome, new Rectangle(0, 0, w + 2, 34), Theme.TextCol, f);
+            CrispText.DrawText(e.Graphics, "Mixtape", _fWelcomeBold, new Rectangle(w, 0, 300, 34), Theme.TextCol, f);
         };
         Controls.Add(_heading);
 
@@ -97,9 +97,9 @@ internal sealed class WelcomeDialog : CardDialog
         g.Clear(Color.White);
         Theme.Bevel(g, r, raised: false);
         DrawBulb(g, 14, 14);
-        TextRenderer.DrawText(g, Loc.T("Did you know..."), _fKnow, new Rectangle(58, 20, r.Width - 70, 20), Theme.TextCol,
+        CrispText.DrawText(g, Loc.T("Did you know..."), _fKnow, new Rectangle(58, 20, r.Width - 70, 20), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-        TextRenderer.DrawText(g, Loc.T(Tips[_tip]), _fTip, new Rectangle(58, 50, r.Width - 72, r.Height - 62), Theme.TextCol,
+        CrispText.DrawText(g, Loc.T(Tips[_tip]), _fTip, new Rectangle(58, 50, r.Width - 72, r.Height - 62), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
     }
 

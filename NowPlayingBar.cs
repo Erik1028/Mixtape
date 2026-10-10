@@ -989,9 +989,9 @@ internal sealed class NowPlayingBar : Panel
             // A new song's lines rise the last few pixels into place while its cover dissolves, so the card
             // changes as one thing. A slide and not a fade: GDI text ignores alpha.
             int ts = s.TextSlide is { } slide ? (int)Math.Round((1 - Math.Clamp(slide, 0f, 1f)) * 7) : 0;
-            TextRenderer.DrawText(g, title, fTitle, new Rectangle(c.TextX, card.Y + 8 + ts, c.TextW, 17), Theme.Blend(slab, idle ? Theme.Subtle : Theme.TextCol, tf),
+            CrispText.DrawText(g, title, fTitle, new Rectangle(c.TextX, card.Y + 8 + ts, c.TextW, 17), Theme.Blend(slab, idle ? Theme.Subtle : Theme.TextCol, tf),
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25 + ts, c.TextW, 15), Theme.Blend(slab, idle ? Theme.Faint : Theme.Subtle, tf),
+            CrispText.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25 + ts, c.TextW, 15), Theme.Blend(slab, idle ? Theme.Faint : Theme.Subtle, tf),
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
             if (!idle && (s.ArtistHover || s.AlbumHover))   // the hovered half of the subtitle brightens and underlines, the way a link does
             {
@@ -1003,7 +1003,7 @@ internal sealed class NowPlayingBar : Panel
                     // Redraw the SAME line clipped to the hovered half: identical layout, no second measurement.
                     var save = g.Clip;
                     g.SetClip(new Rectangle(u.X, card.Y + 24, right - u.X, 17), CombineMode.Intersect);
-                    TextRenderer.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25, c.TextW, 15), Theme.Blend(slab, Theme.TextCol, tf),
+                    CrispText.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25, c.TextW, 15), Theme.Blend(slab, Theme.TextCol, tf),
                         TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
                     g.Clip = save;
                     using var up = new Pen(Theme.Blend(slab, Theme.Subtle, tf));
@@ -1028,10 +1028,10 @@ internal sealed class NowPlayingBar : Panel
         {
             double? peek = scrubbing ? null : s.HoverFrac;   // hovering the seek line: the time UNDER THE POINTER, in the accent
             double shown = scrubbing ? s.ScrubFrac * dur : peek is { } hf ? hf * dur : pos;
-            TextRenderer.DrawText(g, Fmt(shown), fTime, new Rectangle(c.Times.X, card.Y + 8, c.Times.Width, 17), scrubbing ? Theme.TextCol : peek is not null ? Theme.AccentBright : s.Playing ? Theme.Subtle : Theme.Faint,
+            CrispText.DrawText(g, Fmt(shown), fTime, new Rectangle(c.Times.X, card.Y + 8, c.Times.Width, 17), scrubbing ? Theme.TextCol : peek is not null ? Theme.AccentBright : s.Playing ? Theme.Subtle : Theme.Faint,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             string total = s.Remaining && dur > 0 ? "-" + Fmt(Math.Max(0, dur - pos)) : Fmt(dur);   // the length, or (one click away) what is left of it
-            TextRenderer.DrawText(g, total, fTime, new Rectangle(c.Times.X, card.Y + 25, c.Times.Width, 15), Theme.Faint,
+            CrispText.DrawText(g, total, fTime, new Rectangle(c.Times.X, card.Y + 25, c.Times.Width, 15), Theme.Faint,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
         DrawSlider(g, c.Seek, idle ? 0 : frac, !idle && s.SeekHot, s.Tint, s.KnobR, s.SeekHot, Color.FromArgb(38, 255, 255, 255), lift: false);
@@ -1055,7 +1055,7 @@ internal sealed class NowPlayingBar : Panel
                 using (var bpen = new Pen(Color.FromArgb(40, 255, 255, 255)))
                 using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
             }
-            TextRenderer.DrawText(g, txt, fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            CrispText.DrawText(g, txt, fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
     }
 
@@ -1512,10 +1512,10 @@ internal sealed class NowPlayingBar : Panel
                               : string.Join("  •  ", new[] { _track!.Artist, _track.Album }.Where(x => !string.IsNullOrWhiteSpace(x)));
             // Sit the title/artist in the TOP band (aligned with the transport), not vertically centred —
             // otherwise the subtitle drops onto the seek bar + "0:00" times along the bottom.
-            TextRenderer.DrawText(g, title, _fTitle,
+            CrispText.DrawText(g, title, _fTitle,
                 new Rectangle(l.TextX, 12, l.TextW, 22), idle ? Theme.Subtle : Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(g, sub, _fSub,
+            CrispText.DrawText(g, sub, _fSub,
                 new Rectangle(l.TextX, 34, l.TextW, 16), idle ? Theme.Faint : Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
@@ -1551,8 +1551,8 @@ internal sealed class NowPlayingBar : Panel
             if (l.ShowTimes)
             {
                 double shown = _scrubFrac >= 0 ? _scrubFrac * dur : pos;
-                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(shown), _fTime, new Rectangle(l.Seek.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-                TextRenderer.DrawText(g, idle ? "0:00" : Fmt(dur), _fTime, new Rectangle(l.Seek.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                CrispText.DrawText(g, idle ? "0:00" : Fmt(shown), _fTime, new Rectangle(l.Seek.Left - 46, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+                CrispText.DrawText(g, idle ? "0:00" : Fmt(dur), _fTime, new Rectangle(l.Seek.Right + 6, SeekY - 9, 42, 20), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             }
             // Scrub bubble: while dragging, a little time pill pops above the thumb — the ONLY position feedback when the
             // window is too narrow for the side time labels (ShowTimes needs w>=740). Fixes a real blind spot on small windows.
@@ -1570,7 +1570,7 @@ internal sealed class NowPlayingBar : Panel
                 using (var bpen = new Pen(Color.FromArgb(40, 255, 255, 255)))
                 using (var bp2 = Theme.RoundedRect(new RectangleF(bub.X + 0.5f, bub.Y + 0.5f, bub.Width - 1, bub.Height - 1), 5f)) g.DrawPath(bpen, bp2);
                 g.SmoothingMode = sm;
-                TextRenderer.DrawText(g, txt, _fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                CrispText.DrawText(g, txt, _fTime, Rectangle.Round(bub), Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
 
@@ -1728,7 +1728,7 @@ internal sealed class NowPlayingBar : Panel
             g.InterpolationMode = im;
         }
         if (l.ShowWordmark)
-            TextRenderer.DrawText(g, "Mixtape", _fWordmark, l.Wordmark, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, "Mixtape", _fWordmark, l.Wordmark, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         // Classic: the always-raised buttons go down first; each glyph drawer lights / latches its own on top
         if (Theme.Classic)

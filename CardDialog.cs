@@ -108,7 +108,7 @@ internal class CardDialog : GlassDialog
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = Theme.TextHint;
         int right = ShowClose ? ClosePad + CloseD + 12 : 22;
-        TextRenderer.DrawText(g, Text, _fTitle, new Rectangle(22, 0, Math.Max(10, ClientSize.Width - 22 - right), TitleH), Theme.TextCol,
+        CrispText.DrawText(g, Text, _fTitle, new Rectangle(22, 0, Math.Max(10, ClientSize.Width - 22 - right), TitleH), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (ShowClose)
         {

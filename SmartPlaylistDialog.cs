@@ -64,7 +64,7 @@ internal sealed class SmartPlaylistDialog : CardDialog
 
         // Name
         Controls.Add(Lbl(Loc.T("Name"), 16, 18, 64));
-        _name = new TextBox { Text = initial?.Name ?? Loc.T("Smart Playlist"), Location = new Point(86, 18), Width = 458, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
+        _name = new CrispTextBox { Text = initial?.Name ?? Loc.T("Smart Playlist"), Location = new Point(86, 18), Width = 458, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
         Controls.Add(ThemedField.Wrap(_name));
 
         // Match all / any
@@ -95,7 +95,7 @@ internal sealed class SmartPlaylistDialog : CardDialog
 
         // Limit
         Controls.Add(Lbl(Loc.T("Limit to"), 16, 414, 64));
-        _limit = new TextBox { Text = (initial?.Limit ?? 0) > 0 ? initial!.Limit.ToString() : "", Location = new Point(86, 414), Width = 56, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
+        _limit = new CrispTextBox { Text = (initial?.Limit ?? 0) > 0 ? initial!.Limit.ToString() : "", Location = new Point(86, 414), Width = 56, BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
         _limit.TextChanged += (_, _) => Recompute();
         Controls.Add(ThemedField.Wrap(_limit));
         Controls.Add(Lbl(Loc.T("songs (0 = no limit)"), 150, 414, 200));
@@ -201,10 +201,10 @@ internal sealed class SmartPlaylistDialog : CardDialog
             _opBtn = new ThemedButton { Location = new Point(147, 2), Width = 128, Height = 28 };
             _opBtn.Click += (_, _) => ShowMenu(_opBtn, SmartPlaylist.OpsFor(SmartPlaylist.Field(_field).Type).Select(o => (Loc.T(o.Label), (Action)(() => SetOp(o.Key)))));
 
-            _value = new TextBox { Text = rule.Value, Location = new Point(281, 4), Width = 138, BackColor = Theme.Classic ? Color.White : Theme.PanelBg, ForeColor = Theme.TextCol, BorderStyle = Theme.Classic ? BorderStyle.Fixed3D : BorderStyle.FixedSingle };
+            _value = new CrispTextBox { Text = rule.Value, Location = new Point(281, 4), Width = 138, BackColor = Theme.Classic ? Color.White : Theme.PanelBg, ForeColor = Theme.TextCol, BorderStyle = Theme.Classic ? BorderStyle.Fixed3D : BorderStyle.FixedSingle };
             _value.TextChanged += (_, _) => Changed?.Invoke();
 
-            _suffix = new Label { ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(423, 2), Size = new Size(34, 28) };
+            _suffix = new CrispLabel { ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(423, 2), Size = new Size(34, 28) };
 
             _remove = new ThemedButton { Text = "✕", Location = new Point(6, 2), Width = 28, Height = 28 };
             // A ThemedButton widens itself to fit its label, so place it from the RIGHT once it has settled:

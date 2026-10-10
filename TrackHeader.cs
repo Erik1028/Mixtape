@@ -186,7 +186,7 @@ internal sealed class TrackHeader : Control
             string head = _grid.Columns[i].HeaderText;
             int ai = head.IndexOf("  ↑", StringComparison.Ordinal); if (ai < 0) ai = head.IndexOf("  ↓", StringComparison.Ordinal);
             string caption = ai >= 0 ? Loc.T(head[..ai]) + head[ai..] : Loc.T(head);
-            TextRenderer.DrawText(g, caption, f, pad, hovered ? Theme.Subtle : Theme.Faint, flags);
+            CrispText.DrawText(g, caption, f, pad, hovered ? Theme.Subtle : Theme.Faint, flags);
         }
 
         if (_grid.RowCount == 0) return;   // an empty list draws its empty state, not a headerless hairline
@@ -220,7 +220,7 @@ internal sealed class TrackHeader : Control
             string head = _grid.Columns[i].HeaderText;
             int ai = head.IndexOf("  \u2191", StringComparison.Ordinal); if (ai < 0) ai = head.IndexOf("  \u2193", StringComparison.Ordinal);
             string caption = ai >= 0 ? Theme.ClassicCase(Loc.T(head[..ai])) + head[ai..] : Theme.ClassicCase(Loc.T(head));   // "Song", not "SONG"
-            TextRenderer.DrawText(g, caption, f, pad, Theme.TextCol, flags);
+            CrispText.DrawText(g, caption, f, pad, Theme.TextCol, flags);
         }
         if (end < Width) Theme.FaceBevel(g, new Rectangle(end, 0, Width - end, Height), raised: true);
     }

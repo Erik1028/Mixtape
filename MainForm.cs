@@ -701,6 +701,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _tracks.MouseUp += OnReorderMouseUp;
         _tracks.MouseUp += (_, _) => _songDragArmed = false;
         _tracks.CellPainting += OnRatingCellPainting;          // owner-draw the RATING column (stars + hover preview)
+        _tracks.CellPainting += OnClassicTextCellPainting;     // Classic: the grid's own text cells, crisp (see CrispText)
         _tracks.CellFormatting += OnAddedCellFormatting;       // accent-tint the ADDED date for Today/Yesterday
         _tracks.CellFormatting += OnPlayingCellFormatting;     // accent the title of the song that is playing
         _tracks.CellMouseMove += OnRatingCellMouseMove;        // ghost-star hover preview
@@ -1309,6 +1310,65 @@ internal sealed class MainForm : Form, IMessageFilter
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
+    /// <summary>Classic: the grid's plain text cells, crisp. DataGridViewTextBoxCell draws its text with TextRenderer
+    /// (ClearType); this paints the rest of the cell as the cell would, then the text exactly where and how
+    /// DataGridViewTextBoxCell.PaintPrivate puts it - inside the borders and the padding, 2 px down (1 when it wraps)
+    /// and one shorter, with its alignment flags and an ellipsis on a single line.</summary>
+    private void OnClassicTextCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (!Theme.Classic || e.Handled || e.RowIndex < 0 || e.ColumnIndex < 0 || e.FormattedValue is not string text || e.CellStyle is null || e.Graphics is null) return;
+        if ((e.PaintParts & DataGridViewPaintParts.ContentForeground) == 0 || _tracks.Columns[e.ColumnIndex].CellTemplate is not DataGridViewTextBoxCell) return;
+        var at = _tracks.CurrentCellAddress;
+        if (at.X == e.ColumnIndex && at.Y == e.RowIndex && _tracks.EditingControl is not null) return;   // being edited: the editor shows it
+        e.Paint(e.ClipBounds, e.PaintParts & ~DataGridViewPaintParts.ContentForeground);
+        var r = e.CellBounds;
+        var b = CellBorders(e.AdvancedBorderStyle, _tracks.Columns[e.ColumnIndex].DividerWidth, _tracks.Rows.SharedRow(e.RowIndex).DividerHeight);
+        r.Offset(b.X, b.Y); r.Width -= b.Width; r.Height -= b.Height;
+        var st = e.CellStyle;
+        if (st.Padding != Padding.Empty) { r.Offset(st.Padding.Left, st.Padding.Top); r.Width -= st.Padding.Horizontal; r.Height -= st.Padding.Vertical; }
+        int inset = st.WrapMode == DataGridViewTriState.True ? 1 : 2;
+        r.Offset(0, inset); r.Height -= inset + 1;
+        if (r.Width > 0 && r.Height > 0)
+        {
+            var flags = CellTextFlags(st.Alignment, st.WrapMode);
+            if ((flags & TextFormatFlags.SingleLine) != 0) flags |= TextFormatFlags.EndEllipsis;
+            CrispText.DrawText(e.Graphics, text, st.Font, r, (e.State & DataGridViewElementStates.Selected) != 0 ? st.SelectionForeColor : st.ForeColor, flags);
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>DataGridViewCell.BorderWidths: a pixel per drawn side, two for a double one, plus the dividers.</summary>
+    private static Rectangle CellBorders(DataGridViewAdvancedBorderStyle s, int columnDivider, int rowDivider)
+    {
+        static int W(DataGridViewAdvancedCellBorderStyle side) => side switch
+        {
+            DataGridViewAdvancedCellBorderStyle.None => 0,
+            DataGridViewAdvancedCellBorderStyle.OutsetDouble or DataGridViewAdvancedCellBorderStyle.InsetDouble => 2,
+            _ => 1,
+        };
+        return new Rectangle(W(s.Left), W(s.Top), W(s.Right) + columnDivider, W(s.Bottom) + rowDivider);
+    }
+
+    /// <summary>DataGridViewUtilities.ComputeTextFormatFlagsForCellStyleAlignment, left to right.</summary>
+    private static TextFormatFlags CellTextFlags(DataGridViewContentAlignment a, DataGridViewTriState wrap)
+    {
+        var f = a switch
+        {
+            DataGridViewContentAlignment.TopLeft => TextFormatFlags.Default,
+            DataGridViewContentAlignment.TopCenter => TextFormatFlags.HorizontalCenter,
+            DataGridViewContentAlignment.TopRight => TextFormatFlags.Right,
+            DataGridViewContentAlignment.MiddleLeft => TextFormatFlags.VerticalCenter,
+            DataGridViewContentAlignment.MiddleCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter,
+            DataGridViewContentAlignment.MiddleRight => TextFormatFlags.VerticalCenter | TextFormatFlags.Right,
+            DataGridViewContentAlignment.BottomLeft => TextFormatFlags.Bottom,
+            DataGridViewContentAlignment.BottomCenter => TextFormatFlags.Bottom | TextFormatFlags.HorizontalCenter,
+            DataGridViewContentAlignment.BottomRight => TextFormatFlags.Bottom | TextFormatFlags.Right,
+            _ => TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter,
+        };
+        f |= wrap != DataGridViewTriState.False ? TextFormatFlags.WordBreak : TextFormatFlags.SingleLine;
+        return f | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping;
+    }
+
     private void OnRatingCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
     {
         if (e.ColumnIndex == 0 && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count)   // artwork column — owner-draw a ROUNDED cover (the ImageColumn draws a hard square; it's the app's only square cover)
@@ -1357,7 +1417,7 @@ internal sealed class MainForm : Form, IMessageFilter
         {
             if (i >= shown && !ghosts) break;
             var slot = new Rectangle(cb.X + RatingPadX + i * RatingStarW, cb.Y, RatingStarW, cb.Height);
-            TextRenderer.DrawText(g, i < shown ? "★" : "☆", _ratingFont, slot, i < shown ? fill : Theme.Faint,
+            CrispText.DrawText(g, i < shown ? "★" : "☆", _ratingFont, slot, i < shown ? fill : Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
         e.Handled = true;
@@ -4683,7 +4743,7 @@ internal sealed class MainForm : Form, IMessageFilter
         int y = 18;
         void SectionLabel(string t)
         {
-            _deviceScrollPanel.Controls.Add(new Label { Text = Theme.ClassicCase(t), Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
+            _deviceScrollPanel.Controls.Add(new CrispLabel { Text = Theme.ClassicCase(t), Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
             y += 24;
         }
         void Add(Control c) { c.Left = x; c.Top = y; _deviceScrollPanel.Controls.Add(c); y += c.Height + 18; }

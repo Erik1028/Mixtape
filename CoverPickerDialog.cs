@@ -96,7 +96,7 @@ internal sealed class CoverGrid : Panel
                 using var bb = new SolidBrush(Theme.PanelBg);
                 using var bp = Theme.RoundedRect(rect, 10);
                 g.FillPath(bb, bp);
-                TextRenderer.DrawText(g, Loc.T("Default"), _fDefault, rect, Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                CrispText.DrawText(g, Loc.T("Default"), _fDefault, rect, Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             else if (id == CoverArt.CassetteId)
             {

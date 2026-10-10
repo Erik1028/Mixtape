@@ -135,7 +135,7 @@ internal sealed class PhotoViewerDialog : Form
         }
         else
         {
-            TextRenderer.DrawText(g, Loc.T("This photo can't be previewed."), _fMsg,
+            CrispText.DrawText(g, Loc.T("This photo can't be previewed."), _fMsg,
                 new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
@@ -143,9 +143,9 @@ internal sealed class PhotoViewerDialog : Form
         // top bar: caption + counter
         string cap = _ids.Count > 0 ? (_caption(_ids[_index]) ?? "") : "";
         string counter = _ids.Count > 0 ? $"{_index + 1} / {_ids.Count}" : "";
-        TextRenderer.DrawText(g, cap, _fCap, new Rectangle(20, 12, ClientSize.Width - 200, 34),
+        CrispText.DrawText(g, cap, _fCap, new Rectangle(20, 12, ClientSize.Width - 200, 34),
             Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(g, counter, _fCounter, new Rectangle(ClientSize.Width - 200, 12, 140, 34),
+        CrispText.DrawText(g, counter, _fCounter, new Rectangle(ClientSize.Width - 200, 12, 140, 34),
             Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
         // arrows
@@ -185,7 +185,7 @@ internal sealed class PhotoViewerDialog : Form
             }
         }
         else if (_ids.Count > 0)
-            TextRenderer.DrawText(g, Loc.T("This photo can't be previewed."), _fClassicBtn, view, Theme.Face,
+            CrispText.DrawText(g, Loc.T("This photo can't be previewed."), _fClassicBtn, view, Theme.Face,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         // the status bar: which photo, and the picture's own size
@@ -199,7 +199,7 @@ internal sealed class PhotoViewerDialog : Form
         {
             if (pr.Width < 10) continue;
             Theme.Bevel(g, pr, raised: false, thin: true);
-            TextRenderer.DrawText(g, txt, _fClassicBtn, new Rectangle(pr.X + 4, pr.Y, pr.Width - 8, pr.Height), Theme.TextCol,
+            CrispText.DrawText(g, txt, _fClassicBtn, new Rectangle(pr.X + 4, pr.Y, pr.Width - 8, pr.Height), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
         var gs = g.Save();
@@ -214,9 +214,9 @@ internal sealed class PhotoViewerDialog : Form
         using (var b = new SolidBrush(Theme.Face)) g.FillRectangle(b, r);
         Theme.Bevel(g, r, raised: true);
         const TextFormatFlags f = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
-        if (enabled) { TextRenderer.DrawText(g, text, _fClassicBtn, r, Theme.TextCol, f); return; }
-        TextRenderer.DrawText(g, text, _fClassicBtn, new Rectangle(r.X + 1, r.Y + 1, r.Width, r.Height), Theme.FaceHi, f);
-        TextRenderer.DrawText(g, text, _fClassicBtn, r, Theme.FaceShadow, f);
+        if (enabled) { CrispText.DrawText(g, text, _fClassicBtn, r, Theme.TextCol, f); return; }
+        CrispText.DrawText(g, text, _fClassicBtn, new Rectangle(r.X + 1, r.Y + 1, r.Width, r.Height), Theme.FaceHi, f);
+        CrispText.DrawText(g, text, _fClassicBtn, r, Theme.FaceShadow, f);
     }
 
     // Classic: the OS frame goes (the whole window is client, as the main window's is) and the edges, the caption and

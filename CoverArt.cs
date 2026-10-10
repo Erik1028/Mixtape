@@ -294,7 +294,7 @@ internal static class CoverArt
         {
             using var f = Theme.UiFont(Math.Max(7f, s * 0.052f), FontStyle.Bold);
             var tr = Rectangle.Round(new RectangleF(lx + lw * 0.05f, ly + lh * 0.24f, lw * 0.90f, lh * 0.74f));
-            TextRenderer.DrawText(g, title, f, tr, Theme.HsvToColor(h, 0.55, 0.24),
+            CrispText.DrawText(g, title, f, tr, Theme.HsvToColor(h, 0.55, 0.24),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordEllipsis | TextFormatFlags.NoPrefix);
         }
 

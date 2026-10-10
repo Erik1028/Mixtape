@@ -131,7 +131,7 @@ internal static class IpodArt
         {
             float gs = wd * 0.05f;   // glyph size unit
             using (var f = Theme.UiFont(Math.Max(5.5f, wd * 0.082f), FontStyle.Bold))
-                TextRenderer.DrawText(g, "MENU", f, Rectangle.Round(new RectangleF(cx - wd * 0.28f, cy - r - wd * 0.085f, wd * 0.56f, wd * 0.2f)), label,
+                CrispText.DrawText(g, "MENU", f, Rectangle.Round(new RectangleF(cx - wd * 0.28f, cy - r - wd * 0.085f, wd * 0.56f, wd * 0.2f)), label,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             DoubleTri(g, label, cx - r, cy, gs, -1);   // ◀◀
             DoubleTri(g, label, cx + r, cy, gs, +1);   // ▶▶

@@ -144,7 +144,7 @@ internal sealed class StatsView : Panel
         int w = Width - BarZone, y = Pad - _scroll;
         if (IsEmpty)
         {
-            TextRenderer.DrawText(g, _note, _fNote, new Rectangle(Pad, Pad, Math.Max(10, w - 2 * Pad), 40), Theme.Faint,
+            CrispText.DrawText(g, _note, _fNote, new Rectangle(Pad, Pad, Math.Max(10, w - 2 * Pad), 40), Theme.Faint,
                 TextFormatFlags.Left | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
             _contentH = 0;
             return;
@@ -187,7 +187,7 @@ internal sealed class StatsView : Panel
 
         if (_note.Length > 0)
         {
-            TextRenderer.DrawText(g, _note, _fNote, new Rectangle(Pad, y, Math.Max(10, w - 2 * Pad), 34), Theme.Faint,
+            CrispText.DrawText(g, _note, _fNote, new Rectangle(Pad, y, Math.Max(10, w - 2 * Pad), 34), Theme.Faint,
                 TextFormatFlags.Left | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
             y += 34;
         }
@@ -211,10 +211,10 @@ internal sealed class StatsView : Panel
             fit = Theme.DisplayFont(Math.Max(12f, 21f * box / wNeed), FontStyle.Bold);
             f = fit;
         }
-        TextRenderer.DrawText(g, s.Value, f, new Rectangle(r.X + 16, r.Y + 11, box, 36), s.Accent ? Theme.AccentBright : Theme.TextCol,
+        CrispText.DrawText(g, s.Value, f, new Rectangle(r.X + 16, r.Y + 11, box, 36), s.Accent ? Theme.AccentBright : Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         fit?.Dispose();
-        TextRenderer.DrawText(g, Theme.Caps(s.Label), _fLabel, new Rectangle(r.X + 16, r.Bottom - 30, r.Width - 32, 20), Theme.Faint,
+        CrispText.DrawText(g, Theme.Caps(s.Label), _fLabel, new Rectangle(r.X + 16, r.Bottom - 30, r.Width - 32, 20), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
     }
 
@@ -229,7 +229,7 @@ internal sealed class StatsView : Panel
         using (var p = Theme.RoundedRect(card, Theme.RadCard)) g.FillPath(b, p);
         if (Theme.Classic) Theme.EtchedFrame(g, card);
 
-        TextRenderer.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
+        CrispText.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         double max = 1;
@@ -254,7 +254,7 @@ internal sealed class StatsView : Panel
             }
             if (b.Target is not null) _hit.Add((row, b.Target));
 
-            TextRenderer.DrawText(g, b.Name, _fName, new Rectangle(card.X + 16, row.Y, nameW, RowH), hot ? Theme.TextCol : Theme.Subtle,
+            CrispText.DrawText(g, b.Name, _fName, new Rectangle(card.X + 16, row.Y, nameW, RowH), hot ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
             double step = Math.Clamp((grow - i * 0.035) / 0.5, 0, 1);
@@ -264,7 +264,7 @@ internal sealed class StatsView : Panel
             {
                 // the bars become the era's progress bar: a sunken trough with navy chunks
                 Theme.ClassicProgress(g, new Rectangle(barX, row.Y + RowH / 2 - 7, barW, 14), bw, hot ? Theme.AccentBright : null);
-                TextRenderer.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
+                CrispText.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 continue;
             }
@@ -276,7 +276,7 @@ internal sealed class StatsView : Panel
                 using var fp = Theme.RoundedRect(new Rectangle(track.X, track.Y, bw, track.Height), 4);
                 g.FillPath(fb, fp);
             }
-            TextRenderer.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
+            CrispText.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
         return h;

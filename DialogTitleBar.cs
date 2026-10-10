@@ -50,14 +50,14 @@ internal sealed class DialogTitleBar : Control
             using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, ClientRectangle);
             var cap = new Rectangle(1, 1, Math.Max(0, Width - 2), Theme.ClassicCaptionH);
             using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, cap);
-            TextRenderer.DrawText(g, Text, _font, new Rectangle(cap.X + 4, cap.Y, Math.Max(0, cap.Width - 26), cap.Height), Color.White,
+            CrispText.DrawText(g, Text, _font, new Rectangle(cap.X + 4, cap.Y, Math.Max(0, cap.Width - 26), cap.Height), Color.White,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             return;
         }
         int navW = Math.Max(0, Math.Min(_navW, Width));
         using (var nb = new SolidBrush(Theme.SidebarBg)) g.FillRectangle(nb, 0, 0, navW, Height);     // matches the nav rail below
         using (var bb = new SolidBrush(Theme.Bg)) g.FillRectangle(bb, navW, 0, Width - navW, Height);  // matches the content body below
-        TextRenderer.DrawText(g, Text, _font, new Rectangle(16, 0, Math.Max(40, navW - 24), Height), Theme.TextCol,
+        CrispText.DrawText(g, Text, _font, new Rectangle(16, 0, Math.Max(40, navW - 24), Height), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 

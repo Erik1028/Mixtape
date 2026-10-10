@@ -52,7 +52,7 @@ internal sealed class DurationSlider : Control
         if (Theme.Classic)
         {
             Theme.ClassicTrackbar(g, t, frac);
-            TextRenderer.DrawText(g, $"{(int)_value}s", _fVal, new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
+            CrispText.DrawText(g, $"{(int)_value}s", _fVal, new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             return;
         }
@@ -65,7 +65,7 @@ internal sealed class DurationSlider : Control
         float kx = t.X + fw, ky = t.Y + t.Height / 2f;
         using (var ks = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(ks, kx - 7, ky - 6.5f, 14, 14);
         using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, kx - 6.5f, ky - 6.5f, 13, 13);
-        TextRenderer.DrawText(g, $"{(int)_value}s", _fVal, new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
+        CrispText.DrawText(g, $"{(int)_value}s", _fVal, new Rectangle(Width - 38, 0, 38, Height), Theme.TextCol,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 

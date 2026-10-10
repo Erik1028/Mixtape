@@ -285,7 +285,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
             if (!e.Item.Enabled)   // the embossed grey of a disabled command: white one pixel down-right, grey on top
             {
                 var tr0 = e.TextRectangle;
-                TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont, new Rectangle(tr0.X + 1, 1, tr0.Width, e.Item.Height), Theme.FaceHi,
+                CrispText.DrawText(e.Graphics, e.Text, e.TextFont, new Rectangle(tr0.X + 1, 1, tr0.Width, e.Item.Height), Theme.FaceHi,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             }
         }
@@ -299,6 +299,12 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
             e.TextColor = Theme.TextCol;
             e.TextFormat = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
             if (e.Item.Pressed) e.TextRectangle = new Rectangle(tr.X + 1, 1, tr.Width, e.Item.Height);
+        }
+        if (Theme.Classic && e.TextDirection == ToolStripTextDirection.Horizontal)
+        {
+            // the base renderer's own text call (ToolStripRenderer.OnRenderItemText: GrayText for a disabled item), crisp
+            CrispText.DrawText(e.Graphics, e.Text, e.TextFont, e.TextRectangle, e.Item is { Enabled: true } ? e.TextColor : SystemColors.GrayText, e.TextFormat);
+            return;
         }
         base.OnRenderItemText(e);
     }

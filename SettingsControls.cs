@@ -49,7 +49,7 @@ internal sealed class ToggleSwitch : Control
         if (_classicLabel is not null)
         {
             Theme.ClassicCheckBox(g, new Rectangle(0, (Height - 13) / 2, 13, 13), _checked, Enabled);
-            TextRenderer.DrawText(g, _classicLabel, _classicFont!, new Rectangle(19, 0, Width - 19, Height), Enabled ? Theme.TextCol : Theme.FaceShadow,
+            CrispText.DrawText(g, _classicLabel, _classicFont!, new Rectangle(19, 0, Width - 19, Height), Enabled ? Theme.TextCol : Theme.FaceShadow,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             return;
         }
@@ -278,7 +278,7 @@ internal sealed class SettingsNav : Panel
             }
             var iconR = new Rectangle(row.X + 9, y + (RowH - 18) / 2, 18, 18);
             DrawCategoryIcon(g, iconR, i, sel ? Theme.AccentBright : Theme.Subtle);
-            TextRenderer.DrawText(g, _labels[i], sel ? _fontBold : _font,
+            CrispText.DrawText(g, _labels[i], sel ? _fontBold : _font,
                 new Rectangle(iconR.Right + 10, y, row.Right - iconR.Right - 16, RowH), sel ? Color.White : Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
@@ -297,7 +297,7 @@ internal sealed class SettingsNav : Panel
             if (sel) using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, row);
             var iconR = new Rectangle(row.X + 9, y + (RowH - 18) / 2, 18, 18);
             DrawCategoryIcon(g, iconR, i, sel ? Color.White : Theme.TextCol);
-            TextRenderer.DrawText(g, _labels[i], _font, new Rectangle(iconR.Right + 10, y, row.Right - iconR.Right - 16, RowH),
+            CrispText.DrawText(g, _labels[i], _font, new Rectangle(iconR.Right + 10, y, row.Right - iconR.Right - 16, RowH),
                 sel ? Color.White : Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
     }
@@ -572,7 +572,7 @@ internal sealed class ClassicPropertySheet : Panel
         g.DrawLine(dk, r.Right - 2, r.Y + 1, r.Right - 2, r.Y + 1);
         g.DrawLine(sh, r.Right - 2, r.Y + 2, r.Right - 2, bottom);
         var tr = new Rectangle(r.X, r.Y + (on ? 0 : 1), r.Width, r.Height - 2);
-        TextRenderer.DrawText(g, text, font, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, text, font, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
     protected override void Dispose(bool disposing)
@@ -603,7 +603,7 @@ internal sealed class ClassicGroupBox : Panel
         var sz = TextRenderer.MeasureText(g, Text, _font, new Size(int.MaxValue, 16), TextFormatFlags.NoPrefix);
         var cap = new Rectangle(7, 0, Math.Min(Width - 14, sz.Width + 2), sz.Height);
         using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, cap);
-        TextRenderer.DrawText(g, Text, _font, cap, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, Text, _font, cap, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
     protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }
@@ -707,7 +707,7 @@ internal sealed class SegmentedControl : Control
         {
             var seg = new Rectangle((i % per) * w, (i / per) * lineH, w, lineH);
             ClassicIcons.Draw(g, i == _selected ? ClassicIcons.Id.RadioOn : ClassicIcons.Id.RadioOff, seg.X, seg.Y + (lineH - 12) / 2);
-            TextRenderer.DrawText(g, _options[i], Font, new Rectangle(seg.X + 17, seg.Y, seg.Width - 17, lineH), Theme.TextCol,
+            CrispText.DrawText(g, _options[i], Font, new Rectangle(seg.X + 17, seg.Y, seg.Width - 17, lineH), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
     }
@@ -741,7 +741,7 @@ internal sealed class SegmentedControl : Control
             }
             var tr = seg;
             if (on) tr.Offset(1, 1);
-            TextRenderer.DrawText(g, _options[i], Font, tr, Theme.TextCol,
+            CrispText.DrawText(g, _options[i], Font, tr, Theme.TextCol,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
     }
@@ -782,7 +782,7 @@ internal sealed class SegmentedControl : Control
             var seg = new RectangleF(i * w + 2, 2, w - 4, Height - 4);
             float cover = Math.Max(0f, 1f - Math.Abs(_visSel - i)); // text crossfades to OnAccent as the pill arrives
             Color tc = Theme.Blend(Theme.TextCol, Theme.OnAccent, cover);
-            TextRenderer.DrawText(g, _options[i], Font, Rectangle.Round(seg), tc,
+            CrispText.DrawText(g, _options[i], Font, Rectangle.Round(seg), tc,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
         g.Clip = savedClip;

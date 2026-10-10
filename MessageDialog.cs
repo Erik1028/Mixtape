@@ -167,7 +167,7 @@ internal sealed class MessageDialog : GlassDialog
         {
             Theme.PaintClassicWindow(g, ClientRectangle, _caption, _titleFont);
             if (_icon != MessageBoxIcon.None) DrawClassicIcon(g, _iconRect);
-            TextRenderer.DrawText(g, _message, _msgFont, _msgRect, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, _message, _msgFont, _msgRect, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
             return;
         }
         if (!Glass.PaintBackground(g, this, Glass.SurfaceTint)) g.Clear(BackColor);
@@ -176,9 +176,9 @@ internal sealed class MessageDialog : GlassDialog
 
         if (_icon != MessageBoxIcon.None) DrawIcon(g, _iconRect);
 
-        TextRenderer.DrawText(g, _caption, _titleFont, _titleRect, Theme.TextCol,
+        CrispText.DrawText(g, _caption, _titleFont, _titleRect, Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(g, _message, _msgFont, _msgRect, Theme.Blend(Theme.TextCol, Theme.Subtle, 0.45),
+        CrispText.DrawText(g, _message, _msgFont, _msgRect, Theme.Blend(Theme.TextCol, Theme.Subtle, 0.45),
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
     }
 
@@ -198,7 +198,7 @@ internal sealed class MessageDialog : GlassDialog
                 var tri = new[] { new PointF(r.X + r.Width / 2f, r.Y + 1), new PointF(r.Right - 1, r.Bottom - 2), new PointF(r.X + 1, r.Bottom - 2) };
                 using (var yb = new SolidBrush(Color.FromArgb(255, 255, 0))) g.FillPolygon(yb, tri);
                 g.DrawPolygon(black, tri);
-                TextRenderer.DrawText(g, "!", f, new Rectangle(r.X, r.Y + 6, r.Width, r.Height - 6), Theme.FaceDark, tf);
+                CrispText.DrawText(g, "!", f, new Rectangle(r.X, r.Y + 6, r.Width, r.Height - 6), Theme.FaceDark, tf);
                 break;
             }
             case MessageBoxIcon.Error:
@@ -220,7 +220,7 @@ internal sealed class MessageDialog : GlassDialog
                 g.FillPolygon(wb, tail);
                 g.DrawEllipse(black, body);
                 g.DrawLines(black, new[] { tail[0], tail[1], tail[2] });
-                TextRenderer.DrawText(g, _icon == MessageBoxIcon.Question ? "?" : "i", f, body, Theme.ClassicNavy, tf);
+                CrispText.DrawText(g, _icon == MessageBoxIcon.Question ? "?" : "i", f, body, Theme.ClassicNavy, tf);
                 break;
             }
         }
@@ -240,7 +240,7 @@ internal sealed class MessageDialog : GlassDialog
         double lum = (0.299 * col.R + 0.587 * col.G + 0.114 * col.B) / 255.0;
         Color gc = lum > 0.62 ? Theme.Bg : Color.White;     // dark glyph on light circles, white on dark
         using var f = Theme.DisplayFont(size, FontStyle.Bold);
-        TextRenderer.DrawText(g, glyph, f, r, gc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, glyph, f, r, gc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
     protected override void Dispose(bool disposing)

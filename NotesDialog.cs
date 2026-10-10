@@ -153,7 +153,7 @@ internal sealed class NotesDialog : CardDialog
 
             if (_items.Count == 0)
             {
-                TextRenderer.DrawText(g, _empty, _fSize, new Rectangle(16, 0, Width - 32, Height), Theme.Faint,
+                CrispText.DrawText(g, _empty, _fSize, new Rectangle(16, 0, Width - 32, Height), Theme.Faint,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 return;
             }
@@ -171,9 +171,9 @@ internal sealed class NotesDialog : CardDialog
                     using var hp = Theme.RoundedRect(row, Theme.RadControl);
                     g.FillPath(hb, hp);
                 }
-                TextRenderer.DrawText(g, _items[i].Name, _fName, new Rectangle(row.X + 12, row.Y, row.Width - 120, row.Height), Theme.TextCol,
+                CrispText.DrawText(g, _items[i].Name, _fName, new Rectangle(row.X + 12, row.Y, row.Width - 120, row.Height), Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, SizeStr(_items[i].Size), _fSize, new Rectangle(row.Right - 96, row.Y, 50, row.Height), Theme.Faint,
+                CrispText.DrawText(g, SizeStr(_items[i].Size), _fSize, new Rectangle(row.Right - 96, row.Y, 50, row.Height), Theme.Faint,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 if (i == _hover)   // the × only on the row under the pointer, so the list stays calm
                 {
@@ -198,8 +198,8 @@ internal sealed class NotesDialog : CardDialog
     /// <summary>Type a note here instead of making a text file first.</summary>
     private sealed class NoteEditor : CardDialog
     {
-        private readonly TextBox _name = new() { Text = Loc.T("Note"), BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
-        private readonly TextBox _body = new()
+        private readonly CrispTextBox _name = new() { Text = Loc.T("Note"), BackColor = Theme.RowBg, ForeColor = Theme.TextCol, BorderStyle = BorderStyle.FixedSingle };
+        private readonly CrispTextBox _body = new()
         {
             // No native scrollbar: a note is 4 KB at most, the wheel and the caret still scroll it, and the grey
             // Windows bar was the one foreign thing in the dialog.

@@ -604,7 +604,7 @@ internal sealed class LyricsPanel : Control
         if (_lines.Count == 0)
         {
             DrawHeader(g);
-            TextRenderer.DrawText(g, _status, _fStatus, new Rectangle(Pad, HeaderH, Width - 2 * Pad, Height - HeaderH),
+            CrispText.DrawText(g, _status, _fStatus, new Rectangle(Pad, HeaderH, Width - 2 * Pad, Height - HeaderH),
                 Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
             return;
         }
@@ -767,7 +767,7 @@ internal sealed class LyricsPanel : Control
         var band = new Rectangle(0, HeaderH, Width, SheetBottom - HeaderH);
         if (_cands is null || _cands.Count == 0)
         {
-            TextRenderer.DrawText(g, _cands is null ? Loc.T("Looking for other lyrics…") : Loc.T("No other lyrics found."),
+            CrispText.DrawText(g, _cands is null ? Loc.T("Looking for other lyrics…") : Loc.T("No other lyrics found."),
                 _fStatus, band, Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
             return;
@@ -794,12 +794,12 @@ internal sealed class LyricsPanel : Control
             double off = _songLength > TimeSpan.Zero && c.Duration > TimeSpan.Zero
                 ? Math.Abs((c.Duration - _songLength).TotalSeconds) : -1;
             Color lenCol = off < 0 ? Theme.Subtle : off <= 2 ? Theme.Accent : off <= 5 ? Theme.Subtle : Theme.Faint;
-            TextRenderer.DrawText(g, len, _fStatus, new Rectangle(Width - Pad - 58, y + 6, 58, 18),
+            CrispText.DrawText(g, len, _fStatus, new Rectangle(Width - Pad - 58, y + 6, 58, 18),
                 lenCol, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, c.Album.Length > 0 ? c.Album : c.Artist, _fSong,
+            CrispText.DrawText(g, c.Album.Length > 0 ? c.Album : c.Artist, _fSong,
                 new Rectangle(Pad, y + 4, Width - 2 * Pad - 64, 20), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, c.Synced ? Loc.T("{0} timed lines", c.Lines) : Loc.T("words only, no timing"),
+            CrispText.DrawText(g, c.Synced ? Loc.T("{0} timed lines", c.Lines) : Loc.T("words only, no timing"),
                 _fStatus, new Rectangle(Pad, y + 24, Width - 2 * Pad, 16),
                 c.Synced ? Theme.Subtle : Theme.Faint,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
@@ -869,7 +869,7 @@ internal sealed class LyricsPanel : Control
         int y0 = Height - FooterH;
         PaintBand(g, new Rectangle(0, y0, Width, FooterH));
         using (var pen = new Pen(Theme.HairLine)) g.DrawLine(pen, Pad, y0, Width - Pad, y0);
-        TextRenderer.DrawText(g, Loc.T("No timing — the sheet can't follow along."), _fStatus,
+        CrispText.DrawText(g, Loc.T("No timing — the sheet can't follow along."), _fStatus,
             new Rectangle(Pad, y0, Width - 2 * Pad, FooterH), Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
@@ -893,15 +893,15 @@ internal sealed class LyricsPanel : Control
         if (_docked)
         {
             // the tab strip names the panel; this row is the song (or the picker's title), the buttons stay
-            TextRenderer.DrawText(g, _picking ? Loc.T("Other lyrics") : _songLine.Length > 0 ? _songLine : Loc.T("Lyrics"), _fSong,
+            CrispText.DrawText(g, _picking ? Loc.T("Other lyrics") : _songLine.Length > 0 ? _songLine : Loc.T("Lyrics"), _fSong,
                 new Rectangle(Pad, 0, Width - 2 * Pad - (ShowMore ? 56 : 30), HeaderH), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
         else
         {
-            TextRenderer.DrawText(g, _picking ? Loc.T("Other lyrics") : Loc.T("Lyrics"), _fHeader,
+            CrispText.DrawText(g, _picking ? Loc.T("Other lyrics") : Loc.T("Lyrics"), _fHeader,
                 new Rectangle(Pad, 6, titleW, 20), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.NoPrefix);
             if (_songLine.Length > 0)
-                TextRenderer.DrawText(g, _songLine, _fSong, new Rectangle(Pad, 24, titleW, 16),
+                CrispText.DrawText(g, _songLine, _fSong, new Rectangle(Pad, 24, titleW, 16),
                     Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             DrawX(g, CloseRect, _hoverClose);
         }
@@ -920,7 +920,7 @@ internal sealed class LyricsPanel : Control
         PaintBand(g, new Rectangle(0, y0, Width, FooterH));
         using (var pen = new Pen(Theme.HairLine)) g.DrawLine(pen, Pad, y0, Width - Pad, y0);
 
-        TextRenderer.DrawText(g, Loc.T("Sync"), _fStatus, new Rectangle(Pad, y0 + 6, 140, 18),
+        CrispText.DrawText(g, Loc.T("Sync"), _fStatus, new Rectangle(Pad, y0 + 6, 140, 18),
             Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         int ms = (int)Math.Round(_offset.TotalMilliseconds);
@@ -935,7 +935,7 @@ internal sealed class LyricsPanel : Control
             using (var field = new SolidBrush(Color.White)) g.FillRectangle(field, ValueRect);
             Theme.Bevel(g, ValueRect, raised: false);
         }
-        TextRenderer.DrawText(g, Loc.T("{0} s", num), _fStatus, ValueRect,
+        CrispText.DrawText(g, Loc.T("{0} s", num), _fStatus, ValueRect,
             Theme.Classic ? Theme.TextCol : ms == 0 ? Theme.Subtle : Theme.Accent,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
@@ -969,7 +969,7 @@ internal sealed class LyricsPanel : Control
         var rects = Laid(row, bold);
         var font = bold ? _fLineOn : _fLine;
         for (int i = 0; i < row.Words.Count; i++)
-            TextRenderer.DrawText(g, row.Words[i].W, font,
+            CrispText.DrawText(g, row.Words[i].W, font,
                 new Point(Pad + (int)rects[i].X, y + (int)rects[i].Y), col, TextFormatFlags.NoPadding);
     }
 

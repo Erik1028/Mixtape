@@ -775,7 +775,7 @@ internal sealed class CoverFlowView : Control
                     Theme.Bevel(g, seg, raised: true);
                 }
                 var tr = seg; if (on) tr.Offset(1, 1);
-                TextRenderer.DrawText(g, Loc.T(ModeLabels[i]), f, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                CrispText.DrawText(g, Loc.T(ModeLabels[i]), f, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 bx += w[i];
             }
             return;
@@ -798,7 +798,7 @@ internal sealed class CoverFlowView : Control
                 using (var hb = new SolidBrush(Color.FromArgb((int)(45 * _intro), Color.White)))
                 using (var hp = Theme.RoundedRect(inner, inner.Height / 2f)) g.FillPath(hb, hp);
             Color tcol = active ? Theme.OnAccent : Color.White;
-            TextRenderer.DrawText(g, Loc.T(ModeLabels[i]), f, seg, Color.FromArgb((int)((active ? 255 : 205) * _intro), tcol),
+            CrispText.DrawText(g, Loc.T(ModeLabels[i]), f, seg, Color.FromArgb((int)((active ? 255 : 205) * _intro), tcol),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             cxx += w[i];
         }
@@ -829,7 +829,7 @@ internal sealed class CoverFlowView : Control
                 float[] hs0 = { 8, 12, 6 };
                 for (int k = 0; k < 3; k++) g.FillRectangle(nb, bx0 + k * 4, by0 - hs0[k], 3, hs0[k]);
             }
-            TextRenderer.DrawText(g, txt, f, new Rectangle(_npChip.X + 34, _npChip.Y, tw + 10, _npChip.Height), Theme.TextCol,
+            CrispText.DrawText(g, txt, f, new Rectangle(_npChip.X + 34, _npChip.Y, tw + 10, _npChip.Height), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             return;
         }
@@ -842,7 +842,7 @@ internal sealed class CoverFlowView : Control
             float[] hs = { 8, 13, 6 };
             for (int k = 0; k < 3; k++) g.FillRectangle(ab, bx + k * 4.5f, by - hs[k], 2.6f, hs[k]);
         }
-        TextRenderer.DrawText(g, txt, f, new Rectangle(_npChip.X + 38, _npChip.Y, tw + 10, _npChip.Height), Color.FromArgb((int)(255 * _intro), Color.White),
+        CrispText.DrawText(g, txt, f, new Rectangle(_npChip.X + 38, _npChip.Y, tw + 10, _npChip.Height), Color.FromArgb((int)(255 * _intro), Color.White),
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
@@ -1264,10 +1264,10 @@ internal sealed class CoverFlowView : Control
         var rect = new Rectangle(0, y, Width, 26);
         var tf = _fCentreTitle;
         var sf = _fCentreSub;
-        TextRenderer.DrawText(g, it.Title, tf, rect, Color.FromArgb(alpha, Color.White),
+        CrispText.DrawText(g, it.Title, tf, rect, Color.FromArgb(alpha, Color.White),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (!string.IsNullOrEmpty(it.Subtitle))
-            TextRenderer.DrawText(g, it.Subtitle, sf, new Rectangle(0, y + 26, Width, 22), Color.FromArgb((int)(alpha * 0.8f), Theme.Classic ? Theme.Face : Theme.Subtle),
+            CrispText.DrawText(g, it.Subtitle, sf, new Rectangle(0, y + 26, Width, 22), Color.FromArgb((int)(alpha * 0.8f), Theme.Classic ? Theme.Face : Theme.Subtle),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
@@ -1316,15 +1316,15 @@ internal sealed class CoverFlowView : Control
         const int tx = 76;
         int rightW = Math.Max(40, left - 16 - tx);
         int th = TextRenderer.MeasureText(g, "Ag", _fHdTitle).Height, subH = TextRenderer.MeasureText(g, "Ag", _fHdSub).Height;
-        TextRenderer.DrawText(g, Loc.T("Cover Flow"), _fHdTitle, new Rectangle(tx, 7, rightW, th), Theme.TextCol,
+        CrispText.DrawText(g, Loc.T("Cover Flow"), _fHdTitle, new Rectangle(tx, 7, rightW, th), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (_metaCount.Length > 0)
         {
             const TextFormatFlags np = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
-            TextRenderer.DrawText(g, _metaCount, _fHdSubBold, new Rectangle(tx, 31, rightW, subH), Theme.TextCol, np);
+            CrispText.DrawText(g, _metaCount, _fHdSubBold, new Rectangle(tx, 31, rightW, subH), Theme.TextCol, np);
             int hw = TextRenderer.MeasureText(g, _metaCount, _fHdSubBold, new Size(rightW, subH), np).Width;
             if (_metaTail.Length > 0 && hw < rightW)
-                TextRenderer.DrawText(g, "  ·  " + _metaTail, _fHdSub, new Rectangle(tx + hw, 31, rightW - hw, subH), Theme.Subtle, np | TextFormatFlags.EndEllipsis);
+                CrispText.DrawText(g, "  ·  " + _metaTail, _fHdSub, new Rectangle(tx + hw, 31, rightW - hw, subH), Theme.Subtle, np | TextFormatFlags.EndEllipsis);
         }
 
         for (int i = 0; i < 3; i++) DrawClassicButton(g, i, Loc.T(ModeLabels[i]), latched: (int)_mode == i);
@@ -1393,10 +1393,10 @@ internal sealed class CoverFlowView : Control
             }
             if (text.Length == 0) return;
             tr = Rectangle.FromLTRB(tr.X + 30, tr.Y, tr.Right - 6, tr.Bottom);
-            TextRenderer.DrawText(g, text, _fBtn, tr, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, text, _fBtn, tr, Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             return;
         }
-        TextRenderer.DrawText(g, text, _fBtn, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, text, _fBtn, tr, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
     /// <summary>Classic: a 95 horizontal scrollbar under the viewport - arrow buttons at the ends, the dithered shaft,

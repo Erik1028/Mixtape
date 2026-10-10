@@ -347,7 +347,7 @@ internal sealed class HeaderPanel : Panel
             using (var ov = new SolidBrush(Color.FromArgb(125, 0, 0, 0)))
             using (var op = Theme.RoundedRect(artRect, artSize * Theme.TileFrac))
                 g.FillPath(ov, op);
-            TextRenderer.DrawText(g, "Change cover", _fKicker, artRect, Color.White,
+            CrispText.DrawText(g, "Change cover", _fKicker, artRect, Color.White,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
@@ -372,7 +372,7 @@ internal sealed class HeaderPanel : Panel
         int slide = (int)Math.Round((1 - _textT) * 7);   // the block rises the last 9 px into place
         int ty = 7 + slide;
 
-        TextRenderer.DrawText(g, _title, titleFont,
+        CrispText.DrawText(g, _title, titleFont,
             new Rectangle(tx, ty, rightW, th), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         ty = 31 + slide;   // line 2, the meta line
@@ -389,13 +389,13 @@ internal sealed class HeaderPanel : Panel
             string tail = subAll.Substring(dot);
             var subBold = _fSubBold;
             const TextFormatFlags np = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding;
-            TextRenderer.DrawText(g, head, subBold, new Rectangle(tx, ty, rightW, subH), Theme.TextCol, np);
+            CrispText.DrawText(g, head, subBold, new Rectangle(tx, ty, rightW, subH), Theme.TextCol, np);
             int hw = TextRenderer.MeasureText(g, head, subBold, new Size(rightW, subH), np).Width;
-            TextRenderer.DrawText(g, "  " + tail, subFont, new Rectangle(tx + hw, ty, rightW - hw, subH), Theme.Subtle, np | TextFormatFlags.EndEllipsis);
+            CrispText.DrawText(g, "  " + tail, subFont, new Rectangle(tx + hw, ty, rightW - hw, subH), Theme.Subtle, np | TextFormatFlags.EndEllipsis);
         }
         else
         {
-            TextRenderer.DrawText(g, subAll, subFont,
+            CrispText.DrawText(g, subAll, subFont,
                 new Rectangle(tx, ty, rightW, subH), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         }
@@ -419,7 +419,7 @@ internal sealed class HeaderPanel : Panel
             Color bcol = _badgeClickable
                 ? Theme.Blend(Theme.Bg, _badgeHover ? Color.FromArgb(255, 245, 195, 110) : amber, 0.95)
                 : Theme.Subtle;
-            TextRenderer.DrawText(g, _badge, badgeFont, chip, bcol,
+            CrispText.DrawText(g, _badge, badgeFont, chip, bcol,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             _badgeRect = chip;
         }

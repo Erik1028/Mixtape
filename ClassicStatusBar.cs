@@ -43,7 +43,7 @@ internal sealed class ClassicStatusBar : Control
     {
         if (r.Width < 10) return;
         Theme.Bevel(g, r, raised: false, thin: true);
-        TextRenderer.DrawText(g, text, _font, new Rectangle(r.X + 4, r.Y, r.Width - 8, r.Height), Theme.TextCol,
+        CrispText.DrawText(g, text, _font, new Rectangle(r.X + 4, r.Y, r.Width - 8, r.Height), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 

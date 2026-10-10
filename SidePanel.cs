@@ -123,7 +123,7 @@ internal sealed class SidePanel : Panel
             bool on = tab == Current, hover = _tabHit.Count - 1 == _hoverTab;
             if (on) { using var b = new SolidBrush(Theme.Blend(Theme.Bg, Theme.Accent, 0.16)); using var p = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(b, p); }
             else if (hover && Theme.ShowHover) { using var b = new SolidBrush(Theme.RowHover); using var p = Theme.RoundedRect(r, Theme.RadControl); g.FillPath(b, p); }
-            TextRenderer.DrawText(g, name, _fTab, r, on ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle,
+            CrispText.DrawText(g, name, _fTab, r, on ? Theme.AccentBright : hover ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             x += tw + 6;
         }
@@ -193,7 +193,7 @@ internal sealed class HistoryPanel : Control
         g.TextRenderingHint = Theme.TextHint;
         if (_items.Count == 0)
         {
-            TextRenderer.DrawText(g, Loc.T("Nothing played yet."), _fEmpty, new Rectangle(Pad, Top + 8, Width - 2 * Pad, 60), Theme.Faint,
+            CrispText.DrawText(g, Loc.T("Nothing played yet."), _fEmpty, new Rectangle(Pad, Top + 8, Width - 2 * Pad, 60), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak);
             return;
         }
@@ -215,9 +215,9 @@ internal sealed class HistoryPanel : Control
             string when = When(at);
             int ww = TextRenderer.MeasureText(when, _fWhen, new Size(120, RowH), TextFormatFlags.NoPrefix).Width;
             int tx = Pad + Art + 11, tw = Width - tx - Pad - ww - 8;
-            TextRenderer.DrawText(g, t.DisplayTitle, _fTitle, new Rectangle(tx, top + 7, tw, 17), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, t.Artist ?? "", _fArtist, new Rectangle(tx, top + 24, tw, 15), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, when, _fWhen, new Rectangle(Width - Pad - ww, top + 8, ww, 16), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, t.DisplayTitle, _fTitle, new Rectangle(tx, top + 7, tw, 17), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, t.Artist ?? "", _fArtist, new Rectangle(tx, top + 24, tw, 15), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, when, _fWhen, new Rectangle(Width - Pad - ww, top + 8, ww, 16), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.NoPrefix);
         }
         if (MaxScroll > 0)
         {

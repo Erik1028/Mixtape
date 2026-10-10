@@ -59,7 +59,7 @@ internal static class Tip
             var g = e.Graphics;
             g.Clear(BackColor);
             if (Theme.Classic) using (var k = new Pen(Theme.FaceDark)) g.DrawRectangle(k, 0, 0, Width - 1, Height - 1);   // and its black hairline
-            TextRenderer.DrawText(g, Caption, _f, ClientRectangle, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, Caption, _f, ClientRectangle, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
     }
 
