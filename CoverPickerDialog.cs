@@ -87,9 +87,11 @@ internal sealed class CoverGrid : Panel
         {
             int id = i == total - 1 ? CoverArt.CassetteId : i - 1; // last = cassette; else -1 default then 0..
             int col = i % Cols, row = i / Cols;
-            int x = Pad + col * (Tile + Gap), y = Pad + row * (Tile + Gap);
+            int x0 = (Width - (Cols * Tile + (Cols - 1) * Gap)) / 2;   // centred (it sat 16 px from the left edge and 52 from the right)
+            int x = x0 + col * (Tile + Gap), y = Pad + row * (Tile + Gap);
             var rect = new Rectangle(x, y, Tile, Tile);
             _hit.Add((rect, id));
+            if (Theme.Classic) { PaintClassic(g, rect, id); continue; }
 
             if (id == -1)
             {
@@ -120,6 +122,24 @@ internal sealed class CoverGrid : Panel
                 g.DrawPath(pen, sp);
             }
         }
+    }
+
+    /// <summary>Classic: every cover in its sunken picture box (256 colours when that is on), "Default" an empty one,
+    /// and the chosen one framed in the selection navy - square, like the wallpaper picker's. Nothing changes under
+    /// the pointer.</summary>
+    private void PaintClassic(Graphics g, Rectangle rect, int id)
+    {
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        if (id == -1)
+        {
+            using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, rect);
+            Theme.Bevel(g, Rectangle.Inflate(rect, 2, 2), raised: false);
+            CrispText.DrawText(g, Loc.T("Default"), _fDefault, rect, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+        else Theme.PaintClassicPicture(g, rect, id == CoverArt.CassetteId ? CoverArt.GenerateTitled(CoverArt.CassetteId, Tile, _sampleName) : CoverArt.Generate(id, Tile));
+        if (id == SelectedCoverId) WallpaperGrid.ClassicSelectionFrame(g, rect);
+        g.SmoothingMode = sm;
     }
 
     protected override void Dispose(bool disposing)

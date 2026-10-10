@@ -46,6 +46,7 @@ internal abstract class FlyoutForm : Form, IGlassHost
         TopMost = true;          // float above the (possibly top-most) mini player
         DoubleBuffered = true;
         BackColor = Theme.Bg;
+        if (Theme.Classic) Padding = new Padding(3);   // the raised edge (OnPaintBackground) and a face pixel: a docked panel would cover it
     }
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);

@@ -817,29 +817,47 @@ internal sealed class MainForm : Form, IMessageFilter
         if (_playingTrack is not null && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count
             && ReferenceEquals(_tracks.Rows[e.RowIndex].Tag, _playingTrack))
         {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.SmoothingMode = Theme.Classic ? SmoothingMode.None : SmoothingMode.AntiAlias;
             var artC = _tracks.Columns[0];
             var mark = artC.Visible
                 ? new Rectangle(b.X + artC.Width - 24, b.Bottom - 21, 14, 13)
                 : new Rectangle(b.X + 10, b.Y + (b.Height - 13) / 2, 14, 13);
-            if (artC.Visible)   // a dark chip so the bars read over any cover
+            Color markInk = Theme.AccentBright;
+            if (artC.Visible && Theme.Classic)   // 1995 had no alpha: a square chip of window face with a thin raised edge
+            {
+                var chipR = new Rectangle(mark.X - 4, mark.Y - 3, mark.Width + 8, mark.Height + 6);
+                using (var face = new SolidBrush(Theme.Face)) e.Graphics.FillRectangle(face, chipR);
+                Theme.Bevel(e.Graphics, chipR, raised: true, thin: true);
+            }
+            else if (artC.Visible)   // a dark chip so the bars read over any cover
             {
                 using var chip = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
                 using var cp = Theme.RoundedRect(new RectangleF(mark.X - 4, mark.Y - 3, mark.Width + 8, mark.Height + 6), 5);
                 e.Graphics.FillPath(chip, cp);
             }
-            if (artC.Visible || e.RowIndex != _hotRow) DrawPlayingMark(e.Graphics, mark);   // in the text-only gutter the hovered row shows pause instead
+            else if (Theme.Classic && _tracks.Rows[e.RowIndex].Selected) markInk = Color.White;   // on the navy band: white, like the row's text
+            if (artC.Visible || e.RowIndex != _hotRow) DrawPlayingMark(e.Graphics, mark, markInk);   // in the text-only gutter the hovered row shows pause instead
         }
 
         // Hover actions (Apple Music / Spotify): play at the left — on the cover, or in the gutter — and "···" at the right.
         if (e.RowIndex == _hotRow && e.RowIndex >= 0 && e.RowIndex < _tracks.Rows.Count && _tracks.Rows[e.RowIndex].Tag is Track ht)
         {
-            var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+            var g = e.Graphics; g.SmoothingMode = Theme.Classic ? SmoothingMode.None : SmoothingMode.AntiAlias;
             bool isPlayingRow = ReferenceEquals(ht, _playingTrack);
             bool hotPlay = _rowAction == RowAction.Play, hotMore = _rowAction == RowAction.More;
-            Color ink = hotPlay || isPlayingRow ? Theme.AccentBright : Theme.TextCol;
+            bool onBand = Theme.Classic && _tracks.Rows[e.RowIndex].Selected;   // Classic: a selected row is a solid navy band - its marks go white, like its text
+            Color ink = onBand ? Color.White : hotPlay || isPlayingRow ? Theme.AccentBright : Theme.TextCol;
             var artC = _tracks.Columns[0];
-            if (artC.Visible)
+            if (artC.Visible && Theme.Classic)
+            {
+                // a 1995 toolbar button over the cover's centre: square, window face, raised - no translucent disc
+                float cx = b.X + artC.Width / 2f, cy = b.Y + b.Height / 2f;
+                var btn = new Rectangle((int)cx - 12, (int)cy - 12, 24, 24);
+                using (var face = new SolidBrush(Theme.Face)) g.FillRectangle(face, btn);
+                Theme.Bevel(g, btn, raised: true);
+                DrawRowActionGlyph(g, cx, cy, isPlayingRow && _nowPlaying.Playing, Theme.TextCol);
+            }
+            else if (artC.Visible)
             {
                 float cx = b.X + artC.Width / 2f, cy = b.Y + b.Height / 2f;   // a dark disc over the cover's centre so the glyph reads on any art
                 using (var disc = new SolidBrush(Color.FromArgb(hotPlay ? 200 : 150, 0, 0, 0))) g.FillEllipse(disc, cx - 13, cy - 13, 26, 26);
@@ -851,18 +869,25 @@ internal sealed class MainForm : Form, IMessageFilter
                 var more = RowMoreRect(b);
                 float mx = more.X + more.Width / 2f, my = b.Y + b.Height / 2f;
                 if (hotMore && Theme.ShowHover) { using var hb = new SolidBrush(Theme.Blend(Theme.RowHover, Color.White, 0.08)); using var hp = Theme.RoundedRect(new RectangleF(mx - 12, my - 12, 24, 24), Theme.RadControl); g.FillPath(hb, hp); }
-                using var dots = new SolidBrush(hotMore ? Theme.TextCol : Theme.Subtle);
-                for (int k = -1; k <= 1; k++) g.FillEllipse(dots, mx + k * 6f - 1.6f, my - 1.6f, 3.2f, 3.2f);
+                using var dots = new SolidBrush(onBand ? Color.White : hotMore ? Theme.TextCol : Theme.Subtle);
+                for (int k = -1; k <= 1; k++)
+                    if (Theme.Classic) g.FillRectangle(dots, (int)Math.Round(mx + k * 6f) - 1, (int)Math.Round(my) - 1, 2, 2);   // square dots, whole pixels
+                    else g.FillEllipse(dots, mx + k * 6f - 1.6f, my - 1.6f, 3.2f, 3.2f);
             }
         }
     }
 
     /// <summary>Three accent bars — the universal "this one is playing". Static on purpose: animating it
     /// would mean invalidating a grid row every frame, and the bar at the bottom already carries the motion.</summary>
-    private static void DrawPlayingMark(Graphics g, Rectangle r)
+    private static void DrawPlayingMark(Graphics g, Rectangle r, Color ink)
     {
-        using var b = new SolidBrush(Theme.AccentBright);
+        using var b = new SolidBrush(ink);
         float[] frac = { 0.55f, 1f, 0.72f };
+        if (Theme.Classic)   // whole pixels, as a 1995 glyph was drawn
+        {
+            for (int k = 0; k < 3; k++) { int h = (int)Math.Round(r.Height * frac[k]); g.FillRectangle(b, r.X + k * 5, r.Bottom - h, 3, h); }
+            return;
+        }
         float bw = 2.6f, gap = 2.2f, x = r.X;
         foreach (float f in frac)
         {
@@ -879,7 +904,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (e.ColumnIndex != 1 || _playingTrack is null || e.RowIndex < 0 || e.RowIndex >= _tracks.Rows.Count) return;
         if (!ReferenceEquals(_tracks.Rows[e.RowIndex].Tag, _playingTrack)) return;
         e.CellStyle.ForeColor = Theme.AccentBright;
-        e.CellStyle.SelectionForeColor = Theme.AccentBright;
+        e.CellStyle.SelectionForeColor = Theme.Classic ? Color.White : Theme.AccentBright;   // Classic: the accent IS the selection navy
     }
 
     // ---- row hover actions (Apple Music / Spotify): play at the left, "···" at the right ----

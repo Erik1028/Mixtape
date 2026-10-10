@@ -15,6 +15,7 @@ internal class CardDialog : GlassDialog
     /// <summary>The strip the dialog's content is moved down by: the app's 52 px title card, or the 95 caption.</summary>
     public static int TitleH => Theme.Classic ? Theme.ClassicCaptionH + 5 : 52;
     private const int CloseD = 28, ClosePad = 16;
+    private const int ClassicFrame = 3;   // a 1995 dialog's fixed frame (SM_CXFIXEDFRAME): the raised edge and a face pixel
     private bool _closeDown;   // Classic: the caption's close button goes in while held
     private readonly Font _fCaption = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
     private bool _adopted, _closeHover;
@@ -40,10 +41,19 @@ internal class CardDialog : GlassDialog
         SuspendLayout();
         FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = MinimizeBox = false;
-        Padding = new Padding(Padding.Left, Padding.Top + TitleH, Padding.Right, Padding.Bottom);   // docked children start under the strip
+        // Classic: the frame runs down both sides and along the bottom of the whole dialog (OnPaint), and a child
+        // covers what its parent paints - so docked content keeps inside it by the padding, and content laid out
+        // from the very edge is pulled in off it.
+        int fr = Theme.Classic ? ClassicFrame : 0;
+        Padding = new Padding(Padding.Left + fr, Padding.Top + TitleH, Padding.Right + fr, Padding.Bottom + fr);   // docked children start under the strip
         ClientSize = new Size(cs.Width, cs.Height + TitleH);                                        // bottom-anchored children ride down with this
         ResumeLayout(true);
-        foreach (var (c, at) in home) c.Location = new Point(at.X, at.Y + TitleH);
+        foreach (var (c, at) in home)
+        {
+            int x = fr > 0 ? Math.Max(at.X, fr) : at.X;
+            c.Location = new Point(x, at.Y + TitleH);
+            if (fr > 0 && c.Right > cs.Width - fr) c.Width = Math.Max(0, cs.Width - fr - x);
+        }
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         if (Anim.MotionEnabled) Opacity = 0;   // OnShown fades it up
         MouseDown += OnChromeDown;

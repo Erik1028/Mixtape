@@ -29,6 +29,7 @@ internal sealed class StatsView : Panel
     private const int Pad = 22, Gap = 16, StatH = 82, RowH = 28, LabelH = 24, SectionGap = 24, BarZone = 16;
     private readonly Font _fBig = Theme.DisplayFont(21f, FontStyle.Bold);
     private readonly Font _fLabel = Theme.UiFont(Theme.SzLabel, FontStyle.Bold);
+    private readonly Font _fGroup = Theme.UiFont(Theme.SzBody);   // Classic: a group box caption (regular weight, as in 1995)
     private readonly Font _fName = Theme.UiFont(Theme.SzTitle, FontStyle.Bold);
     private readonly Font _fFig = Theme.UiFont(Theme.SzCaption, FontStyle.Bold);
     private readonly Font _fNote = Theme.UiFont(Theme.SzCaption);
@@ -200,7 +201,7 @@ internal sealed class StatsView : Panel
     {
         using (var b = new SolidBrush(Theme.PanelBg))
         using (var p = Theme.RoundedRect(r, Theme.RadCard)) g.FillPath(b, p);
-        if (Theme.Classic) Theme.EtchedFrame(g, r);   // on the grey face a tile is a group box, or it is nothing at all
+        int top = Theme.Classic ? ClassicGroup(g, r, s.Label) : r.Y;   // on the grey face a tile is a group box, or it is nothing at all
         // A figure is the point of the tile, so it SHRINKS to fit rather than being cut: "3 óra 27 perc" is
         // half again as long as "3 h 27 m", and an ellipsised number says nothing at all.
         int box = r.Width - 32;
@@ -211,11 +212,32 @@ internal sealed class StatsView : Panel
             fit = Theme.DisplayFont(Math.Max(12f, 21f * box / wNeed), FontStyle.Bold);
             f = fit;
         }
-        CrispText.DrawText(g, s.Value, f, new Rectangle(r.X + 16, r.Y + 11, box, 36), s.Accent ? Theme.AccentBright : Theme.TextCol,
+        // Classic: the label is the group box's caption, so the figure has the box to itself
+        var at = Theme.Classic ? new Rectangle(r.X + 16, top + 2, box, r.Bottom - top - 4) : new Rectangle(r.X + 16, r.Y + 11, box, 36);
+        CrispText.DrawText(g, s.Value, f, at, s.Accent ? Theme.AccentBright : Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         fit?.Dispose();
+        if (Theme.Classic) return;
         CrispText.DrawText(g, Theme.Caps(s.Label), _fLabel, new Rectangle(r.X + 16, r.Bottom - 30, r.Width - 32, 20), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+    }
+
+    /// <summary>
+    /// Classic: a 1995 group box round <paramref name="r"/> - the etched frame with the caption sitting ON its top line
+    /// and interrupting it, the way the Home page (HomeView.ClassicGroup) and Settings group theirs. Returns the y of
+    /// that top line.
+    /// </summary>
+    private int ClassicGroup(Graphics g, Rectangle r, string caption)
+    {
+        // measured and drawn with the SAME flags, or the caption comes out a few pixels short and ellipsised
+        var sz = TextRenderer.MeasureText(g, caption, _fGroup, new Size(int.MaxValue, LabelH), TextFormatFlags.NoPrefix);
+        int top = r.Y + sz.Height / 2;
+        Theme.EtchedFrame(g, new Rectangle(r.X, top, r.Width, r.Bottom - top));
+        var cap = new Rectangle(r.X + 4, r.Y, Math.Min(r.Width - 8, sz.Width + 2), sz.Height);
+        using (var face = new SolidBrush(Theme.Bg)) g.FillRectangle(face, cap);
+        CrispText.DrawText(g, caption, _fGroup, cap, Theme.TextCol,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        return top;
     }
 
     /// <summary>Draws one ranked list and returns its height (the caller decides only x and width).</summary>
@@ -227,9 +249,8 @@ internal sealed class StatsView : Panel
         var card = new Rectangle(r.X, r.Y, r.Width, h);
         using (var b = new SolidBrush(Theme.PanelBg))
         using (var p = Theme.RoundedRect(card, Theme.RadCard)) g.FillPath(b, p);
-        if (Theme.Classic) Theme.EtchedFrame(g, card);
-
-        CrispText.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
+        if (Theme.Classic) ClassicGroup(g, card, sec.Label);
+        else CrispText.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
         double max = 1;
@@ -320,7 +341,7 @@ internal sealed class StatsView : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _fBig.Dispose(); _fLabel.Dispose(); _fName.Dispose(); _fFig.Dispose(); _fNote.Dispose(); }
+        if (disposing) { _fBig.Dispose(); _fLabel.Dispose(); _fGroup.Dispose(); _fName.Dispose(); _fFig.Dispose(); _fNote.Dispose(); }
         base.Dispose(disposing);
     }
 }
