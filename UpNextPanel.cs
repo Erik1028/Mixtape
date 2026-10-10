@@ -107,18 +107,18 @@ internal sealed class UpNextPanel : Control
             if (_items.Count > 0)
             {
                 long ms = 0; foreach (var it in _items) ms += it.t.LengthMs;
-                TextRenderer.DrawText(g, SumLine(_items.Count, ms), _fClear, new Rectangle(Pad, 0, Width - 2 * Pad - 60, HeadH),
+                CrispText.DrawText(g, SumLine(_items.Count, ms), _fClear, new Rectangle(Pad, 0, Width - 2 * Pad - 60, HeadH),
                     Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }
         else
         {
-            TextRenderer.DrawText(g, Loc.T("Up Next"), _fHeader, new Rectangle(Pad, 0, Width - 2 * Pad - 80, HeadH),
+            CrispText.DrawText(g, Loc.T("Up Next"), _fHeader, new Rectangle(Pad, 0, Width - 2 * Pad - 80, HeadH),
                 Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             if (_items.Count > 0)
             {
                 var ts = TextRenderer.MeasureText(g, Loc.T("Up Next"), _fHeader);
-                TextRenderer.DrawText(g, _items.Count.ToString(), _fCount, new Rectangle(Pad + ts.Width + 7, 0, 40, HeadH),
+                CrispText.DrawText(g, _items.Count.ToString(), _fCount, new Rectangle(Pad + ts.Width + 7, 0, 40, HeadH),
                     Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             }
         }
@@ -126,7 +126,7 @@ internal sealed class UpNextPanel : Control
         {
             if (Theme.Classic) Theme.FaceBevel(g, ClearRect, raised: true);   // Classic: "Clear" is a push button
             else if (_hoverClear) { using var hb = new SolidBrush(Theme.RowHover); using var hp = Theme.RoundedRect(ClearRect, Theme.RadControl); g.FillPath(hb, hp); }
-            TextRenderer.DrawText(g, Loc.T("Clear"), _fClear, ClearRect, Theme.Classic || _hoverClear ? Theme.TextCol : Theme.Subtle,
+            CrispText.DrawText(g, Loc.T("Clear"), _fClear, ClearRect, Theme.Classic || _hoverClear ? Theme.TextCol : Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
         if (!_docked) DrawX(g, CloseRect, _hoverClose);
@@ -140,11 +140,11 @@ internal sealed class UpNextPanel : Control
             int cy = HeadH + (NowH - Art) / 2;
             DrawArt(g, _nowArt, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad;
-            TextRenderer.DrawText(g, Theme.Classic ? Loc.T("Now Playing") : Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeadH + 8, tw, 12), Theme.Accent,
+            CrispText.DrawText(g, Theme.Classic ? Loc.T("Now Playing") : Loc.T("NOW PLAYING"), _fNowLbl, new Rectangle(tx, HeadH + 8, tw, 12), Theme.Accent,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, _now.DisplayTitle, _fNowTitle, new Rectangle(tx, HeadH + 20, tw, 18), Theme.TextCol,
+            CrispText.DrawText(g, _now.DisplayTitle, _fNowTitle, new Rectangle(tx, HeadH + 20, tw, 18), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, _now.Artist ?? "", _fArtist, new Rectangle(tx, HeadH + 37, tw, 15), Theme.Subtle,
+            CrispText.DrawText(g, _now.Artist ?? "", _fArtist, new Rectangle(tx, HeadH + 37, tw, 15), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, Pad, HeadH + NowH - 1, Width - Pad, HeadH + NowH - 1);
         }
@@ -156,7 +156,7 @@ internal sealed class UpNextPanel : Control
         if (_items.Count == 0)
         {
             string msg = Loc.T("Nothing queued.\nRight-click songs → “Add to queue”.");
-            TextRenderer.DrawText(g, msg, _fEmpty, new Rectangle(Pad, ListTop + 8, Width - 2 * Pad, 60), Theme.Faint,
+            CrispText.DrawText(g, msg, _fEmpty, new Rectangle(Pad, ListTop + 8, Width - 2 * Pad, 60), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak);
         }
         for (int i = 0; i < _items.Count; i++)
@@ -169,9 +169,9 @@ internal sealed class UpNextPanel : Control
             DrawArt(g, _items[i].art, new Rectangle(Pad, cy, Art, Art));
             int tx = Pad + Art + 11, tw = Width - tx - Pad - (hovered ? 24 : 0);
             var t = _items[i].t;
-            TextRenderer.DrawText(g, t.DisplayTitle, _fItemTitle, new Rectangle(tx, top + 7, tw, 17), Theme.TextCol,
+            CrispText.DrawText(g, t.DisplayTitle, _fItemTitle, new Rectangle(tx, top + 7, tw, 17), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, t.Artist ?? "", _fArtist, new Rectangle(tx, top + 24, tw, 15), Theme.Subtle,
+            CrispText.DrawText(g, t.Artist ?? "", _fArtist, new Rectangle(tx, top + 24, tw, 15), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             if (hovered) DrawX(g, RemoveRect(top), _hoverRemove);
         }
@@ -204,7 +204,7 @@ internal sealed class UpNextPanel : Control
         if (_hint is not null && _items.Count > 0)
         {
             using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, Pad, Height - 26, Width - Pad, Height - 26);
-            TextRenderer.DrawText(g, _hint, _fHint, new Rectangle(Pad, Height - 25, Width - 2 * Pad, 24), Theme.Faint,
+            CrispText.DrawText(g, _hint, _fHint, new Rectangle(Pad, Height - 25, Width - 2 * Pad, 24), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
     }

@@ -71,12 +71,12 @@ internal static class Poster
             int subH = TextRenderer.MeasureText(subtitle, fSub, new Size(tw, 60), TextFormatFlags.NoPrefix).Height;
             int blockH = titleH + 26 + 5 + 22 + subH;
             int top = Pad + Math.Max(0, (Art - blockH) / 2);
-            TextRenderer.DrawText(g, title, fTitle, new Rectangle(tx, top, tw, titleH), Theme.TextCol,
+            CrispText.DrawText(g, title, fTitle, new Rectangle(tx, top, tw, titleH), Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             using (var rule = new SolidBrush(Theme.Blend(tint, Color.White, 0.10)))
             using (var rp = Theme.RoundedRect(new Rectangle(tx, top + titleH + 26, 96, 5), 2.5f))
                 g.FillPath(rule, rp);
-            TextRenderer.DrawText(g, subtitle, fSub, new Rectangle(tx, top + titleH + 26 + 5 + 22, tw, subH + 6), Theme.Subtle,
+            CrispText.DrawText(g, subtitle, fSub, new Rectangle(tx, top + titleH + 26 + 5 + 22, tw, subH + 6), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         }
 
@@ -91,19 +91,19 @@ internal static class Poster
                 int col = twoCol && i >= rows ? 1 : 0;
                 int row = twoCol ? i - col * rows : i;
                 int x = Pad + col * (colW + 44), y = listTop + row * RowH;
-                TextRenderer.DrawText(g, (i + 1).ToString(), fNum, new Rectangle(x, y, 34, RowH - 6), Theme.Faint,
+                CrispText.DrawText(g, (i + 1).ToString(), fNum, new Rectangle(x, y, 34, RowH - 6), Theme.Faint,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 int nameW = TextRenderer.MeasureText(songs[i].Title, fName, new Size(int.MaxValue, RowH), TextFormatFlags.NoPrefix).Width;
                 int room = colW - 48;
                 int useName = Math.Min(nameW, songs[i].Artist.Length > 0 ? (int)(room * 0.62) : room);
-                TextRenderer.DrawText(g, songs[i].Title, fName, new Rectangle(x + 48, y, useName, RowH - 6), Theme.TextCol,
+                CrispText.DrawText(g, songs[i].Title, fName, new Rectangle(x + 48, y, useName, RowH - 6), Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
                 if (songs[i].Artist.Length > 0)
-                    TextRenderer.DrawText(g, songs[i].Artist, fArtist, new Rectangle(x + 48 + useName + 14, y, room - useName - 14, RowH - 6), Theme.Faint,
+                    CrispText.DrawText(g, songs[i].Artist, fArtist, new Rectangle(x + 48 + useName + 14, y, room - useName - 14, RowH - 6), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             }
             if (more > 0)
-                TextRenderer.DrawText(g, Loc.T("+ {0} more", more), fArtist, new Rectangle(Pad + 48, listTop + rows * RowH + 6, W - 2 * Pad, 32), Theme.Faint,
+                CrispText.DrawText(g, Loc.T("+ {0} more", more), fArtist, new Rectangle(Pad + 48, listTop + rows * RowH + 6, W - 2 * Pad, 32), Theme.Faint,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
@@ -111,10 +111,10 @@ internal static class Poster
         using (var logo = CoverArt.AppLogo())   // the app's own tile, already in the accent's hue
             g.DrawImage(logo, Pad, h - 76, 40, 40);
         using (var fFoot = Theme.UiFont(14f, FontStyle.Bold))
-            TextRenderer.DrawText(g, "Mixtape", fFoot, new Rectangle(Pad + 52, h - 76, 300, 40), Theme.Subtle,
+            CrispText.DrawText(g, "Mixtape", fFoot, new Rectangle(Pad + 52, h - 76, 300, 40), Theme.Subtle,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         using (var fFoot2 = Theme.UiFont(13f))
-            TextRenderer.DrawText(g, footer, fFoot2, new Rectangle(W - Pad - 500, h - 76, 500, 40), Theme.Faint,
+            CrispText.DrawText(g, footer, fFoot2, new Rectangle(W - Pad - 500, h - 76, 500, 40), Theme.Faint,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         return bmp;
     }

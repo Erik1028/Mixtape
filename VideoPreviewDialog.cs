@@ -157,13 +157,13 @@ internal sealed class VideoPreviewDialog : Form
                 else { float ss = 5.5f; g.FillPolygon(p, new[] { new PointF(c.X - ss + 1.2f, c.Y - ss), new PointF(c.X - ss + 1.2f, c.Y + ss), new PointF(c.X + ss + 1.2f, c.Y) }); }
             }
 
-            TextRenderer.DrawText(g, Fmt(_pos), _fTime, new Rectangle(50, 0, 44, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            CrispText.DrawText(g, Fmt(_pos), _fTime, new Rectangle(50, 0, 44, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             var t = SeekTrack;
             using (var tb = new SolidBrush(Theme.Blend(Theme.PanelBg, Color.Black, 0.1))) { using var tp = Theme.RoundedRect(t, 2); g.FillPath(tb, tp); }
             int fw = (int)Math.Round(t.Width * _frac);
             if (fw > 0) using (var fb = new SolidBrush(Theme.Accent)) { using var fp = Theme.RoundedRect(new Rectangle(t.X, t.Y, fw, t.Height), 2); g.FillPath(fb, fp); }
             using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, t.X + fw - 5, t.Y + t.Height / 2 - 5, 10, 10);
-            TextRenderer.DrawText(g, Fmt(_dur), _fTime, new Rectangle(t.Right + 8, 0, 48, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            CrispText.DrawText(g, Fmt(_dur), _fTime, new Rectangle(t.Right + 8, 0, 48, H), Theme.Faint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 
         private static string Fmt(double sec)

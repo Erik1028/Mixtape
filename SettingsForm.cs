@@ -452,7 +452,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     {
         // Align the heading text with the card label column (card.Left + the card's internal labelLeft)
         // so the page title and every row title share one left edge.
-        _paneBody.Controls.Add(new Label { Text = text, Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Left = ContentLeft + 18, Top = _y, Width = CardW, Height = 34, TextAlign = ContentAlignment.MiddleLeft });
+        _paneBody.Controls.Add(new CrispLabel { Text = text, Font = Theme.DisplayFont(17f, FontStyle.Bold), ForeColor = Theme.TextCol, AutoSize = false, Left = ContentLeft + 18, Top = _y, Width = CardW, Height = 34, TextAlign = ContentAlignment.MiddleLeft });
         _y += 44;
     }
 

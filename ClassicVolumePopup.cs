@@ -33,7 +33,7 @@ internal sealed class ClassicVolumePopup : FlyoutForm
         var g = e.Graphics;
         g.Clear(Theme.Face);
         base.OnPaint(e);   // the raised edge of a 1995 popup
-        TextRenderer.DrawText(g, Loc.T("Volume"), _font, new Rectangle(0, 9, ClientSize.Width, 16), Theme.TextCol,
+        CrispText.DrawText(g, Loc.T("Volume"), _font, new Rectangle(0, 9, ClientSize.Width, 16), Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
         var t = TrackRect;
         using (var k = new Pen(Theme.FaceDark))
@@ -44,7 +44,7 @@ internal sealed class ClassicVolumePopup : FlyoutForm
             }
         Theme.ClassicTrackbar(g, t, _level(), vertical: true);
         Theme.ClassicCheckBox(g, MuteBox, _muted());
-        TextRenderer.DrawText(g, Loc.T("Mute"), _font, Rectangle.FromLTRB(MuteBox.Right + 5, MuteBox.Y - 2, ClientSize.Width - 4, MuteBox.Bottom + 2), Theme.TextCol,
+        CrispText.DrawText(g, Loc.T("Mute"), _font, Rectangle.FromLTRB(MuteBox.Right + 5, MuteBox.Y - 2, ClientSize.Width - 4, MuteBox.Bottom + 2), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 

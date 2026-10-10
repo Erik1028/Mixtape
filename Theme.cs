@@ -91,10 +91,10 @@ internal static class Theme
         {
             int tw = Math.Min(cover.Width, TextRenderer.MeasureText(g, title, fTitle, new Size(int.MaxValue, 18), flags | TextFormatFlags.NoPadding).Width + 6);
             using (var nb = new SolidBrush(ClassicNavy)) g.FillRectangle(nb, tr.X - 2, tr.Y + 1, tw, tr.Height - 2);
-            TextRenderer.DrawText(g, title, fTitle, new Rectangle(tr.X, tr.Y, cover.Width, tr.Height), Color.White, flags);
+            CrispText.DrawText(g, title, fTitle, new Rectangle(tr.X, tr.Y, cover.Width, tr.Height), Color.White, flags);
         }
-        else TextRenderer.DrawText(g, title, fTitle, tr, TextCol, flags);
-        TextRenderer.DrawText(g, subtitle, fSub, new Rectangle(cover.X, cover.Bottom + 24, cover.Width, 16), Subtle, flags);
+        else CrispText.DrawText(g, title, fTitle, tr, TextCol, flags);
+        CrispText.DrawText(g, subtitle, fSub, new Rectangle(cover.X, cover.Bottom + 24, cover.Width, 16), Subtle, flags);
     }
 
     /// <summary>A 32 x 32 category icon for a page header (a copy the caller owns), in the Classic skin.</summary>
@@ -267,7 +267,7 @@ internal static class Theme
         Bevel(g, client, raised: true);
         var cap = new Rectangle(client.X + 3, client.Y + 3, Math.Max(0, client.Width - 6), ClassicCaptionH);
         using (var nb = new SolidBrush(ClassicNavy)) g.FillRectangle(nb, cap);
-        TextRenderer.DrawText(g, title, font, new Rectangle(cap.X + 4, cap.Y, Math.Max(0, cap.Width - 26), cap.Height), Color.White,
+        CrispText.DrawText(g, title, font, new Rectangle(cap.X + 4, cap.Y, Math.Max(0, cap.Width - 26), cap.Height), Color.White,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         g.SmoothingMode = sm;
         return cap;
@@ -995,10 +995,10 @@ internal static class Theme
         using var ft = UiFont(SzBody);
         using var fh = UiFont(SzCaption);
         int w = Math.Min(area.Width - 24, 320);
-        TextRenderer.DrawText(g, title, ft, new Rectangle(cx - w / 2, cy - 8, w, 44), TextCol,
+        CrispText.DrawText(g, title, ft, new Rectangle(cx - w / 2, cy - 8, w, 44), TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
         if (!string.IsNullOrEmpty(hint))
-            TextRenderer.DrawText(g, hint, fh, new Rectangle(cx - w / 2, cy + 40, w, 40), Subtle,
+            CrispText.DrawText(g, hint, fh, new Rectangle(cx - w / 2, cy + 40, w, 40), Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
     }
 
@@ -1181,7 +1181,7 @@ internal sealed class ThemedButton : Button
             if (h > 0.001f) { using var hb = new SolidBrush(Color.FromArgb((int)(h * 255), Theme.RowHover)); g.FillPath(hb, path); }
             Color ic = disabled ? Theme.Faint : Theme.Blend(Color.FromArgb(205, 210, 214), Theme.TextCol, h);
             if (Icon != Ico.None) DrawIcon(g, r, Icon, ic);
-            else TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, textRect, ic,
+            else CrispText.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, textRect, ic,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
@@ -1218,7 +1218,7 @@ internal sealed class ThemedButton : Button
         if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, text); return; }   // narrow header: icon only, no label
 
         string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
-        TextRenderer.DrawText(g, label, Font, textRect, text,
+        CrispText.DrawText(g, label, Font, textRect, text,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
@@ -1242,7 +1242,7 @@ internal sealed class ThemedButton : Button
             if (held) gr.Offset(1, 1);
             Color gi = disabled ? Theme.FaceShadow : Theme.TextCol;
             if (Icon != Ico.None) { g.SmoothingMode = SmoothingMode.AntiAlias; DrawIcon(g, gr, Icon, gi); }
-            else TextRenderer.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, gr, gi, flags);
+            else CrispText.DrawText(g, string.IsNullOrEmpty(Glyph) ? Text : Glyph, Font, gr, gi, flags);
             return;
         }
 
@@ -1262,11 +1262,11 @@ internal sealed class ThemedButton : Button
         string label = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
         if (disabled)
         {
-            TextRenderer.DrawText(g, label, Font, new Rectangle(tr.X + 1, tr.Y + 1, tr.Width, tr.Height), Theme.FaceHi, flags);
-            TextRenderer.DrawText(g, label, Font, tr, Theme.FaceShadow, flags);
+            CrispText.DrawText(g, label, Font, new Rectangle(tr.X + 1, tr.Y + 1, tr.Width, tr.Height), Theme.FaceHi, flags);
+            CrispText.DrawText(g, label, Font, tr, Theme.FaceShadow, flags);
             return;
         }
-        TextRenderer.DrawText(g, label, Font, tr, Danger ? Theme.ErrorCol : Theme.TextCol, flags);
+        CrispText.DrawText(g, label, Font, tr, Danger ? Theme.ErrorCol : Theme.TextCol, flags);
     }
 
     /// <summary>Crisp, perfectly-centred vector icon (symbol-font glyphs sit off-centre at this size).</summary>

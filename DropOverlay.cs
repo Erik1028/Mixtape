@@ -39,7 +39,7 @@ internal sealed class DropOverlay : Panel
         if (cw < 160 || ch < 120)
         {
             // Tiny viewport — just a centred label.
-            TextRenderer.DrawText(g, _caption, _fTiny, ClientRectangle, Theme.TextCol,
+            CrispText.DrawText(g, _caption, _fTiny, ClientRectangle, Theme.TextCol,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
@@ -65,10 +65,10 @@ internal sealed class DropOverlay : Panel
         }
 
         var title = new Rectangle(card.Left + 12, cy + rad + 10, card.Width - 24, 30);
-        TextRenderer.DrawText(g, _caption, _fTitle, title, Theme.TextCol,
+        CrispText.DrawText(g, _caption, _fTitle, title, Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         var sub = new Rectangle(card.Left + 12, title.Bottom + 2, card.Width - 24, 22);
-        TextRenderer.DrawText(g, Loc.T("Release to add them"), _fSub, sub, Theme.Subtle,
+        CrispText.DrawText(g, Loc.T("Release to add them"), _fSub, sub, Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
     }
 

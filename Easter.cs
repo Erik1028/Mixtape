@@ -144,7 +144,7 @@ internal sealed class BrickDialog : CardDialog
         ClientSize = new Size(_game.Width + 40, _game.Height + 20 + 36);
         _game.Location = new Point(20, 16);
         Controls.Add(_game);
-        var hint = new Label
+        var hint = new CrispLabel
         {
             Text = Loc.T("Wheel or arrow keys: paddle   ·   click or Space: centre button"),
             AutoSize = false, TextAlign = ContentAlignment.MiddleCenter,
@@ -589,8 +589,8 @@ internal sealed class CreditsRoll : Control
                 if (c95)   // a black outline all round: white type stays readable over white cloud
                     for (int ox = -1; ox <= 1; ox++)
                         for (int oy = -1; oy <= 1; oy++)
-                            if (ox != 0 || oy != 0) TextRenderer.DrawText(g, s, _fonts[kind], new Rectangle(r.X + ox, r.Y + oy, r.Width, r.Height), Color.Black, F);
-                TextRenderer.DrawText(g, s, _fonts[kind], r, col, F);
+                            if (ox != 0 || oy != 0) CrispText.DrawText(g, s, _fonts[kind], new Rectangle(r.X + ox, r.Y + oy, r.Width, r.Height), Color.Black, F);
+                CrispText.DrawText(g, s, _fonts[kind], r, col, F);
             }
             y += h;
         }

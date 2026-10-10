@@ -90,7 +90,7 @@ internal sealed class CapacityBar : Control
             int entryW = 13 + sz.Width + 18;
             if (lx > 0 && lx + entryW > Width) { lx = 0; ly += lineH + 5; } // wrap
             using (var b = new SolidBrush(s.Color)) g.FillEllipse(b, lx, ly + (lineH - 9) / 2, 9, 9);
-            TextRenderer.DrawText(g, text, f, new Rectangle(lx + 13, ly, sz.Width, lineH), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.Top);
+            CrispText.DrawText(g, text, f, new Rectangle(lx + 13, ly, sz.Width, lineH), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.Top);
             lx += entryW;
         }
     }

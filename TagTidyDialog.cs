@@ -117,7 +117,7 @@ internal sealed class TagTidyDialog : CardDialog
 
             if (_g.Count == 0)
             {
-                TextRenderer.DrawText(g, Loc.T("Nothing to tidy — the tags are consistent."), _fFrom, new Rectangle(16, 0, Width - 32, Height), Theme.Faint,
+                CrispText.DrawText(g, Loc.T("Nothing to tidy — the tags are consistent."), _fFrom, new Rectangle(16, 0, Width - 32, Height), Theme.Faint,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 return;
             }
@@ -138,20 +138,20 @@ internal sealed class TagTidyDialog : CardDialog
                 DrawTick(g, new Rectangle(row.X + 10, row.Y + (row.Height - 18) / 2, 18, 18), _on[i]);
 
                 var gr = _g[i];
-                TextRenderer.DrawText(g, Theme.Caps(TagTidy.Label(gr.What)), _fField, new Rectangle(row.X + 38, row.Y, 84, row.Height), Theme.Faint,
+                CrispText.DrawText(g, Theme.Caps(TagTidy.Label(gr.What)), _fField, new Rectangle(row.X + 38, row.Y, 84, row.Height), Theme.Faint,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
                 int x = row.X + 126, right = row.Right - 56;
                 int half = Math.Max(40, (right - x - 26) / 2);
                 string from = gr.Spacing ? "“" + gr.From + "”" : gr.From;
                 string to = gr.Spacing ? "“" + gr.To + "”" : gr.To;
-                TextRenderer.DrawText(g, from, _fFrom, new Rectangle(x, row.Y, half, row.Height), Theme.Subtle,
+                CrispText.DrawText(g, from, _fFrom, new Rectangle(x, row.Y, half, row.Height), Theme.Subtle,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, "→", _fFrom, new Rectangle(x + half + 2, row.Y, 22, row.Height), Theme.Faint,
+                CrispText.DrawText(g, "→", _fFrom, new Rectangle(x + half + 2, row.Y, 22, row.Height), Theme.Faint,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-                TextRenderer.DrawText(g, to, _fTo, new Rectangle(x + half + 26, row.Y, right - x - half - 26, row.Height), Theme.TextCol,
+                CrispText.DrawText(g, to, _fTo, new Rectangle(x + half + 26, row.Y, right - x - half - 26, row.Height), Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, gr.Tracks.Count.ToString(), _fCount, new Rectangle(row.Right - 48, row.Y, 36, row.Height), Theme.Faint,
+                CrispText.DrawText(g, gr.Tracks.Count.ToString(), _fCount, new Rectangle(row.Right - 48, row.Y, 36, row.Height), Theme.Faint,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
             g.Clip = clip;

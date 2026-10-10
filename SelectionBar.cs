@@ -130,7 +130,7 @@ internal sealed class SelectionBar : Control
         using (var fp = Theme.RoundedRect(pill, H / 2f)) g.FillPath(fill, fp);
         using (var line = new Pen(Color.FromArgb(44, 255, 255, 255)))
         using (var lp = Theme.RoundedRect(pill, H / 2f)) g.DrawPath(line, lp);
-        TextRenderer.DrawText(g, _label, _fLabel, new Rectangle(Pad, 0, _labelW + 4, H), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, _label, _fLabel, new Rectangle(Pad, 0, _labelW + 4, H), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         g.SmoothingMode = SmoothingMode.None;
         using (var dv = new Pen(Color.FromArgb(30, 255, 255, 255))) g.DrawLine(dv, _divX, H / 2 - 9, _divX, H / 2 + 8);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -149,7 +149,7 @@ internal sealed class SelectionBar : Control
         g.SmoothingMode = SmoothingMode.None;
         var r = new Rectangle(0, 0, Width, H);
         Theme.FaceBevel(g, r, raised: true);
-        TextRenderer.DrawText(g, _label, _fLabel, new Rectangle(Pad, 0, _labelW + 4, H), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, _label, _fLabel, new Rectangle(Pad, 0, _labelW + 4, H), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         using (var sh = new Pen(Theme.FaceShadow)) g.DrawLine(sh, _divX, H / 2 - 9, _divX, H / 2 + 8);
         using (var hi = new Pen(Theme.FaceHi)) g.DrawLine(hi, _divX + 1, H / 2 - 9, _divX + 1, H / 2 + 8);
         var cr = CloseRect;

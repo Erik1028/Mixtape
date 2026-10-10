@@ -42,7 +42,7 @@ internal sealed class LibraryDoctorDialog : CardDialog
         string summary = _r.Clean
             ? Loc.T("Scanned {0} — everything looks healthy.", scanned)
             : Loc.T("Scanned {0}. Tick what you'd like Mixtape to tidy up:", scanned);
-        Controls.Add(new Label
+        Controls.Add(new CrispLabel
         {
             Text = summary, Font = Theme.UiFont(9.5f), ForeColor = Theme.Subtle,
             AutoSize = false, Left = Pad + 2, Top = y, Width = CardW, Height = 20, TextAlign = ContentAlignment.MiddleLeft,
@@ -103,7 +103,7 @@ internal sealed class LibraryDoctorDialog : CardDialog
                 if (_r.AlbumGaps > 0) info.AddInfoRow(Loc.T("Possibly incomplete albums"), Loc.T("{0} album(s) with a track-number gap", _r.AlbumGaps));
                 info.Finish(); Controls.Add(info); y += info.Height + 6;
 
-                Controls.Add(new Label
+                Controls.Add(new CrispLabel
                 {
                     Text = Loc.T("These are shown for awareness — fix them with the upcoming tag editor."),
                     Font = Theme.UiFont(8.5f), ForeColor = Theme.Faint,

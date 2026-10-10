@@ -667,7 +667,7 @@ internal sealed class GlassLabel : Label
             using var b = new SolidBrush(bg);
             g.FillRectangle(b, ClientRectangle);
         }
-        TextRenderer.DrawText(g, Text, Font, ClientRectangle, ForeColor, AlignFlags(TextAlign));
+        CrispText.DrawText(g, Text, Font, ClientRectangle, ForeColor, AlignFlags(TextAlign));
     }
 
     private static TextFormatFlags AlignFlags(ContentAlignment a) => a switch

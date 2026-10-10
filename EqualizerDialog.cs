@@ -64,7 +64,7 @@ internal sealed class EqBandsControl : Control
             {
                 int bx = X0 + i * w + w / 2;
                 Theme.ClassicTrackbar(g, new Rectangle(bx - 10, ta.Top, 21, ta.Height), (_gains[i] / Range + 1f) / 2f, vertical: true);
-                TextRenderer.DrawText(g, Labels[i], _fLabel, new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.TextCol,
+                CrispText.DrawText(g, Labels[i], _fLabel, new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.TextCol,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
             }
             return;
@@ -80,7 +80,7 @@ internal sealed class EqBandsControl : Control
             using (var fp = new Pen(Theme.Accent, 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 g.DrawLine(fp, cx, midY, cx, ky);
             using (var kb = new SolidBrush(Color.White)) g.FillEllipse(kb, cx - 6, ky - 6, 12, 12);
-            TextRenderer.DrawText(g, Labels[i], _fLabel, new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.Subtle,
+            CrispText.DrawText(g, Labels[i], _fLabel, new Rectangle(X0 + i * w, Height - 20, w, 18), Theme.Subtle,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
         }
     }

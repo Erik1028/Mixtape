@@ -20,7 +20,7 @@ internal static class PromptDialog
         };
 
         var lbl = new GlassLabel { Text = prompt, AutoSize = true, ForeColor = Theme.Subtle, Location = new Point(22, 18) };
-        var tb = new TextBox
+        var tb = new CrispTextBox
         {
             Text = initial,
             Location = new Point(22, 44),

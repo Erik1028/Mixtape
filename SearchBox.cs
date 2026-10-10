@@ -16,7 +16,7 @@ internal sealed class SearchBox : Panel
         BackColor = Theme.Bg;
         Height = 34;
 
-        _tb = new TextBox
+        _tb = new CrispTextBox
         {
             BorderStyle = BorderStyle.None,
             BackColor = FieldBg,

@@ -106,7 +106,7 @@ internal sealed class IdentifyDialog : CardDialog
 
             if (_c.Count == 0)
             {
-                TextRenderer.DrawText(g, Loc.T("No match"), _fSub, new Rectangle(16, 0, Width - 32, Height), Theme.Faint,
+                CrispText.DrawText(g, Loc.T("No match"), _fSub, new Rectangle(16, 0, Width - 32, Height), Theme.Faint,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 return;
             }
@@ -133,14 +133,14 @@ internal sealed class IdentifyDialog : CardDialog
                 }
                 var c = _c[i];
                 bool inv = sel && Theme.Classic;   // white on the navy band
-                TextRenderer.DrawText(g, c.Artist + "  —  " + c.Title, _fTitle, new Rectangle(row.X + 16, row.Y + 3, row.Width - 130, 18), inv ? Color.White : Theme.TextCol,
+                CrispText.DrawText(g, c.Artist + "  —  " + c.Title, _fTitle, new Rectangle(row.X + 16, row.Y + 3, row.Width - 130, 18), inv ? Color.White : Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, c.Album.Length > 0 ? c.Album : Loc.T("(no album)"), _fSub, new Rectangle(row.X + 16, row.Y + 19, row.Width - 130, 16), inv ? Color.FromArgb(206, 206, 206) : Theme.Faint,
+                CrispText.DrawText(g, c.Album.Length > 0 ? c.Album : Loc.T("(no album)"), _fSub, new Rectangle(row.X + 16, row.Y + 19, row.Width - 130, 16), inv ? Color.FromArgb(206, 206, 206) : Theme.Faint,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, NowPlayingBar.Fmt(c.Seconds), _fTitle, new Rectangle(row.Right - 110, row.Y + 3, 92, 18), inv ? Color.White : Theme.Subtle,
+                CrispText.DrawText(g, NowPlayingBar.Fmt(c.Seconds), _fTitle, new Rectangle(row.Right - 110, row.Y + 3, 92, 18), inv ? Color.White : Theme.Subtle,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 if (c.Delta > 0.9)
-                    TextRenderer.DrawText(g, (c.Delta < 60 ? $"±{c.Delta:0} s" : "±" + NowPlayingBar.Fmt(c.Delta)), _fSub, new Rectangle(row.Right - 110, row.Y + 19, 92, 16),
+                    CrispText.DrawText(g, (c.Delta < 60 ? $"±{c.Delta:0} s" : "±" + NowPlayingBar.Fmt(c.Delta)), _fSub, new Rectangle(row.Right - 110, row.Y + 19, 92, 16),
                         inv ? Color.FromArgb(206, 206, 206) : c.Delta <= 10 ? Theme.Faint : Theme.Blend(Theme.Faint, Color.Red, 0.35),   // a few seconds apart is the same recording; a minute is not
                         TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }

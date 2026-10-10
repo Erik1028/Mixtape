@@ -611,8 +611,8 @@ internal sealed class LyricsStage : Control
         double dur = _duration.TotalSeconds, pos = Math.Clamp((_reported + (_playing ? _since.Elapsed : TimeSpan.Zero)).TotalSeconds, 0, Math.Max(0, dur));
         // TextRenderer skips the Graphics translation (the stage rises into place) unless it is asked to keep it
         const TextFormatFlags tf = TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsTranslateTransform;
-        TextRenderer.DrawText(g, Fmt(pos), _fPanel, new Rectangle(s.X, s.Y - 21, 90, 16), Theme.TextCol, tf | TextFormatFlags.Left);
-        if (dur > 0) TextRenderer.DrawText(g, "-" + Fmt(dur - pos), _fPanel, new Rectangle(s.Right - 90, s.Y - 21, 90, 16), Theme.TextCol, tf | TextFormatFlags.Right);
+        CrispText.DrawText(g, Fmt(pos), _fPanel, new Rectangle(s.X, s.Y - 21, 90, 16), Theme.TextCol, tf | TextFormatFlags.Left);
+        if (dur > 0) CrispText.DrawText(g, "-" + Fmt(dur - pos), _fPanel, new Rectangle(s.Right - 90, s.Y - 21, 90, 16), Theme.TextCol, tf | TextFormatFlags.Right);
         NowPlayingBar.DrawClassicSlider(g, new Rectangle(s.X, s.Y + s.Height / 2 - 6, s.Width, 12), dur > 0 ? pos / dur : 0, knob: true);
 
         NowPlayingBar.DrawCircleGlyph(g, PrevRect, _hot == Hit.Prev, NowPlayingBar.GlyphPrevL, dim: false);

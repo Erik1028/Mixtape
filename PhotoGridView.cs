@@ -227,7 +227,7 @@ internal sealed class PhotoGridView : Panel
         _hit.Clear();
         if (_tiles.Count == 0)
         {
-            TextRenderer.DrawText(g, _empty, _fEmpty, new Rectangle(0, 0, Width, Height), Theme.Faint,
+            CrispText.DrawText(g, _empty, _fEmpty, new Rectangle(0, 0, Width, Height), Theme.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }

@@ -278,7 +278,7 @@ internal sealed class HomeView : Panel
     private void DrawLabel(Graphics g, int x, int y, int w, string text)
     {
         if (Theme.Classic) return;   // Classic: the caption rides the group box's frame instead (ClassicGroup)
-        TextRenderer.DrawText(g, Theme.Caps(text), _fLabel, new Rectangle(x, y, w, LabelH), Theme.Faint,
+        CrispText.DrawText(g, Theme.Caps(text), _fLabel, new Rectangle(x, y, w, LabelH), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
@@ -296,7 +296,7 @@ internal sealed class HomeView : Panel
         var sz = TextRenderer.MeasureText(g, caption, _fGroup, new Size(int.MaxValue, LabelH), TextFormatFlags.NoPrefix);
         var cap = new Rectangle(x - 4, top - sz.Height / 2, Math.Min(w - 4, sz.Width + 2), sz.Height);
         using (var face = new SolidBrush(Theme.Bg)) g.FillRectangle(face, cap);
-        TextRenderer.DrawText(g, caption, _fGroup, cap, Theme.TextCol,
+        CrispText.DrawText(g, caption, _fGroup, cap, Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
@@ -352,8 +352,8 @@ internal sealed class HomeView : Panel
         }
         if (lift > 0.01f) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb((int)(36 * lift), 255, 255, 255)); g.FillPath(hb, hp); }
         using (var bp = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.08))) { using var p2 = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cr); g.DrawPath(bp, p2); }
-        TextRenderer.DrawText(g, t.Title, _fTitle, new Rectangle(x, y + cw + 6, cw, 18), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        TextRenderer.DrawText(g, t.Subtitle, _fSub, new Rectangle(x, y + cw + 24, cw, 16), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, t.Title, _fTitle, new Rectangle(x, y + cw + 6, cw, 18), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        CrispText.DrawText(g, t.Subtitle, _fSub, new Rectangle(x, y + cw + 24, cw, 16), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
     /// <summary>"Continue listening": the song that was playing when Mixtape closed, where it was.</summary>
@@ -377,7 +377,7 @@ internal sealed class HomeView : Panel
         NowPlayingBar.DrawCoverTile(g, art, false, r.Cover, null, 1f, Theme.StableHash(r.Title));
         int btnW = Math.Max(96, _resumeBtn.NeededWidth + 12);
         int tx = art.Right + 14, tw = card.Right - 12 - btnW - tx;
-        TextRenderer.DrawText(g, r.Title, _fCardTitle, new Rectangle(tx, card.Y + 13, tw, 20), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+        CrispText.DrawText(g, r.Title, _fCardTitle, new Rectangle(tx, card.Y + 13, tw, 20), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
         int timesW = r.Times.Length > 0 ? TextRenderer.MeasureText(r.Times, _fSub, new Size(200, 18), TextFormatFlags.NoPrefix).Width + 4 : 0;   // the position never gets cut: it has its own slot
         int subW = Math.Max(0, tw - timesW - 12);
         // "Artist  •  Album" with no room for the album read as "Tom Petty  •  ..." — the album is DROPPED
@@ -385,8 +385,8 @@ internal sealed class HomeView : Panel
         string sub = r.Sub;
         if (TextRenderer.MeasureText(sub, _fSub, new Size(int.MaxValue, 18), TextFormatFlags.NoPrefix).Width > subW
             && sub.IndexOf("  •  ", StringComparison.Ordinal) is int sep && sep > 0) sub = sub[..sep];
-        TextRenderer.DrawText(g, sub, _fSub, new Rectangle(tx, card.Y + 37, subW, 18), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
-        if (timesW > 0) TextRenderer.DrawText(g, r.Times, _fSub, new Rectangle(tx + tw - timesW, card.Y + 37, timesW, 18), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+        CrispText.DrawText(g, sub, _fSub, new Rectangle(tx, card.Y + 37, subW, 18), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+        if (timesW > 0) CrispText.DrawText(g, r.Times, _fSub, new Rectangle(tx + tw - timesW, card.Y + 37, timesW, 18), Theme.Faint, TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
         _resumeBtn.Visible = true;
         _resumeBtn.SetBounds(card.Right - 12 - btnW, card.Y + (CardH - 30) / 2, btnW, 30);
         ClassicGroup(g, x, y, w, card.Bottom, Loc.T("Continue listening"));
@@ -414,11 +414,11 @@ internal sealed class HomeView : Panel
             int textW = w - figW;
             int titleW = TextRenderer.MeasureText(row.Title, _fRow, new Size(int.MaxValue, RowH), TextFormatFlags.NoPrefix).Width;
             int titleMax = Math.Min(titleW, (int)(textW * 0.62));
-            TextRenderer.DrawText(g, row.Title, _fRow, new Rectangle(rect.X, rect.Y, titleMax, RowH), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            CrispText.DrawText(g, row.Title, _fRow, new Rectangle(rect.X, rect.Y, titleMax, RowH), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             if (row.Sub.Length > 0)
-                TextRenderer.DrawText(g, row.Sub, _fSub, new Rectangle(rect.X + titleMax + 10, rect.Y, Math.Max(0, textW - titleMax - 10), RowH), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                CrispText.DrawText(g, row.Sub, _fSub, new Rectangle(rect.X + titleMax + 10, rect.Y, Math.Max(0, textW - titleMax - 10), RowH), Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             if (figW > 0)
-                TextRenderer.DrawText(g, row.Figure, _fFig, new Rectangle(rect.Right - figW, rect.Y, figW, RowH), row.Accent ? Theme.Accent : Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                CrispText.DrawText(g, row.Figure, _fFig, new Rectangle(rect.Right - figW, rect.Y, figW, RowH), row.Accent ? Theme.Accent : Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             if (i < _rows.Count - 1) { using var pen = new Pen(Theme.HairLine); g.DrawLine(pen, rect.X, rect.Bottom - 1, rect.Right, rect.Bottom - 1); }
         }
         ClassicGroup(g, x, y, w, ry + _rows.Count * RowH, _listLabel);

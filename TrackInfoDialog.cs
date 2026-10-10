@@ -64,15 +64,15 @@ internal sealed class TrackInfoDialog : CardDialog
         int y = Theme.Classic ? 12 : 18;
         if (_multi)
         {
-            target.Add(new Label { Text = Loc.T("Editing {0} songs. Type in a field to set it on all of them; leave a field blank to keep each song's own value.", tracks.Count),
+            target.Add(new CrispLabel { Text = Loc.T("Editing {0} songs. Type in a field to set it on all of them; leave a field blank to keep each song's own value.", tracks.Count),
                 ForeColor = Theme.Subtle, AutoSize = false, Location = new Point(16, y), Size = new Size(410, 36) });
             y += 42;
         }
 
         TextBox Row(string label, string value, bool editable = true, int width = 300)
         {
-            target.Add(new Label { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
-            var tb = new TextBox { Text = value, Location = new Point(122, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
+            target.Add(new CrispLabel { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+            var tb = new CrispTextBox { Text = value, Location = new Point(122, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
             if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
             target.Add(ThemedField.Wrap(tb));
             y += 36;
@@ -90,32 +90,32 @@ internal sealed class TrackInfoDialog : CardDialog
         // A small numeric box + an optional "/ total" companion, both styled like the main rows.
         TextBox Num(int x, int width, string value, bool editable)
         {
-            var tb = new TextBox { Text = value, Location = new Point(x, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
+            var tb = new CrispTextBox { Text = value, Location = new Point(x, y), Width = width, BackColor = editable ? Theme.RowBg : Theme.PanelBg, ForeColor = editable ? Theme.TextCol : Theme.Faint, BorderStyle = BorderStyle.FixedSingle, ReadOnly = !editable, TabStop = editable };
             if (editable) tb.TextChanged += (_, _) => _touched.Add(tb);
             target.Add(ThemedField.Wrap(tb));
             return tb;
         }
-        void Slash(int x) => target.Add(new Label { Text = "/", ForeColor = Theme.Faint, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Location = new Point(x, y), Size = new Size(14, 26) });
+        void Slash(int x) => target.Add(new CrispLabel { Text = "/", ForeColor = Theme.Faint, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Location = new Point(x, y), Size = new Size(14, 26) });
 
         // Year + "Track # / total" share a row. Track # is per-song, so it's disabled when editing
         // several; the album total is shared, so it stays editable either way.
-        target.Add(new Label { Text = Loc.T("Year"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        target.Add(new CrispLabel { Text = Loc.T("Year"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
         _year = Num(122, 70, Common(x => x.Year > 0 ? x.Year.ToString() : ""), true);
-        target.Add(new Label { Text = Loc.T("Track #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(206, y), Size = new Size(66, 26) });
+        target.Add(new CrispLabel { Text = Loc.T("Track #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(206, y), Size = new Size(66, 26) });
         _track = Num(282, 70, _multi ? "" : (_t.TrackNumber > 0 ? _t.TrackNumber.ToString() : ""), !_multi);
         Slash(352);
         _trackTotal = Num(368, 56, Common(x => x.TotalTracks > 0 ? x.TotalTracks.ToString() : ""), true);
         y += 38;
 
         // "Disc # / total" — disc # is per-song (disabled in multi), the disc count is album-shared.
-        target.Add(new Label { Text = Loc.T("Disc #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        target.Add(new CrispLabel { Text = Loc.T("Disc #"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
         _disc = Num(122, 70, _multi ? "" : (_t.DiscNumber > 0 ? _t.DiscNumber.ToString() : ""), !_multi);
         Slash(194);
         _discTotal = Num(210, 56, Common(x => x.TotalDiscs > 0 ? x.TotalDiscs.ToString() : ""), true);
         y += 38;
 
         // Rating stars.
-        target.Add(new Label { Text = Loc.T("Rating"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
+        target.Add(new CrispLabel { Text = Loc.T("Rating"), ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 26) });
         int commonStars = _multi && !_tracks.All(x => Math.Min(5, x.Rating / 20) == Math.Min(5, _t.Rating / 20)) ? 0 : Math.Min(5, _t.Rating / 20);
         _rating = new StarRating { Location = new Point(120, y - 2), Size = new Size(160, 30), Value = commonStars };
         _rating.UserChanged += () => _ratingTouched = true;
@@ -129,8 +129,8 @@ internal sealed class TrackInfoDialog : CardDialog
             y += 10;
             void Stat(string label, string value)
             {
-                Controls.Add(new Label { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 22) });
-                Controls.Add(new Label { Text = value, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(122, y), Size = new Size(302, 22) });
+                Controls.Add(new CrispLabel { Text = label, ForeColor = Theme.Subtle, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Location = new Point(16, y), Size = new Size(96, 22) });
+                Controls.Add(new CrispLabel { Text = value, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Location = new Point(122, y), Size = new Size(302, 22) });
                 y += 26;
             }
             Stat(Loc.T("Plays"), _t.PlayCount.ToString());
@@ -186,7 +186,7 @@ internal sealed class TrackInfoDialog : CardDialog
         var ci = System.Globalization.CultureInfo.CurrentCulture;
         _classicIcon = Theme.ClassicHeaderIcon(_multi ? ClassicIcons.Id.Album : ClassicIcons.Id.Songs);
         page.Controls.Add(new PictureBox { Image = _classicIcon, Location = new Point(14, y), Size = new Size(32, 32) });
-        page.Controls.Add(new Label { Text = _multi ? Loc.T("{0} songs", _tracks.Count) : _t.DisplayTitle, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true,
+        page.Controls.Add(new CrispLabel { Text = _multi ? Loc.T("{0} songs", _tracks.Count) : _t.DisplayTitle, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true,
             UseMnemonic = false, Location = new Point(76, y + 9), Size = new Size(w - 88, 18) });
         y += 46;
         void Rule()   // the etched line between a 95 page's groups
@@ -197,8 +197,8 @@ internal sealed class TrackInfoDialog : CardDialog
         }
         void Info(string label, string value)
         {
-            page.Controls.Add(new Label { Text = label, ForeColor = Theme.TextCol, AutoSize = false, UseMnemonic = false, Location = new Point(14, y), Size = new Size(100, 18) });
-            page.Controls.Add(new Label { Text = value, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true, UseMnemonic = false, Location = new Point(118, y), Size = new Size(w - 130, 18) });
+            page.Controls.Add(new CrispLabel { Text = label, ForeColor = Theme.TextCol, AutoSize = false, UseMnemonic = false, Location = new Point(14, y), Size = new Size(100, 18) });
+            page.Controls.Add(new CrispLabel { Text = value, ForeColor = Theme.TextCol, AutoSize = false, AutoEllipsis = true, UseMnemonic = false, Location = new Point(118, y), Size = new Size(w - 130, 18) });
             y += 22;
         }
         Rule();
@@ -224,7 +224,7 @@ internal sealed class TrackInfoDialog : CardDialog
         FileAttributes attrs;
         try { attrs = File.GetAttributes(path); } catch { return; }
         Rule();
-        page.Controls.Add(new Label { Text = Loc.T("Attributes:"), ForeColor = Theme.TextCol, AutoSize = false, UseMnemonic = false, Location = new Point(14, y), Size = new Size(100, 18) });
+        page.Controls.Add(new CrispLabel { Text = Loc.T("Attributes:"), ForeColor = Theme.TextCol, AutoSize = false, UseMnemonic = false, Location = new Point(14, y), Size = new Size(100, 18) });
         var boxes = new Panel { Location = new Point(118, y), Size = new Size(w - 130, 18), BackColor = Theme.Face };
         boxes.Paint += (_, e) =>
         {
@@ -235,8 +235,8 @@ internal sealed class TrackInfoDialog : CardDialog
                 int tw = TextRenderer.MeasureText(e.Graphics, text, Font).Width;
                 var tr = new Rectangle(x + 17, 0, tw + 4, 18);
                 const TextFormatFlags tf = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
-                TextRenderer.DrawText(e.Graphics, text, Font, new Rectangle(tr.X + 1, tr.Y + 1, tr.Width, tr.Height), Theme.FaceHi, tf);   // a greyed 95 label: embossed
-                TextRenderer.DrawText(e.Graphics, text, Font, tr, Theme.FaceShadow, tf);
+                CrispText.DrawText(e.Graphics, text, Font, new Rectangle(tr.X + 1, tr.Y + 1, tr.Width, tr.Height), Theme.FaceHi, tf);   // a greyed 95 label: embossed
+                CrispText.DrawText(e.Graphics, text, Font, tr, Theme.FaceShadow, tf);
                 x += 17 + tw + 14;
             }
         };

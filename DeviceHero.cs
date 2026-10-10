@@ -128,9 +128,9 @@ internal sealed class DeviceHero : Control
         long shownFree = _sweep >= 1f ? _free : (long)(_free * _sweep);
         string freeTxt = CapacityBar.Human(shownFree);
         var fsz = TextRenderer.MeasureText(g, freeTxt, _fTotalDyn!);
-        TextRenderer.DrawText(g, freeTxt, _fTotalDyn!, new Rectangle(cx - r, cy - 4 - fsz.Height, r * 2, fsz.Height), Theme.TextCol,
+        CrispText.DrawText(g, freeTxt, _fTotalDyn!, new Rectangle(cx - r, cy - 4 - fsz.Height, r * 2, fsz.Height), Theme.TextCol,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix);
-        TextRenderer.DrawText(g, Loc.T("free of {0}", CapacityBar.Human(_total)), _fSub, new Rectangle(cx - r, cy + 4, r * 2, 16), Theme.Subtle,
+        CrispText.DrawText(g, Loc.T("free of {0}", CapacityBar.Human(_total)), _fSub, new Rectangle(cx - r, cy + 4, r * 2, 16), Theme.Subtle,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
 
         var f = _fLegend;
@@ -139,8 +139,8 @@ internal sealed class DeviceHero : Control
         foreach (var s in _segs)
         {
             using (var b = new SolidBrush(s.Color)) g.FillEllipse(b, lx, ly + (lineH - 11) / 2, 11, 11);
-            TextRenderer.DrawText(g, s.Label, f, new Rectangle(lx + legendDot, ly, legendInnerW, lineH), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(g, CapacityBar.Human(s.Bytes), f, new Rectangle(lx + legendDot, ly, legendInnerW, lineH), Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            CrispText.DrawText(g, s.Label, f, new Rectangle(lx + legendDot, ly, legendInnerW, lineH), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            CrispText.DrawText(g, CapacityBar.Human(s.Bytes), f, new Rectangle(lx + legendDot, ly, legendInnerW, lineH), Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
             ly += lineH;
         }
     }
@@ -178,18 +178,18 @@ internal sealed class DeviceHero : Control
                 var box = new Rectangle(x0, ly + (lineH - sw) / 2, sw, sw);
                 using (var b = new SolidBrush(ClassicColour(i).Top)) g.FillRectangle(b, box);
                 g.DrawRectangle(edge, box.X, box.Y, box.Width - 1, box.Height - 1);   // the swatch's black frame
-                TextRenderer.DrawText(g, s.Label + ":", f, new Rectangle(labelX, ly, labelW + 8, lineH), Theme.TextCol, L);
-                TextRenderer.DrawText(g, Bytes(s.Bytes), f, new Rectangle(bytesR - bytesW - 8, ly, bytesW + 8, lineH), Theme.TextCol, R);
-                TextRenderer.DrawText(g, CapacityBar.Human(s.Bytes), f, new Rectangle(humanR - humanW - 8, ly, humanW + 8, lineH), Theme.TextCol, R);
+                CrispText.DrawText(g, s.Label + ":", f, new Rectangle(labelX, ly, labelW + 8, lineH), Theme.TextCol, L);
+                CrispText.DrawText(g, Bytes(s.Bytes), f, new Rectangle(bytesR - bytesW - 8, ly, bytesW + 8, lineH), Theme.TextCol, R);
+                CrispText.DrawText(g, CapacityBar.Human(s.Bytes), f, new Rectangle(humanR - humanW - 8, ly, humanW + 8, lineH), Theme.TextCol, R);
                 ly += lineH;
             }
         ly += 4;
         using (var sh = new Pen(Theme.FaceShadow)) g.DrawLine(sh, x0, ly, humanR, ly);   // the etched rule over the capacity
         using (var hi = new Pen(Theme.FaceHi)) g.DrawLine(hi, x0, ly + 1, humanR, ly + 1);
         ly += 5;
-        TextRenderer.DrawText(g, capLabel, f, new Rectangle(labelX, ly, labelW + 8, lineH), Theme.TextCol, L);
-        TextRenderer.DrawText(g, Bytes(_total), f, new Rectangle(bytesR - bytesW - 8, ly, bytesW + 8, lineH), Theme.TextCol, R);
-        TextRenderer.DrawText(g, CapacityBar.Human(_total), f, new Rectangle(humanR - humanW - 8, ly, humanW + 8, lineH), Theme.TextCol, R);
+        CrispText.DrawText(g, capLabel, f, new Rectangle(labelX, ly, labelW + 8, lineH), Theme.TextCol, L);
+        CrispText.DrawText(g, Bytes(_total), f, new Rectangle(bytesR - bytesW - 8, ly, bytesW + 8, lineH), Theme.TextCol, R);
+        CrispText.DrawText(g, CapacityBar.Human(_total), f, new Rectangle(humanR - humanW - 8, ly, humanW + 8, lineH), Theme.TextCol, R);
 
         // the pie, centred in the room right of the legend
         int left = humanR + 36, room = Math.Max(0, Width - left - 16);
@@ -218,7 +218,7 @@ internal sealed class DeviceHero : Control
             }
         }
         if (cap)
-            TextRenderer.DrawText(g, Caption, f, new Rectangle(px - 20, py + ph + depth + 4, pw + 40, lineH), Theme.TextCol,
+            CrispText.DrawText(g, Caption, f, new Rectangle(px - 20, py + ph + depth + 4, pw + 40, lineH), Theme.TextCol,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
     }
 

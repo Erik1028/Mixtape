@@ -432,7 +432,7 @@ internal sealed class Sidebar : Panel
             if (row.Hint)
             {
                 if (y >= clip.Top && y + ItemH <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
-                    TextRenderer.DrawText(g, row.Text, _fHint,
+                    CrispText.DrawText(g, row.Text, _fHint,
                         new Rectangle(Pad + 8, y, Width - Pad * 2 - 8, ItemH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordEllipsis);
                 y += ItemH;
@@ -444,7 +444,7 @@ internal sealed class Sidebar : Panel
                 if (anyDrawn) y += 10; // breathing room above each group after the first
                 if (y >= clip.Top && y + SectionH <= clip.Bottom)   // fully inside (see the item-row note: avoid text bleeding past the edges)
                 {
-                    TextRenderer.DrawText(g, Theme.ClassicCase(row.Text), _fSection,   // Classic: "Library", not "LIBRARY"
+                    CrispText.DrawText(g, Theme.ClassicCase(row.Text), _fSection,   // Classic: "Library", not "LIBRARY"
                         new Rectangle(Pad + 4, y, Width - Pad * 2, SectionH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.Bottom);
                     if (row.ShowAdd)   // a 2-stroke vector "+" on the right of the header → New Playlist (creation was right-click-only)
@@ -562,7 +562,7 @@ internal sealed class Sidebar : Panel
                     {
                         // A playlist with no chosen cover shows its own first letter — its name IS its identity.
                         string first = row.Text.Length > 0 ? row.Text[..1].ToUpperInvariant() : "•";
-                        TextRenderer.DrawText(g, first, _fRowBold, tile, Theme.Faint,
+                        CrispText.DrawText(g, first, _fRowBold, tile, Theme.Faint,
                             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
                     }
                     else DrawRowGlyph(g, tile, row.Kind, Theme.OnColor(row.Tile));   // contrast with the tile (white vanishes on a light accent)
@@ -589,7 +589,7 @@ internal sealed class Sidebar : Panel
                 if (row.Count is { Length: > 0 } cnt)
                 {
                     int cw = TextRenderer.MeasureText(g, cnt, _fSub).Width + 4;
-                    TextRenderer.DrawText(g, cnt, _fSub, new Rectangle(textRight - cw - 2, y, cw, rh), row.Active && Theme.Classic ? Color.FromArgb(210, 210, 210) : Theme.Faint,
+                    CrispText.DrawText(g, cnt, _fSub, new Rectangle(textRight - cw - 2, y, cw, rh), row.Active && Theme.Classic ? Color.FromArgb(210, 210, 210) : Theme.Faint,
                         TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                     textRight -= cw + 8;
                 }
@@ -598,13 +598,13 @@ internal sealed class Sidebar : Panel
                     // The device row at the 40 px scale: the model on line one, the free space beneath it.
                     var l1 = new Rectangle(tile.Right + 10, y + 9, textRight - tile.Right - 10, 20);
                     var l2 = new Rectangle(tile.Right + 10, y + 29, textRight - tile.Right - 10, 18);
-                    TextRenderer.DrawText(g, row.Text, _fRowBold, l1, tc, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-                    TextRenderer.DrawText(g, sub, _fSub, l2, row.Active ? Color.FromArgb(200, 255, 255, 255) : Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                    CrispText.DrawText(g, row.Text, _fRowBold, l1, tc, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                    CrispText.DrawText(g, sub, _fSub, l2, row.Active ? Color.FromArgb(200, 255, 255, 255) : Theme.Subtle, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 }
                 else
                 {
                     var textRect = new Rectangle(tile.Right + 10, y, textRight - tile.Right - 10, rh);
-                    TextRenderer.DrawText(g, row.Text, row.Active ? _fRowBold : _fRow,
+                    CrispText.DrawText(g, row.Text, row.Active ? _fRowBold : _fRow,
                         textRect, tc, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                 }
             }
@@ -694,7 +694,7 @@ internal sealed class Sidebar : Panel
             if (row.Hint)
             {
                 if (ry + ItemH > inner.Top && ry < inner.Bottom)
-                    TextRenderer.DrawText(g, row.Text, _fHint, new Rectangle(x0 + indent, ry, inner.Right - x0 - indent - 4, ItemH), Theme.Faint,
+                    CrispText.DrawText(g, row.Text, _fHint, new Rectangle(x0 + indent, ry, inner.Right - x0 - indent - 4, ItemH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 continue;
             }
@@ -703,7 +703,7 @@ internal sealed class Sidebar : Panel
                 inSection = true;
                 if (ry + SectionH <= inner.Top || ry >= inner.Bottom) continue;
                 ClassicIcons.Draw(g, ClassicIcons.Id.Folder, x0, ry + (SectionH - 16) / 2);
-                TextRenderer.DrawText(g, Theme.ClassicCase(row.Text), _fRow, new Rectangle(x0 + 20, ry, inner.Right - x0 - 44, SectionH), Theme.TextCol,
+                CrispText.DrawText(g, Theme.ClassicCase(row.Text), _fRow, new Rectangle(x0 + 20, ry, inner.Right - x0 - 44, SectionH), Theme.TextCol,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 if (row.ShowAdd)   // "+": a tiny push button at the end of the folder's line
                 {
@@ -743,7 +743,7 @@ internal sealed class Sidebar : Panel
             if (row.Count is { Length: > 0 } cnt)
             {
                 int cw = TextRenderer.MeasureText(g, cnt, _fSub).Width + 2;
-                TextRenderer.DrawText(g, cnt, _fSub, new Rectangle(right - cw, ry, cw, rh), Theme.Faint,
+                CrispText.DrawText(g, cnt, _fSub, new Rectangle(right - cw, ry, cw, rh), Theme.Faint,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 right -= cw + 4;
             }
@@ -755,7 +755,7 @@ internal sealed class Sidebar : Panel
             if (row.Active) using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, lab);   // the selection covers the label, not the row
             if (ReferenceEquals(row, _dropRow))   // a song drag hovering a playlist: the drop target, outlined
                 using (var dp = new Pen(Theme.ClassicNavy)) g.DrawRectangle(dp, lab.X - 1, lab.Y - 1, lab.Width + 1, lab.Height + 1);
-            TextRenderer.DrawText(g, label, _fRow, new Rectangle(lab.X + 2, ry, tw - 2, rh), row.Active ? Color.White : Theme.TextCol,
+            CrispText.DrawText(g, label, _fRow, new Rectangle(lab.X + 2, ry, tw - 2, rh), row.Active ? Color.White : Theme.TextCol,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
         g.Clip = saved;

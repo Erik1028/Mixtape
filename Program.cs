@@ -1659,7 +1659,7 @@ internal static class Program
                     int c = i % cols, r = i / cols;
                     int x = pad + c * (cell + pad), y = pad + r * (cell + labelH + pad);
                     using (var art = IpodArt.Render(gens[i], cell)) g.DrawImage(art, x, y);
-                    TextRenderer.DrawText(g, gens[i].ToString(), Theme.UiFont(9f), new Rectangle(x, y + cell, cell, labelH), Theme.Subtle, TextFormatFlags.HorizontalCenter);
+                    CrispText.DrawText(g, gens[i].ToString(), Theme.UiFont(9f), new Rectangle(x, y + cell, cell, labelH), Theme.Subtle, TextFormatFlags.HorizontalCenter);
                 }
             }
             sheet.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
@@ -2356,7 +2356,7 @@ internal static class Program
         for (int i = 0; i < n; i++)
         {
             using (var lf = Theme.UiFont(10f, FontStyle.Bold))
-                TextRenderer.DrawText(g, labels[i], lf, new Rectangle(pad, y, W, label), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                CrispText.DrawText(g, labels[i], lf, new Rectangle(pad, y, W, label), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             y += label;
             DrawBarMock(g, pad, y, W, barH, i);
             y += barH + gap;
@@ -2422,7 +2422,7 @@ internal static class Program
         void Time(string t, float rx, float cy, bool right)
         {
             using var f = Theme.UiFont(8f);
-            TextRenderer.DrawText(g, t, f, new Rectangle((int)rx, (int)cy - 9, 42, 18), Theme.Faint, (right ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter);
+            CrispText.DrawText(g, t, f, new Rectangle((int)rx, (int)cy - 9, 42, 18), Theme.Faint, (right ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter);
         }
         void Eq(float ex, float cy)
         {
@@ -2442,8 +2442,8 @@ internal static class Program
         void Title(int tx, int ty, int tw, bool centre)
         {
             var fl = (centre ? TextFormatFlags.HorizontalCenter : TextFormatFlags.Left) | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis;
-            using (var tf = Theme.UiFont(10.5f, FontStyle.Bold)) TextRenderer.DrawText(g, "3korty", tf, new Rectangle(tx, ty, tw, 20), Theme.TextCol, fl | TextFormatFlags.VerticalCenter);
-            using (var sf = Theme.UiFont(8.75f)) TextRenderer.DrawText(g, "Azahriah  •  memento", sf, new Rectangle(tx, ty + 20, tw, 16), Theme.Subtle, fl);
+            using (var tf = Theme.UiFont(10.5f, FontStyle.Bold)) CrispText.DrawText(g, "3korty", tf, new Rectangle(tx, ty, tw, 20), Theme.TextCol, fl | TextFormatFlags.VerticalCenter);
+            using (var sf = Theme.UiFont(8.75f)) CrispText.DrawText(g, "Azahriah  •  memento", sf, new Rectangle(tx, ty + 20, tw, 16), Theme.Subtle, fl);
         }
 
         // transport cluster, centred on cx -------------------------------------
@@ -2488,7 +2488,7 @@ internal static class Program
 
             default: // C — fully centred (single-line title above, transport, scrubber centred below)
                 using (var tf = Theme.UiFont(10f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, "3korty   •   Azahriah", tf, new Rectangle((int)(cx - 220), y + 8, 440, 16), Theme.TextCol,
+                    CrispText.DrawText(g, "3korty   •   Azahriah", tf, new Rectangle((int)(cx - 220), y + 8, 440, 16), Theme.TextCol,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
                 Transport(y + 46);
                 { float sw = 360; Slider(cx - sw / 2, y + h - 13, sw, 0.36f, true); }
@@ -2814,7 +2814,7 @@ internal static class Program
                         g.DrawImage(art, m + 14 + c * (tile + gap), m + 14 + r * (tile + gap), tile, tile);
                     }
                 using var tf = Theme.UiFont(11f, FontStyle.Bold);
-                TextRenderer.DrawText(g, "Now Playing  ·  Albums  ·  Cover Flow", tf, new Rectangle(m + 14, m + ph - 32, pw - 28, 24), Theme.TextCol, TextFormatFlags.Left);
+                CrispText.DrawText(g, "Now Playing  ·  Albums  ·  Cover Flow", tf, new Rectangle(m + 14, m + ph - 32, pw - 28, 24), Theme.TextCol, TextFormatFlags.Left);
             }
             // 2) blur the padded backdrop (the Glass.Capture k=7 downsample/upsample)
             Bitmap blurPad;
@@ -2851,7 +2851,7 @@ internal static class Program
                         g.Clip = saved;
                     }
                     using var lf = Theme.UiFont(11f, FontStyle.Bold);
-                    TextRenderer.DrawText(g, label, lf, new Rectangle(px, cm + ph + 6, pw, lblH), Theme.TextCol, TextFormatFlags.HorizontalCenter);
+                    CrispText.DrawText(g, label, lf, new Rectangle(px, cm + ph + 6, pw, lblH), Theme.TextCol, TextFormatFlags.HorizontalCenter);
                 }
                 Panel(cm, frostA, "Current — flat frost");
                 Panel(cm + pw + gap2, liquid, "Liquid glass — refraction + rim");
@@ -3075,7 +3075,7 @@ internal static class Program
             ClassicIcons.Draw(g, ids[i], x + 30, y + 6, 4);
             using (var w = new SolidBrush(Color.White)) g.FillRectangle(w, x + 6, y + 30, 16, 16);
             ClassicIcons.Draw(g, ids[i], x + 6, y + 30, 1);
-            TextRenderer.DrawText(g, ids[i].ToString(), f, new Point(x + 4, y + cell - 2), Color.Black);
+            CrispText.DrawText(g, ids[i].ToString(), f, new Point(x + 4, y + cell - 2), Color.Black);
         }
         bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
         Console.WriteLine("icons: " + ids.Length);

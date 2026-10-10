@@ -18,7 +18,7 @@ internal sealed class WallpaperPickerDialog : CardDialog
         ClientSize = new Size(596, 396);
         BackColor = Theme.Bg; ForeColor = Theme.TextCol; Font = Theme.UiFont(9.5f);
 
-        var caption = new Label
+        var caption = new CrispLabel
         {
             Text = Loc.T("Pick wallpapers to add to your iPod's Photos. View them full-screen or as a slideshow on the device."),
             AutoSize = false, Left = 18, Top = 14, Width = ClientSize.Width - 36, Height = 36,
@@ -106,7 +106,7 @@ internal sealed class WallpaperGrid : Panel
                 using var edge = new Pen(Color.FromArgb(40, 255, 255, 255)); g.DrawPath(edge, path);
             }
 
-            TextRenderer.DrawText(g, Loc.T(Wallpaper.Names[i]), _fName, new Rectangle(x, y + TileH + 1, TileW, NameH),
+            CrispText.DrawText(g, Loc.T(Wallpaper.Names[i]), _fName, new Rectangle(x, y + TileH + 1, TileW, NameH),
                 _sel.Contains(i) ? Theme.TextCol : Theme.Subtle, TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
 
             bool selected = _sel.Contains(i);

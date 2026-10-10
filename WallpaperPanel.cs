@@ -72,7 +72,7 @@ internal sealed class WallpaperPanel : Panel
             g.DrawImage(Logo, new Rectangle(24, top + 5, 20, 20));
             g.InterpolationMode = im;
         }
-        TextRenderer.DrawText(g, "Mixtape", _fWordmark, new Rectangle(52, top, 240, Theme.TitleStripH),
+        CrispText.DrawText(g, "Mixtape", _fWordmark, new Rectangle(52, top, 240, Theme.TitleStripH),
             Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 
@@ -98,7 +98,7 @@ internal sealed class WallpaperPanel : Panel
             g.InterpolationMode = im;
             tx = cap.X + 22;
         }
-        TextRenderer.DrawText(g, "Mixtape", _fCaption, new Rectangle(tx, cap.Y, cap.Width - 80, cap.Height), Color.White,
+        CrispText.DrawText(g, "Mixtape", _fCaption, new Rectangle(tx, cap.Y, cap.Width - 80, cap.Height), Color.White,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
     }
 

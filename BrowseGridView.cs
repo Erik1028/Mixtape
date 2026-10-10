@@ -313,10 +313,10 @@ internal sealed class BrowseGridView : Panel
         if (lift > 0.01f) { using var hp = Theme.RoundedRect(cover, cr); using var hb = new SolidBrush(Color.FromArgb((int)(36 * lift), 255, 255, 255)); g.FillPath(hb, hp); }
         using (var bp = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.08))) { using var p2 = Theme.RoundedRect(new RectangleF(cover.X + 0.5f, cover.Y + 0.5f, cover.Width - 1, cover.Height - 1), cr); g.DrawPath(bp, p2); }
 
-        TextRenderer.DrawText(g, c.Title, _fTitle,
+        CrispText.DrawText(g, c.Title, _fTitle,
             new Rectangle(x, y + CoverW + 6, CoverW, 18), Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        TextRenderer.DrawText(g, c.Subtitle, _fSub,
+        CrispText.DrawText(g, c.Subtitle, _fSub,
             new Rectangle(x, y + CoverW + 24, CoverW, 16), Theme.Subtle,
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
