@@ -25,7 +25,7 @@
 <header class="top">
 <div class="wrap">
 <a class="logo" href="#top"><img src="favicon.png" width="30" height="30" alt="">Mixtape</a>
-<nav aria-label="Sections"><a class="opt" href="#features">Features</a><a class="opt" href="#ipods">iPods</a><a href="#install">Download</a><a class="opt" href="https://github.com/Erik1028/Mixtape">GitHub</a></nav>
+<nav aria-label="Sections"><a class="opt" href="#try">Try it</a><a class="opt" href="#features">Features</a><a class="opt" href="#ipods">iPods</a><a href="#install">Download</a><a class="opt" href="https://github.com/Erik1028/Mixtape">GitHub</a></nav>
 </div>
 </header>
 <section class="intro wrap" id="top">
@@ -67,6 +67,25 @@
 <div class="shot"><img src="img/songs.webp" width="1264" height="781" alt="Mixtape's song list for an iPod: covers, artists, albums, star ratings and play counts, with a song playing in the player at the top"></div>
 <figcaption>Mixtape 0.21 with a made-up demo iPod: invented artists and albums, generated covers.</figcaption>
 </figure>
+
+<section class="block try" id="try" data-reveal>
+<div class="ipod" id="ipod" tabindex="0" role="application" aria-roledescription="click-wheel player" aria-label="A click-wheel player to try: arrow keys scroll, Enter chooses, Escape is Menu, P plays or pauses">
+<div class="screen"><div class="scr" aria-hidden="true"></div></div>
+<div class="wheel">
+<button type="button" class="k menu" tabindex="-1" data-k="top">MENU</button>
+<button type="button" class="k next" tabindex="-1" data-k="right" aria-label="Next"><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M1 1v10l7-5zM8 1v10l7-5zM15 1h2v10h-2z"/></svg></button>
+<button type="button" class="k prev" tabindex="-1" data-k="left" aria-label="Previous"><svg viewBox="0 0 18 12" aria-hidden="true"><path d="M17 1v10l-7-5zM10 1v10L3 6zM3 1H1v10h2z"/></svg></button>
+<button type="button" class="k pp" tabindex="-1" data-k="bottom" aria-label="Play or pause"><svg viewBox="0 0 19 12" aria-hidden="true"><path d="M1 1v10l7-5zM11 1h2.5v10H11zM15.5 1H18v10h-2.5z"/></svg></button>
+<button type="button" class="center" tabindex="-1" aria-label="Select"></button>
+</div>
+</div>
+<div class="text">
+<h2>Have a spin</h2>
+<p>Run a finger or the mouse around the wheel to scroll. Press the middle to choose, <b>MENU</b> to go back, the bottom to play or pause. With a keyboard: click the player, then <kbd>↑</kbd> <kbd>↓</kbd> and <kbd>Enter</kbd>.</p>
+<p class="cap">A made-up library like the one in the screenshot, and no sound. On your iPod it's your own music, playlists and covers, put there by Mixtape. Look in Extras.</p>
+</div>
+<p class="sr" id="ipod-live" aria-live="polite"></p>
+</section>
 
 <section class="block" id="features">
 <h2>What it does</h2>
@@ -127,6 +146,7 @@
 </ol>
 <p class="aside">Windows 10 or 11, 64-bit. Mixtape.exe is big because .NET comes inside it; the small zip needs the <a href="https://dotnet.microsoft.com/download/dotnet/8.0">.NET 8 Desktop Runtime</a>. Converting FLAC, OGG, Opus, WMA and videos needs <a href="https://ffmpeg.org/">FFmpeg</a> (<code>winget install Gyan.FFmpeg</code>), which Mixtape finds by itself. Lyrics and missing covers are looked up online by artist and title; Settings can turn that off.</p>
 <p class="aside">Windows SmartScreen may warn, because Mixtape isn't signed: <i>More info › Run anyway</i>. Back up your iPod before the first write. Problems? See <a href="https://github.com/Erik1028/Mixtape/blob/main/TROUBLESHOOTING.md">Troubleshooting</a>.</p>
+<p class="aside">Found a bug, or have an idea? <a href="https://github.com/Erik1028/Mixtape/issues/new">Tell me on GitHub</a>. To hear about new versions, follow the <a href="https://github.com/Erik1028/Mixtape/releases.atom">releases feed</a> (RSS) or watch the repository's releases on GitHub.</p>
 </div>
 </section>
 
@@ -146,6 +166,8 @@
 
 <script src="site.js"></script>
 <script src="mixtape.js"></script>
+<script src="ipod.js"></script>
+<script src="handoff.js"></script>
 <script src="motion.js"></script>
 </body>
 </html>
