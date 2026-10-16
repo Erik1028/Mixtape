@@ -7,45 +7,77 @@
 <meta name="description" content="Manage your click-wheel iPod on Windows without iTunes: copy music, videos and photos, build playlists, pick cover art.">
 <meta property="og:title" content="Mixtape">
 <meta property="og:description" content="Manage your click-wheel iPod on Windows without iTunes.">
-<meta property="og:image" content="https://erik1028.github.io/Mixtape/icon.png">
+<meta property="og:image" content="https://erik1028.github.io/Mixtape/og.png">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#1d1e22">
 <link rel="icon" href="favicon.png" type="image/png">
+<link rel="preload" href="fonts/permanent-marker.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-repo="Erik1028/Mixtape">
 
+<div class="band">
 <header class="top">
 <div class="wrap">
 <a class="logo" href="#top"><img src="favicon.png" width="30" height="30" alt="">Mixtape</a>
 <nav aria-label="Sections"><a class="opt" href="#features">Features</a><a class="opt" href="#ipods">iPods</a><a href="#install">Download</a><a class="opt" href="https://github.com/Erik1028/Mixtape">GitHub</a></nav>
 </div>
 </header>
-
-<main id="top" class="wrap">
-
-<section class="intro">
-<img class="intro-art" src="icon.png" width="256" height="256" alt="">
-<div>
+<section class="intro wrap" id="top">
+<div class="intro-text">
 <h1>Mixtape</h1>
 <p>Your click-wheel iPod on Windows, without iTunes. Copy music, videos and photos on and off, make playlists, pick the cover art.</p>
-</div>
 <div class="get">
 <a class="btn" href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="^Mixtape\.exe$"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M6 10l6 6 6-6M4 21h16"/></svg>Download Mixtape.exe</a>
 <span class="mono" id="ver">latest release</span>
 <span class="alt"><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="win-x64\.zip$">Small zip<span class="size"></span></a> needs .NET 8 · <a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="\.AppImage$">Linux AppImage</a></span>
 </div>
+</div>
+<svg class="cassette" viewBox="0 0 360 232" role="img" aria-label="A cassette tape with turning reels">
+<rect x="8" y="8" width="344" height="216" rx="28" fill="#1c2125" stroke="#0a0f12" stroke-width="3"/>
+<rect x="14" y="14" width="332" height="20" rx="10" fill="#ffffff" opacity=".05"/>
+<g fill="#39414a"><circle cx="30" cy="30" r="5"/><circle cx="330" cy="30" r="5"/><circle cx="30" cy="202" r="5"/><circle cx="330" cy="202" r="5"/></g>
+<rect x="40" y="32" width="280" height="54" rx="12" fill="#eef3f4"/>
+<text id="side" x="58" y="69" class="hand" font-size="25" fill="#1c2125">Mixtape · Side A</text>
+<rect x="282" y="49" width="24" height="18" rx="5" fill="#00c8aa"/>
+<rect x="66" y="102" width="228" height="86" rx="43" fill="#0d1114"/>
+<path d="M122 176 Q180 186 238 176" fill="none" stroke="#3a2c25" stroke-width="3"/>
+<g transform="translate(122 145)"><g class="reel"><circle r="31" fill="#00c8aa"/><g stroke="#0d1114" stroke-width="5" stroke-linecap="round"><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(0)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(60)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(120)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(180)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(240)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(300)"/></g><circle r="9" fill="#0d1114"/></g></g><g transform="translate(238 145)"><g class="reel"><circle r="31" fill="#00c8aa"/><g stroke="#0d1114" stroke-width="5" stroke-linecap="round"><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(0)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(60)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(120)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(180)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(240)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(300)"/></g><circle r="9" fill="#0d1114"/></g></g>
+<path d="M92 224 L110 198 H250 L268 224 Z" fill="#2a3036"/>
+<g fill="#0d1114"><circle cx="140" cy="212" r="4"/><circle cx="220" cy="212" r="4"/></g>
+</svg>
 </section>
+</div>
+
+<main class="wrap">
 
 <figure class="hero-shot" data-slot="img/screenshot.png" data-alt="Mixtape showing an iPod's songs" hidden style="margin:0"><div class="shot"></div></figure>
 
 <section class="block" id="features">
 <h2>What it does</h2>
-<div class="cards">
-<article class="card text"><span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg></span><h3>Your library</h3><p>Songs, albums, artists and playlists, with ratings and play counts. A player with a 10-band equalizer, for the iPod or your PC.</p></article>
-<article class="card text"><span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></span><h3>On and off</h3><p>Drag music, videos, photos or whole folders onto the window. Formats the iPod can't play are converted, duplicates are skipped.</p></article>
-<article class="card text"><span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><h3>Safe writes</h3><p>It backs up the iPod's database before every change, checks the result and rolls back if anything doesn't match.</p></article>
+<div class="jcard">
+<div class="spine" aria-hidden="true"><span>Mixtape</span><span>Erik1028</span></div>
+<div class="jside">
+<h3 class="side">Side A</h3>
+<ol class="tracks">
+<li><span class="no">A1</span><div><b class="hand">Your library</b><p>Songs, albums, artists and playlists, with ratings and play counts. A player with a 10-band equalizer, for the iPod or your PC.</p></div></li>
+<li><span class="no">A2</span><div><b class="hand">On and off</b><p>Drag music, videos, photos or whole folders onto the window. Formats the iPod can't play are converted, duplicates are skipped.</p></div></li>
+<li><span class="no">A3</span><div><b class="hand">Safe writes</b><p>It backs up the iPod's database before every change, checks the result and rolls back if anything doesn't match.</p></div></li>
+</ol>
 </div>
-<p class="extras">Also: cover art on the iPod's screen · lyrics on the iPod · Cover Flow · tag editor · a Windows 95 look · English and Hungarian</p>
+<div class="jside">
+<h3 class="side">Side B</h3>
+<ol class="tracks short">
+<li><span class="no">B1</span><b class="hand">Cover art on the iPod's screen</b></li>
+<li><span class="no">B2</span><b class="hand">Lyrics on the iPod</b></li>
+<li><span class="no">B3</span><b class="hand">Cover Flow</b></li>
+<li><span class="no">B4</span><b class="hand">A real tag editor</b></li>
+<li><span class="no">B5</span><b class="hand">A Windows 95 look</b></li>
+<li><span class="no">B6</span><b class="hand">English and Magyar</b></li>
+<li class="faint"><span class="no">B7</span><b class="hand">Something hidden</b></li>
+</ol>
+</div>
+</div>
 </section>
 
 <section class="block" id="ipods">
@@ -89,5 +121,6 @@
 </footer>
 
 <script src="site.js"></script>
+<script src="mixtape.js"></script>
 </body>
 </html>
