@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mixtape · click-wheel iPod manager for Windows, no iTunes</title>
-<meta name="description" content="Manage your click-wheel iPod on Windows without iTunes: copy music, videos and photos, build playlists, pick cover art.">
+<meta name="description" content="Manage your click-wheel iPod on Windows without iTunes: copy music, videos and photos onto it, copy songs back to your PC, build playlists, pick cover art.">
 <link rel="canonical" href="https://erik1028.github.io/Mixtape/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Erik1028">
 <meta property="og:url" content="https://erik1028.github.io/Mixtape/">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Mixtape", "url": "https://erik1028.github.io/Mixtape/", "description": "Manage your click-wheel iPod on Windows without iTunes: copy music, videos and photos on and off, build playlists, pick cover art.", "image": "https://erik1028.github.io/Mixtape/og.png", "operatingSystem": "Windows 10, Windows 11, Linux", "applicationCategory": "MultimediaApplication", "downloadUrl": "https://github.com/Erik1028/Mixtape/releases/latest", "isAccessibleForFree": true, "inLanguage": "en", "license": "https://opensource.org/licenses/MIT", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@type": "Person", "name": "Erik1028", "url": "https://github.com/Erik1028"}, "softwareHelp": {"@type": "CreativeWork", "url": "https://github.com/Erik1028/Mixtape/blob/main/TROUBLESHOOTING.md"}, "sameAs": ["https://github.com/Erik1028/Mixtape"]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Mixtape", "url": "https://erik1028.github.io/Mixtape/", "description": "Manage your click-wheel iPod on Windows without iTunes: copy music, videos and photos onto it, copy songs back to your PC, build playlists, pick cover art.", "image": "https://erik1028.github.io/Mixtape/og.png", "screenshot": "https://erik1028.github.io/Mixtape/img/songs.webp", "operatingSystem": "Windows 10, Windows 11, Linux", "applicationCategory": "MultimediaApplication", "downloadUrl": "https://github.com/Erik1028/Mixtape/releases/latest", "isAccessibleForFree": true, "inLanguage": "en", "license": "https://opensource.org/licenses/MIT", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@type": "Person", "name": "Erik1028", "url": "https://github.com/Erik1028"}, "softwareHelp": {"@type": "CreativeWork", "url": "https://github.com/Erik1028/Mixtape/blob/main/TROUBLESHOOTING.md"}, "sameAs": ["https://github.com/Erik1028/Mixtape"]}</script>
 <meta property="og:title" content="Mixtape">
 <meta property="og:description" content="Manage your click-wheel iPod on Windows without iTunes.">
 <meta property="og:image" content="https://erik1028.github.io/Mixtape/og.png">
@@ -31,11 +31,11 @@
 <section class="intro wrap" id="top">
 <div class="intro-text">
 <h1>Mixtape</h1>
-<p>Your click-wheel iPod on Windows, without iTunes. Copy music, videos and photos on and off, make playlists, pick the cover art.</p>
+<p>Your click-wheel iPod on Windows, without iTunes. Copy music, videos and photos onto it, copy songs back to your PC, make playlists, pick the cover art.</p>
 <div class="get">
 <a class="btn" href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="^Mixtape\.exe$"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M6 10l6 6 6-6M4 21h16"/></svg>Download Mixtape.exe</a>
 <span class="mono" id="ver">latest release</span>
-<span class="alt"><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="win-x64\.zip$">Small zip<span class="size"></span></a> needs .NET 8 · <a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="\.AppImage$">Linux AppImage</a></span>
+<span class="alt"><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="win-x64\.zip$">Small zip<span class="size"></span></a> needs the .NET 8 Desktop Runtime · <a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="\.AppImage$">Linux AppImage</a>, a separate, simpler version</span>
 </div>
 </div>
 <div class="tape"><svg class="cassette" viewBox="0 0 360 232" role="img" aria-label="A cassette tape with turning reels">
@@ -63,7 +63,10 @@
 
 <main class="wrap">
 
-<figure class="hero-shot" data-slot="img/screenshot.png" data-alt="Mixtape showing an iPod's songs" hidden style="margin:0"><div class="shot"></div></figure>
+<figure class="hero-shot" style="margin:0">
+<div class="shot"><img src="img/songs.webp" width="1264" height="781" alt="Mixtape's song list for an iPod: covers, artists, albums, star ratings and play counts, with a song playing in the player at the top"></div>
+<figcaption>Mixtape 0.21 with a made-up demo iPod: invented artists and albums, generated covers.</figcaption>
+</figure>
 
 <section class="block" id="features">
 <h2>What it does</h2>
@@ -72,8 +75,8 @@
 <div class="jside">
 <h3 class="side">Side A</h3>
 <ol class="tracks" data-stagger="80">
-<li><span class="no">A1</span><div><b class="hand">Your library</b><p>Songs, albums, artists and playlists, with ratings and play counts. A player with a 10-band equalizer, for the iPod or your PC.</p></div></li>
-<li><span class="no">A2</span><div><b class="hand">On and off</b><p>Drag music, videos, photos or whole folders onto the window. Formats the iPod can't play are converted, duplicates are skipped.</p></div></li>
+<li><span class="no">A1</span><div><b class="hand">Your library</b><p>Songs, albums, artists and playlists, with star ratings and play counts. A player with a 10-band equalizer plays from the iPod or from music folders on your PC.</p></div></li>
+<li><span class="no">A2</span><div><b class="hand">On and off</b><p>Drag music, videos, photos or whole folders onto the window. Formats the iPod can't play are converted (with FFmpeg), and songs already on the iPod are caught before they're copied twice. Songs copy back to your PC too.</p></div></li>
 <li><span class="no">A3</span><div><b class="hand">Safe writes</b><p>It backs up the iPod's database before every change, checks the result and rolls back if anything doesn't match.</p></div></li>
 </ol>
 </div>
@@ -82,38 +85,47 @@
 <ol class="tracks short" data-stagger="60">
 <li><span class="no">B1</span><b class="hand">Cover art on the iPod's screen</b></li>
 <li><span class="no">B2</span><b class="hand">Lyrics on the iPod</b></li>
-<li><span class="no">B3</span><b class="hand">Cover Flow</b></li>
-<li><span class="no">B4</span><b class="hand">A real tag editor</b></li>
-<li><span class="no">B5</span><b class="hand">A Windows 95 look</b></li>
-<li><span class="no">B6</span><b class="hand">English and Magyar</b></li>
-<li class="faint"><span class="no">B7</span><b class="hand">Something hidden</b></li>
+<li><span class="no">B3</span><b class="hand">Synced lyrics as you listen</b></li>
+<li><span class="no">B4</span><b class="hand">Cover Flow</b></li>
+<li><span class="no">B5</span><b class="hand">Smart playlists</b></li>
+<li><span class="no">B6</span><b class="hand">A real tag editor</b></li>
+<li><span class="no">B7</span><b class="hand">A Windows 95 look</b></li>
+<li><span class="no">B8</span><b class="hand">English and Magyar</b></li>
+<li class="faint"><span class="no">B9</span><b class="hand">Something hidden</b></li>
 </ol>
 </div>
+</div>
+<div class="cards" data-stagger="110">
+<article class="card"><div class="shot"><img src="img/coverflow.webp" width="800" height="500" alt="Cover Flow: album covers turning in a row, the middle one large with its title underneath" loading="lazy"></div><h3>Cover Flow</h3><p>Albums, songs or artists as a row of turning covers. Type a letter to jump; Enter plays the album in the middle.</p></article>
+<article class="card"><div class="shot"><img src="img/ipod-page.webp" width="800" height="500" alt="The iPod's page: a storage ring with music, video, photos and free space, the model, its signature and the last automatic backup" loading="lazy"></div><h3>The iPod's page</h3><p>What fills the space, which model it is, whether it can be written, and the backup taken before the last change, with Restore.</p></article>
+<article class="card"><div class="shot"><img src="img/windows95.webp" width="800" height="500" alt="The same song list in the Windows 95 look: grey 3D panels, a tree of folders, navy selection and a status bar" loading="lazy"></div><h3>A Windows 95 look</h3><p>Settings › Appearance › Look. The whole window the way a program looked in 1995: grey 3D panels, square corners, navy selection.</p></article>
 </div>
 </section>
 
 <section class="block" id="ipods">
 <h2>Which iPods</h2>
-<p style="color:var(--dim);margin-top:10px;max-width:44em">Click-wheel models that show up as a drive. Every one can be read; writing depends on how Apple signed its database.</p>
+<p style="color:var(--dim);margin-top:10px;max-width:44em">Click-wheel models that show up as a drive in Windows. Every one can be read and its songs copied off; writing depends on how Apple signed its database.</p>
 <div class="tbl" style="margin-top:18px">
 <table>
 <thead><tr><th scope="col">iPod</th><th scope="col">Signature</th><th scope="col">Add music</th></tr></thead>
 <tbody data-stagger="90">
 <tr><td>1G–5G, photo, mini, nano 1G / 2G</td><td>none</td><td class="yes">Yes</td></tr>
-<tr><td>Classic, nano 3G / 4G</td><td>hash58</td><td class="yes">Yes, after <i>Read device ID</i></td></tr>
+<tr><td>Classic, nano 3G / 4G</td><td>hash58</td><td class="yes">Yes, once Mixtape reads its ID</td></tr>
 <tr><td>nano 5G and later</td><td>hash72 / hashAB</td><td class="no">Read only</td></tr>
 </tbody>
 </table>
 </div>
+<p class="cap">Writing to hash58 iPods has had less testing on real devices than the others. The iPod shuffle and the iPod touch aren't supported.</p>
 </section>
 
 <section class="block two" id="install" data-reveal>
 <div><h2>Download</h2></div>
 <div>
 <ol>
-<li><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="^Mixtape\.exe$">Download Mixtape.exe</a> and run it. No installer, nothing to set up.</li>
+<li><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="^Mixtape\.exe$">Download Mixtape.exe<span class="size"></span></a> and run it. No installer, nothing to set up.</li>
 <li>Plug in your iPod.</li>
 </ol>
+<p class="aside">Windows 10 or 11, 64-bit. Mixtape.exe is big because .NET comes inside it; the small zip needs the <a href="https://dotnet.microsoft.com/download/dotnet/8.0">.NET 8 Desktop Runtime</a>. Converting FLAC, OGG, Opus, WMA and videos needs <a href="https://ffmpeg.org/">FFmpeg</a> (<code>winget install Gyan.FFmpeg</code>), which Mixtape finds by itself. Lyrics and missing covers are looked up online by artist and title; Settings can turn that off.</p>
 <p class="aside">Windows SmartScreen may warn, because Mixtape isn't signed: <i>More info › Run anyway</i>. Back up your iPod before the first write. Problems? See <a href="https://github.com/Erik1028/Mixtape/blob/main/TROUBLESHOOTING.md">Troubleshooting</a>.</p>
 </div>
 </section>

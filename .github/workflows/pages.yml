@@ -1,5 +1,5 @@
 # Publishes the website in site/ to GitHub Pages (https://erik1028.github.io/Mixtape/).
-# Screenshots in docs/img (if any) are copied next to it; img/screenshot.png shows up on the page by itself.
+# The page's screenshots live in site/img; anything in docs/img is copied in next to them.
 name: Website
 
 on:
