@@ -29,11 +29,12 @@
         var name = (rel.name || rel.tag_name).replace(/^[^—–-]*[—–-]\s*/, '') || rel.name;
         name = name.charAt(0).toUpperCase() + name.slice(1);
         // the first paragraph of the notes. Release notes are hard-wrapped, so its lines are joined; a list item
-        // keeps its wrapped continuation lines and ends at the next item.
+        // keeps its wrapped continuation lines and ends at the next item. Headings, tables, quotes, a line that is
+        // only a bold title, and the list of downloads (`file` items) are skipped.
         var para = [], lines = (rel.body || '').split(/\r?\n/).map(function (l) { return l.trim(); });
         for (var i = 0; i < lines.length; i++) {
           var l = lines[i];
-          if (!l || /^(#|\||>)/.test(l)) { if (para.length) break; continue; }
+          if (!l || /^(#|\||>)/.test(l) || /^\*\*[^*]+\*\*$/.test(l)) { if (para.length) break; continue; }
           if (/^[-*]\s*`/.test(l)) { if (para.length) break; continue; }
           if (/^[-*]\s+/.test(l) && para.length) break;
           para.push(l);
