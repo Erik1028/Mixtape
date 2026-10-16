@@ -135,3 +135,15 @@ svg .hand{letter-spacing:.5px}
   .jside{padding:18px 18px 22px}
 }
 @media (prefers-reduced-motion:reduce){.cassette{transition:none}}
+
+/* scroll motion (motion.js): only when the script runs and motion is allowed */
+.motion [data-reveal]{transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1);transition-delay:var(--d,0ms)}
+.motion [data-reveal].pre{opacity:0;transform:translateY(40px)}
+/* the band's text lifts away and the tape drifts up as you scroll; the J-card arrives crooked and settles */
+.tape{display:block}
+.motion .band .intro-text{transform:translateY(calc(var(--sy,0) * -.16px));opacity:calc(1 - var(--sy,0) / 560)}
+.motion .tape{transform:translateY(calc(var(--sy,0) * -.1px)) rotate(calc(var(--sy,0) * -.012deg))}
+/* how far it may turn depends on the room beside it: a turned card must never stick out of the page */
+.motion .jcard{transform:translateY(calc((1 - var(--p,1)) * 80px)) rotate(calc(-.5deg - (1 - var(--p,1)) * 2.5deg));opacity:calc(.2 + var(--p,1) * .8)}
+@media (min-width:1200px){.motion .jcard{transform:translateY(calc((1 - var(--p,1)) * 90px)) rotate(calc(-.5deg - (1 - var(--p,1)) * 5deg))}}
+@media (max-width:820px){.motion .jcard{transform:translateY(calc((1 - var(--p,1)) * 60px))}}

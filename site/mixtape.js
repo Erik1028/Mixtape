@@ -16,4 +16,22 @@
     pos = k === seq[pos] ? pos + 1 : (k === seq[0] ? 1 : 0);
     if (pos === seq.length) { pos = 0; flip(); }
   });
+
+  // the reels follow the scroll, like winding the tape with a pencil
+  if (!still) {
+    var hubs = Array.prototype.map.call(tape.querySelectorAll('.reel'), function (r) { return r.parentNode; });
+    var base = hubs.map(function (g) { return g.getAttribute('transform'); });
+    var angle = 0, last = window.scrollY, queued = false;
+    addEventListener('scroll', function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(function () {
+        queued = false;
+        var y = window.scrollY;
+        angle = (angle + (y - last) * 0.8) % 360;
+        last = y;
+        hubs.forEach(function (g, i) { g.setAttribute('transform', base[i] + ' rotate(' + angle.toFixed(1) + ')'); });
+      });
+    }, { passive: true });
+  }
 })();

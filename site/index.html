@@ -33,7 +33,7 @@
 <span class="alt"><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="win-x64\.zip$">Small zip<span class="size"></span></a> needs .NET 8 · <a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="\.AppImage$">Linux AppImage</a></span>
 </div>
 </div>
-<svg class="cassette" viewBox="0 0 360 232" role="img" aria-label="A cassette tape with turning reels">
+<div class="tape"><svg class="cassette" viewBox="0 0 360 232" role="img" aria-label="A cassette tape with turning reels">
 <rect x="8" y="8" width="344" height="216" rx="28" fill="#1c2125" stroke="#0a0f12" stroke-width="3"/>
 <rect x="14" y="14" width="332" height="20" rx="10" fill="#ffffff" opacity=".05"/>
 <g fill="#39414a"><circle cx="30" cy="30" r="5"/><circle cx="330" cy="30" r="5"/><circle cx="30" cy="202" r="5"/><circle cx="330" cy="202" r="5"/></g>
@@ -45,7 +45,7 @@
 <g transform="translate(122 145)"><g class="reel"><circle r="31" fill="#00c8aa"/><g stroke="#0d1114" stroke-width="5" stroke-linecap="round"><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(0)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(60)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(120)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(180)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(240)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(300)"/></g><circle r="9" fill="#0d1114"/></g></g><g transform="translate(238 145)"><g class="reel"><circle r="31" fill="#00c8aa"/><g stroke="#0d1114" stroke-width="5" stroke-linecap="round"><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(0)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(60)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(120)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(180)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(240)"/><line x1="0" y1="0" x2="0" y2="-23" transform="rotate(300)"/></g><circle r="9" fill="#0d1114"/></g></g>
 <path d="M92 224 L110 198 H250 L268 224 Z" fill="#2a3036"/>
 <g fill="#0d1114"><circle cx="140" cy="212" r="4"/><circle cx="220" cy="212" r="4"/></g>
-</svg>
+</svg></div>
 </section>
 </div>
 
@@ -55,11 +55,11 @@
 
 <section class="block" id="features">
 <h2>What it does</h2>
-<div class="jcard">
+<div class="jcard" data-scroll data-end=".55">
 <div class="spine" aria-hidden="true"><span>Mixtape</span><span>Erik1028</span></div>
 <div class="jside">
 <h3 class="side">Side A</h3>
-<ol class="tracks">
+<ol class="tracks" data-stagger="80">
 <li><span class="no">A1</span><div><b class="hand">Your library</b><p>Songs, albums, artists and playlists, with ratings and play counts. A player with a 10-band equalizer, for the iPod or your PC.</p></div></li>
 <li><span class="no">A2</span><div><b class="hand">On and off</b><p>Drag music, videos, photos or whole folders onto the window. Formats the iPod can't play are converted, duplicates are skipped.</p></div></li>
 <li><span class="no">A3</span><div><b class="hand">Safe writes</b><p>It backs up the iPod's database before every change, checks the result and rolls back if anything doesn't match.</p></div></li>
@@ -67,7 +67,7 @@
 </div>
 <div class="jside">
 <h3 class="side">Side B</h3>
-<ol class="tracks short">
+<ol class="tracks short" data-stagger="60">
 <li><span class="no">B1</span><b class="hand">Cover art on the iPod's screen</b></li>
 <li><span class="no">B2</span><b class="hand">Lyrics on the iPod</b></li>
 <li><span class="no">B3</span><b class="hand">Cover Flow</b></li>
@@ -86,7 +86,7 @@
 <div class="tbl" style="margin-top:18px">
 <table>
 <thead><tr><th scope="col">iPod</th><th scope="col">Signature</th><th scope="col">Add music</th></tr></thead>
-<tbody>
+<tbody data-stagger="90">
 <tr><td>1G–5G, photo, mini, nano 1G / 2G</td><td>none</td><td class="yes">Yes</td></tr>
 <tr><td>Classic, nano 3G / 4G</td><td>hash58</td><td class="yes">Yes, after <i>Read device ID</i></td></tr>
 <tr><td>nano 5G and later</td><td>hash72 / hashAB</td><td class="no">Read only</td></tr>
@@ -95,7 +95,7 @@
 </div>
 </section>
 
-<section class="block two" id="install">
+<section class="block two" id="install" data-reveal>
 <div><h2>Download</h2></div>
 <div>
 <ol>
@@ -106,7 +106,7 @@
 </div>
 </section>
 
-<section class="block">
+<section class="block" data-reveal>
 <h2>Latest update</h2>
 <div class="latest" id="latest"><span class="v">…</span><div><p><a href="https://github.com/Erik1028/Mixtape/releases">All releases</a></p></div></div>
 </section>
@@ -122,5 +122,6 @@
 
 <script src="site.js"></script>
 <script src="mixtape.js"></script>
+<script src="motion.js"></script>
 </body>
 </html>
