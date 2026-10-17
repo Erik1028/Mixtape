@@ -504,7 +504,10 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     // ---- the Classic property sheet's layout ----
 
     private Control Host => (Control?)_group ?? _paneBody;
-    private int HostW => _group?.Width ?? ClassicBodyW;
+    private int HostW => _group?.Width ?? ClassicGroupW;
+    /// <summary>The page body's real width: the pane less its scrollbar's slot (LayoutPane). The groups were
+    /// ClassicBodyW wide - 16 px wider than the body, so their right edges and right-hand buttons were cut off.</summary>
+    private int ClassicGroupW => Math.Max(120, _pane.ClientSize.Width - _paneScroll.Width);
     private int Y { get => _group is null ? _y : _gy; set { if (_group is null) _y = value; else _gy = value; } }
 
     /// <summary>Open a captioned group box (Classic only; the modern page has no groups). Rows go into it until the
@@ -513,7 +516,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     {
         if (!Theme.Classic) return;
         EndGroup();
-        _group = new ClassicGroupBox { Text = caption, Left = 0, Top = _y, Width = ClassicBodyW };
+        _group = new ClassicGroupBox { Text = caption, Left = 0, Top = _y, Width = ClassicGroupW };
         _paneBody.Controls.Add(_group);
         _gy = 20; _col = 0;
     }
@@ -646,8 +649,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         if (!_hasDesc) return;
         const int h = 66;
         int top = Math.Max(_y, ClassicBodyH - h - 2);
-        var box = new ClassicGroupBox { Text = Loc.T("Description"), Left = 0, Top = top, Width = ClassicBodyW, Height = h };
-        _descLabel = ClassicText(Loc.T("Point at a setting to see what it does."), 12, 20, ClassicBodyW - 24, h - 26, wrap: true);
+        var box = new ClassicGroupBox { Text = Loc.T("Description"), Left = 0, Top = top, Width = ClassicGroupW, Height = h };
+        _descLabel = ClassicText(Loc.T("Point at a setting to see what it does."), 12, 20, ClassicGroupW - 24, h - 26, wrap: true);
         box.Controls.Add(_descLabel);
         _paneBody.Controls.Add(box);
         _y = top + h;

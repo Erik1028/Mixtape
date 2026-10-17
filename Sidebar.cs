@@ -755,8 +755,10 @@ internal sealed class Sidebar : Panel
             if (row.Active) using (var nb = new SolidBrush(Theme.ClassicNavy)) g.FillRectangle(nb, lab);   // the selection covers the label, not the row
             if (ReferenceEquals(row, _dropRow))   // a song drag hovering a playlist: the drop target, outlined
                 using (var dp = new Pen(Theme.ClassicNavy)) g.DrawRectangle(dp, lab.X - 1, lab.Y - 1, lab.Width + 1, lab.Height + 1);
+            // NoPadding, as measured above: with the default padding the text sat ~2 px further right than the band
+            // assumed, and the band cut its last letter off ("Kezdőla|p")
             CrispText.DrawText(g, label, _fRow, new Rectangle(lab.X + 2, ry, tw - 2, rh), row.Active ? Color.White : Theme.TextCol,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
         }
         g.Clip = saved;
         Theme.Bevel(g, frame, raised: false);

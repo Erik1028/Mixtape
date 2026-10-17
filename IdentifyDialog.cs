@@ -53,7 +53,7 @@ internal sealed class IdentifyDialog : CardDialog
         Controls.Add(_list);
 
         int by = 72 + listH + 20;
-        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(ClientSize.Width - 250, by), DialogResult = DialogResult.Cancel };
+        var cancel = new ThemedButton { Text = Loc.T("Cancel"), Pill = true, Width = 96, Height = 32, Location = new Point(ClientSize.Width - 20 - 140 - 10 - 96, by), DialogResult = DialogResult.Cancel };   // 10 px left of "Write tags" (it overlapped it by 6)
         var ok = new ThemedButton { Text = Loc.T("Write tags"), Primary = true, Pill = true, Width = 140, Height = 32, Location = new Point(ClientSize.Width - 140 - 20, by), DialogResult = DialogResult.OK, Enabled = candidates.Count > 0 };
         Controls.Add(cancel); Controls.Add(ok);
         AcceptButton = ok; CancelButton = cancel;
