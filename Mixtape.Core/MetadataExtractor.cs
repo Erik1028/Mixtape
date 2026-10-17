@@ -43,6 +43,10 @@ internal static class MetadataExtractor
             nt.TotalTracks = f.Tag.TrackCount;
             double ms = f.Properties.Duration.TotalMilliseconds;
             nt.LengthMs = ms > 0 && ms < uint.MaxValue ? (uint)ms : 0;          // a bogus/negative duration must not wrap
+            // .m4a is AAC OR Apple Lossless - TagLib names the sample entry ("MPEG-4 Audio (alac)"); the extension alone
+            // labelled lossless files "AAC audio file" (the iPod's own Kind, and the codec chip, said AAC)
+            if (!isVideo && ext is ".m4a" or ".m4b" or ".mp4" && (f.Properties.Description ?? "").Contains("alac", StringComparison.OrdinalIgnoreCase))
+                nt.FileTypeDescription = "Apple Lossless audio file";
             nt.Bitrate = (uint)Math.Clamp(f.Properties.AudioBitrate, 0, int.MaxValue);
             nt.SampleRate = (uint)Math.Clamp(f.Properties.AudioSampleRate, 0, int.MaxValue);
             // TagLib reports 0 kbps for some AAC/m4a files; estimate from size and duration so the

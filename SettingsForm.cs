@@ -424,6 +424,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             (Loc.T("Plays video"), p.SupportsVideo ? Loc.T("Yes") : Loc.T("No")),
             (Loc.T("Shows photos"), p.SupportsPhotos ? Loc.T("Yes") : Loc.T("No")),
         };
+        var fw = IPodFirmware.Detect(_device.MountRoot);
+        if (fw.Kind != IPodFirmware.Kinds.Apple) rows.Insert(2, (Loc.T("System"), fw.Display));   // under Generation: Rockbox / Encore OS
         if (!string.IsNullOrEmpty(p.SerialNumber)) rows.Add((Loc.T("Serial"), p.SerialNumber!));
         if (!string.IsNullOrEmpty(p.FirewireGuid)) rows.Add((Loc.T("FireWire GUID"), p.FirewireGuid!));
         InfoGroup(rows);

@@ -17,7 +17,14 @@ internal static class TrackFormat
         {
             case ".flac": return "FLAC";
             case ".mp3": return "MP3";
-            case ".m4a": case ".m4b": case ".aac": case ".mp4": return "AAC";
+            // .m4a holds AAC or Apple Lossless, and the description is not to be trusted: Mixtape itself labelled every
+            // .m4a "AAC audio file" until 0.21 (MetadataExtractor), Apple Lossless included. No AAC encoder goes past
+            // 320 kbps in practice, while lossless runs ~600-1100, so a fat .m4a is Apple Lossless. Many tracks carry no
+            // bitrate at all (0), so it is worked out from the size and the length then.
+            case ".m4a": case ".m4b":
+                double kbps = t.Bitrate > 0 ? t.Bitrate : t.LengthMs > 0 ? t.FileSize * 8.0 / t.LengthMs : 0;
+                return kbps >= 500 ? "ALAC" : "AAC";
+            case ".aac": case ".mp4": return "AAC";
             case ".wav": return "WAV";
             case ".aif": case ".aiff": return "AIFF";
             case ".ogg": case ".oga": return "OGG";

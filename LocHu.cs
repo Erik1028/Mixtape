@@ -78,6 +78,13 @@ internal static partial class LocHu
         ["Top Rated"] = "Legjobbra értékelt",
         ["Most Played"] = "Legtöbbet játszott",
         ["Never Played"] = "Sosem játszott",
+        // ---- the iPod's own system (IPodFirmware): Rockbox or Encore OS ----
+        ["System"] = "Rendszer",
+        ["Plays on Encore OS"] = "Encore OS-en lejátszható",
+        ["All {0} songs"] = "Mind a(z) {0} dal",
+        ["{0} of {1} songs"] = "{0} / {1} dal",
+        ["Unknown"] = "Ismeretlen",
+        ["Skipped by Encore OS"] = "Encore OS-en kimarad",
         // ---- the smart playlist editor (its rule fields, operators and sort orders come from Mixtape.Core/SmartPlaylist.cs) ----
         ["New Smart Playlist"] = "Új okos lista",
         ["Edit Smart Playlist"] = "Okos lista szerkesztése",

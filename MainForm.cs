@@ -4744,6 +4744,24 @@ internal sealed class MainForm : Form, IMessageFilter
         SetStatus("");   // the header's meta line carries the summary now; a third copy of "free" helped nobody
     }
 
+    /// <summary>Encore OS plays only part of what an iTunes-built iPod holds (IPodFirmware.EncorePlays): how many of the
+    /// songs it plays, and what it skips, by codec.</summary>
+    private static void AddEncoreRows(CardPanel about, IEnumerable<Track> tracks)
+    {
+        int total = 0, ok = 0;
+        var skipped = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var t in tracks)
+        {
+            if (MediaType.IsVideo(t.MediaType)) continue;
+            total++;
+            string c = TrackFormat.Codec(t);
+            if (IPodFirmware.EncorePlays(c)) ok++;
+            else { string k = c.Length > 0 ? c : Loc.T("Other"); skipped[k] = skipped.GetValueOrDefault(k) + 1; }
+        }
+        about.AddInfoRow(Loc.T("Plays on Encore OS"), ok == total ? Loc.T("All {0} songs", total) : Loc.T("{0} of {1} songs", ok, total));
+        if (skipped.Count > 0) about.AddInfoRow(Loc.T("Skipped by Encore OS"), string.Join("  ·  ", skipped.Select(kv => $"{kv.Key} {kv.Value}")));
+    }
+
     private long PhotoBytes()
     {
         if (_device is null) return 0;
@@ -4803,7 +4821,10 @@ internal sealed class MainForm : Form, IMessageFilter
         // No Generation row when it would print the model's own string again; no Capacity row — the ring
         // above IS the capacity, and the header already says how much is free.
         if (p.GenerationDisplay != (p.ModelName ?? p.ModelNumber)) about.AddInfoRow(Loc.T("Generation"), p.GenerationDisplay);
+        var fw = IPodFirmware.Detect(dev.MountRoot);
+        if (fw.Kind != IPodFirmware.Kinds.Apple) about.AddInfoRow(Loc.T("System"), fw.Display);   // Rockbox / Encore OS (Apple: nothing to add)
         about.AddInfoRow(Loc.T("Songs"), songCount.ToString());
+        if (fw.IsEncore && _db is not null) AddEncoreRows(about, _db.Tracks);
         if (p.SupportsVideo) about.AddInfoRow(Loc.T("Videos"), videoCount.ToString());
         if (p.SupportsPhotos) about.AddInfoRow(Loc.T("Photos"), photoCount.ToString());
         about.AddInfoRow(Loc.T("Signature"), Loc.T(p.SchemeLabel));
