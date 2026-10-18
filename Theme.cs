@@ -1354,6 +1354,8 @@ internal sealed class ThemedButton : Button
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
     private float _sweepT = 1f;   // Cyber: 0→1 the light sweep across the slab on hover (1 = none)
     private Tween? _sweepTw;
+    private float _tapT = 1f;     // Cyber: 0→1 a tap's flash and corner kick (1 = none)
+    private Tween? _tapTw;
     private bool _painted;
     private Tween? _hoverTw, _pressTw;
     private string? _blockedReason;
@@ -1395,7 +1397,7 @@ internal sealed class ThemedButton : Button
         Height = 34;
         MouseEnter += (_, _) => { if (Enabled && !IsBlocked) { AnimHover(1f); Sweep(); } };
         MouseLeave += (_, _) => { AnimHover(0f); AnimPress(0f); };
-        MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Enabled && !IsBlocked) AnimPress(1f); };
+        MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Enabled && !IsBlocked) { AnimPress(1f); Tap(); } };
         MouseUp += (_, me) => { if (me.Button == MouseButtons.Left) AnimPress(0f); };
         EnabledChanged += (_, _) => Invalidate();
     }
@@ -1455,6 +1457,15 @@ internal sealed class ThemedButton : Button
         _sweepTw = Anim.Run(420, v => { _sweepT = (float)v; if (!IsDisposed) Invalidate(); }, () => { _sweepTw = null; _sweepT = 1f; if (!IsDisposed) Invalidate(); }, Easings.OutCubic);
     }
 
+    /// <summary>Cyber: a tap (Orbit's bracket snap) - the corner marks kick in from the edge and a light flash fades.</summary>
+    private void Tap()
+    {
+        if (!Theme.Cyber || Ghost || !_painted || !Anim.MotionEnabled) return;
+        _tapTw?.Cancel();
+        _tapT = 0f;
+        _tapTw = Anim.Run(260, v => { _tapT = (float)v; if (!IsDisposed) Invalidate(); }, () => { _tapTw = null; _tapT = 1f; if (!IsDisposed) Invalidate(); }, Easings.OutCubic);
+    }
+
     private void AnimPress(float to)
     {
         if (!_painted || !Anim.MotionEnabled) { _pressT = to; Invalidate(); return; }
@@ -1506,6 +1517,20 @@ internal sealed class ThemedButton : Button
                 saved.Dispose();
             }
             using (var p = new Pen(cl)) g.DrawPath(p, path);
+            if (_tapT < 1f)   // the tap's flash
+                using (var fl = new SolidBrush(Color.FromArgb((int)(90 * (1f - _tapT)), 255, 255, 255))) g.FillPath(fl, path);
+            float marks = Math.Max(h, 1f - _tapT);   // the corner marks: under the pointer, and kicked in by a tap
+            if (marks > 0.02f && !disabled)
+            {
+                // four small L marks closing in on the slab's corners (they start 5 px further in)
+                float mInset = 3f + 5f * (1f - marks), arm = 5f;
+                var mr = RectangleF.Inflate(r, -mInset, -mInset);
+                using var mb = new SolidBrush(Color.FromArgb((int)(255 * Math.Min(1f, marks * 1.4f)), Primary ? Theme.CyberInk : Theme.CyberCyan));
+                g.FillRectangle(mb, mr.X, mr.Y, arm, 1.5f); g.FillRectangle(mb, mr.X, mr.Y, 1.5f, arm);
+                g.FillRectangle(mb, mr.Right - arm, mr.Y, arm, 1.5f); g.FillRectangle(mb, mr.Right - 1.5f, mr.Y, 1.5f, arm);
+                g.FillRectangle(mb, mr.X, mr.Bottom - 1.5f, arm, 1.5f); g.FillRectangle(mb, mr.X, mr.Bottom - arm, 1.5f, arm);
+                g.FillRectangle(mb, mr.Right - arm, mr.Bottom - 1.5f, arm, 1.5f); g.FillRectangle(mb, mr.Right - 1.5f, mr.Bottom - arm, 1.5f, arm);
+            }
             if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, ct); return; }
             string cyLabel = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
             CrispText.DrawText(g, cyLabel, Font, textRect, ct, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);

@@ -91,6 +91,13 @@ internal class CardDialog : GlassDialog
         base.OnShown(e);
         if (!_adopted) return;
         if (!Anim.MotionEnabled) { Opacity = 1; return; }
+        if (Theme.Cyber)
+        {
+            // the HUD console opens in place - a quick fade, and a scan line down it (no rise)
+            Anim.Run(110, v => { if (!IsDisposed) Opacity = v; }, () => { if (!IsDisposed) Opacity = 1; }, Easings.OutCubic);
+            CyberOverlay.Sweep(this, 300);
+            return;
+        }
         int home = Top;
         Top = home + 10;
         Anim.Run(150, v => { if (IsDisposed) return; Opacity = v; Top = home + (int)Math.Round(10 * (1 - v)); },

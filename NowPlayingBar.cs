@@ -989,6 +989,16 @@ internal sealed class NowPlayingBar : Panel
             // A new song's lines rise the last few pixels into place while its cover dissolves, so the card
             // changes as one thing. A slide and not a fade: GDI text ignores alpha.
             int ts = s.TextSlide is { } slide ? (int)Math.Round((1 - Math.Clamp(slide, 0f, 1f)) * 7) : 0;
+            if (Theme.Cyber && s.TextSlide is { } gs && gs < 1f && !idle)
+            {
+                // Cyber: no rise - the title glitches in: a red and a cyan ghost beside it, jittering in six steps
+                ts = 0;
+                int step = (int)(Math.Clamp(gs, 0f, 0.999f) * 6);
+                int dx = 1 + (int)(CyberFx.Hash(step, 11) * 3), dy = CyberFx.Hash(step, 23) < 0.5f ? 0 : 1;
+                var gf = TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter;
+                CrispText.DrawText(g, title, fTitle, new Rectangle(c.TextX - dx, card.Y + 8 + dy, c.TextW, 17), Theme.CyberRed, gf);
+                CrispText.DrawText(g, title, fTitle, new Rectangle(c.TextX + dx, card.Y + 8 - dy, c.TextW, 17), Theme.CyberCyan, gf);
+            }
             CrispText.DrawText(g, title, fTitle, new Rectangle(c.TextX, card.Y + 8 + ts, c.TextW, 17), Theme.Blend(slab, idle ? Theme.Subtle : Theme.TextCol, tf),
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
             CrispText.DrawText(g, sub, fSub, new Rectangle(c.TextX, card.Y + 25 + ts, c.TextW, 15), Theme.Blend(slab, idle ? Theme.Faint : Theme.Subtle, tf),
@@ -1195,6 +1205,7 @@ internal sealed class NowPlayingBar : Panel
     // ---- interaction ----
     private enum Hit { None, Prev, Play, Next, Speaker, Eq, Pro, Queue, Lyrics, Shuffle, Repeat, Seek, Vol, Cover, Overflow, Artist, Album, Times, Flow, AddTo, Stars }
     /// <summary>Harness (MIX_DECK_HOVER=prev|play|next|speaker|eq|pro|queue|lyrics|shuffle|repeat|seek|vol|cover): paint that hover state.</summary>
+    internal void PreviewTextSlide(float v) { _textTw?.Cancel(); _textSlide = v; Invalidate(); }   // the render harness: a new song's text mid-arrival (MIX_TEXT_SLIDE)
     internal void PreviewHover(string name) { if (Enum.TryParse<Hit>(name, true, out var h)) { _hover = h; if (h == Hit.Seek) _hoverFrac = 0.62; Invalidate(); } }
     private Hit _hover = Hit.None;
     private float _seekKnobR = 5f, _volKnobR = 5f;   // grab-knob radii — grow on hover/drag (tweened by RetargetKnobs)

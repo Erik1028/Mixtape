@@ -13,6 +13,8 @@ internal enum SidebarRowKind { Section, Device, AllSongs, Albums, Artists, Video
 internal sealed class Sidebar : Panel
 {
     private float _pillY = -1, _pillH;     // the active pill's live position, so it can slide between rows
+    private float _iconWipe = 1f;          // Cyber: the newly active row's cyan icon fill wiping in from the left
+    private Tween? _iconTw;
     private int _pillScroll;
     private Tween? _pillTw;
     private object? _hoverLeaving;         // the row the pointer just left, still fading its lift out
@@ -491,6 +493,12 @@ internal sealed class Sidebar : Panel
                                 _pillH = (float)(fromH + (toH - fromH) * v);
                                 if (!IsDisposed) Invalidate();
                             }, () => _pillTw = null, Easings.OutQuint);
+                            if (Theme.Cyber)   // the new place's icon fills with cyan from the left (Orbit's on-wipe)
+                            {
+                                _iconTw?.Cancel();
+                                _iconWipe = 0f;
+                                _iconTw = Anim.Run(240, v => { _iconWipe = (float)v; if (!IsDisposed) Invalidate(); }, () => { _iconTw = null; _iconWipe = 1f; }, Easings.OutCubic);
+                            }
                         }
                     }
                     pill = new Rectangle(pill.X, (int)Math.Round(_pillY), pill.Width, (int)Math.Round(_pillH));
@@ -559,9 +567,20 @@ internal sealed class Sidebar : Panel
                     // the HUD's icon: a dark slot with a cyan outline and a cyan glyph; the current place filled cyan, glyph in black
                     bool on = row.Active;
                     using var tp = Theme.RoundedRect(new RectangleF(tile.X + 0.5f, tile.Y + 0.5f, tile.Width - 1, tile.Height - 1), Theme.RadTileSmall + 3);
-                    using (var tb = new SolidBrush(on ? Theme.CyberCyan : Theme.CyberCard2)) g.FillPath(tb, tp);
-                    using (var tpen = new Pen(on ? Theme.CyberCyan : Theme.CyberCyanDim)) g.DrawPath(tpen, tp);
-                    DrawRowGlyph(g, Rectangle.Inflate(tile, 2, 2), row.Kind, on ? Theme.CyberInk : Theme.CyberCyan);
+                    // the slot as it is off; the current place's cyan fill over it, wiping in from the left when it arrives
+                    using (var tb = new SolidBrush(Theme.CyberCard2)) g.FillPath(tb, tp);
+                    using (var tpen = new Pen(Theme.CyberCyanDim)) g.DrawPath(tpen, tp);
+                    DrawRowGlyph(g, Rectangle.Inflate(tile, 2, 2), row.Kind, Theme.CyberCyan);
+                    if (on)
+                    {
+                        var saved = g.Clip;
+                        g.SetClip(new RectangleF(tile.X, tile.Y, tile.Width * Math.Clamp(_iconWipe, 0f, 1f), tile.Height), CombineMode.Intersect);
+                        using (var tb = new SolidBrush(Theme.CyberCyan)) g.FillPath(tb, tp);
+                        using (var tpen = new Pen(Theme.CyberCyan)) g.DrawPath(tpen, tp);
+                        DrawRowGlyph(g, Rectangle.Inflate(tile, 2, 2), row.Kind, Theme.CyberInk);
+                        g.Clip = saved;
+                        saved.Dispose();
+                    }
                 }
                 else
                 {

@@ -43,11 +43,28 @@ internal static class CyberFx
         }
     }
 
-    /// <summary>A page opened: draw its tags in again.</summary>
+    /// <summary>The content area a page opens in: a new page gets a scan line down it (CyberOverlay.Sweep).</summary>
+    public static Control? PageArea { get; set; }
+
+    /// <summary>The same pseudo-random 0..1 for the same (a, b) - a glitch's jitter without a Random (Orbit's Hash).</summary>
+    public static float Hash(int a, int b)
+    {
+        unchecked
+        {
+            uint h = (uint)a * 374761393u + (uint)b * 668265263u + 0x9E3779B9u;
+            h = (h ^ (h >> 15)) * 2246822519u;
+            h = (h ^ (h >> 13)) * 3266489917u;
+            h ^= h >> 16;
+            return (h & 0xFFFFFF) / 16777216f;
+        }
+    }
+
+    /// <summary>A page opened: a scan line runs down it, and its tags are drawn in again.</summary>
     public static void PlayReveal()
     {
         _tw?.Cancel();
         if (!Theme.Cyber || !Anim.MotionEnabled) { TagT = 1f; return; }
+        if (PageArea is { } area) CyberOverlay.Sweep(area);
         TagT = 0f;
         _tw = Anim.Run(560, v => { TagT = (float)v; RedrawTags(); }, () => { _tw = null; TagT = 1f; RedrawTags(); }, Easings.OutCubic);
     }

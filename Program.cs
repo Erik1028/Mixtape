@@ -47,6 +47,9 @@ internal static class Program
         if (args.Length >= 1 && args[0] == "--classicwin") { RunClassicWinTest(); return; }
         // How often a tween actually gets a frame, on both pacers. → the console
         if (args.Length >= 1 && args[0] == "--animbench") { RunAnimBench(); return; }
+        // The Cyber overlay's pictures (the scan line at three heights, the boot's brackets at three moments) on a card. → the png
+        if (args.Length >= 2 && args[0] == "--cyberfx") { RunCyberFxSheet(args[1]); return; }
+        if (args.Length >= 2 && args[0] == "--cyberfx-live") { Application.EnableVisualStyles(); File.WriteAllText(args[1], CyberOverlay.LiveSelfTest()); return; }
         // The Classic skin's pixel icons on one sheet, at 1x and 4x, with any malformed map reported. → the png
         if (args.Length >= 2 && args[0] == "--icons") { RunIcons(args[1]); return; }
         // What the identifier would offer for a file, printed. → the console
@@ -2004,6 +2007,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_DECK_HOVER") is { Length: > 0 } dhv) { Application.DoEvents(); form.PreviewDeckHover(dhv); }   // a hovered deck control (prev|play|next|...)
         if (int.TryParse(Environment.GetEnvironmentVariable("MIX_HOT_ROW"), out int hotRow)) { Application.DoEvents(); form.PreviewRowHover(hotRow, Environment.GetEnvironmentVariable("MIX_ROW_ACTION")); }   // a hovered row (+ play|more)
         if (Environment.GetEnvironmentVariable("MIX_STAGE") == "1") { Application.DoEvents(); form.PreviewLyricsStage(); }   // the lyrics view open
+        if (float.TryParse(Environment.GetEnvironmentVariable("MIX_TEXT_SLIDE"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tslide)) form.PreviewTextSlide(tslide);   // the deck's new-song text, frozen mid-arrival
         // Pump the message loop so background cover-art loads land before we capture.
         int settleMs = int.TryParse(Environment.GetEnvironmentVariable("MIX_SETTLE_MS"), out int sm) ? sm : 4500;   // longer when a render must wait for the network
         for (int i = 0; i < settleMs / 100; i++) { Application.DoEvents(); Thread.Sleep(100); }
@@ -3117,6 +3121,31 @@ internal static class Program
     private sealed class DropRealInput : IMessageFilter
     {
         public bool PreFilterMessage(ref Message m) => m.Msg is (>= 0x0100 and <= 0x0109) or (>= 0x0200 and <= 0x020E);
+    }
+
+    private static void RunCyberFxSheet(string outPng)
+    {
+        Theme.SetSkin(false, true);
+        const int w = 520, h = 300;
+        using var sheet = new Bitmap(w * 3 + 40, h * 2 + 30);
+        using var g = Graphics.FromImage(sheet);
+        g.Clear(Theme.CyberPage);
+        using var card = new SolidBrush(Theme.CyberCard);
+        using var strip = CyberOverlay.SweepStrip(w);
+        for (int i = 0; i < 3; i++)
+        {
+            var r = new Rectangle(10 + i * (w + 10), 10, w, h);
+            g.FillRectangle(card, r);
+            g.SetClip(r);
+            g.DrawImageUnscaled(strip, r.X, r.Y - CyberOverlay.StripH + (int)((h + CyberOverlay.StripH) * (0.25f + 0.25f * i)));
+            g.ResetClip();
+            var b = new Rectangle(10 + i * (w + 10), h + 20, w, h);
+            g.FillRectangle(card, b);
+            using var frame = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var fg = Graphics.FromImage(frame)) CyberOverlay.DrawBrackets(fg, new Size(w, h), new[] { 0f, 0.5f, 1f }[i], 1f);
+            g.DrawImageUnscaled(frame, b.X, b.Y);
+        }
+        sheet.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
     }
 
     private static void RunClassicWinTest()

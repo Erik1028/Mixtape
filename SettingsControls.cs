@@ -75,8 +75,20 @@ internal sealed class ToggleSwitch : Control
         float tc = Math.Clamp(_t, 0f, 1f);
         var r = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
         using (var track = Theme.RoundedRect(r, (Height - 1) / 2f))
-        using (var b = new SolidBrush(Theme.Blend(Theme.Blend(Theme.PanelBg, Color.White, 0.14), Theme.Accent, tc)))
-            g.FillPath(b, track);
+        {
+            if (Theme.Cyber)
+            {
+                // the HUD's switch: a dark slot, the cyan fill wiping in from the left as it turns on
+                using (var off = new SolidBrush(Theme.CyberCard3)) g.FillPath(off, track);
+                var saved = g.Clip;
+                g.SetClip(new RectangleF(r.X, r.Y, r.Width * tc, r.Height), System.Drawing.Drawing2D.CombineMode.Intersect);
+                using (var on = new SolidBrush(Theme.CyberCyan)) g.FillPath(on, track);
+                g.Clip = saved;
+                saved.Dispose();
+            }
+            else using (var b = new SolidBrush(Theme.Blend(Theme.Blend(Theme.PanelBg, Color.White, 0.14), Theme.Accent, tc)))
+                g.FillPath(b, track);
+        }
         int d = Height - 8;
         float x = 4 + (Width - d - 8) * _t;   // slides between the off/on insets (OutBack adds a tiny overshoot)
         using var knob = new SolidBrush(Theme.Blend(Color.FromArgb(220, 225, 230), Theme.OnAccent, tc));

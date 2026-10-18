@@ -175,6 +175,7 @@ internal sealed class MainForm : Form, IMessageFilter
         string? testMode = Environment.GetEnvironmentVariable("MIX_TEST_RESTART");
         // Classic: 1995's welcome screen once the window is up - not in a render, not under the restart harness
         if (Theme.Classic && _autoDetect && testMode is null && _settings.ShowWelcome) Shown += (_, _) => BeginInvoke(() => ShowWelcome());
+        if (Theme.Cyber && _autoDetect && testMode is null) Shown += (_, _) => BeginInvoke(() => { if (_content is not null) CyberOverlay.Boot(_content); });   // Cyber: the HUD locks on as it starts
         if (testMode is "1" or "play" or "busy") Shown += async (_, _) =>
         {
             TracePath ??= Environment.GetEnvironmentVariable("MIX_TRACE");
@@ -395,7 +396,8 @@ internal sealed class MainForm : Form, IMessageFilter
         LayoutGridHost();
 
         // The track grid, photo grid and device page share the centre cell; only one shows at a time.
-        var center = _center = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Margin = Padding.Empty };   // fill the middle cell with no gap (matches the zero-margin header/bar rows)
+        var center = _center = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Margin = Padding.Empty };
+        CyberFx.PageArea = center;   // Cyber: a new page gets its scan line down this   // fill the middle cell with no gap (matches the zero-margin header/bar rows)
         center.Controls.Add(_deviceView);   // Fill, hidden until the Device view is active
         // Device page scrolls via a custom thin scrollbar: the content panel is moved by its Top inside the
         // clipping viewport (no AutoScroll → no native bar), and our slim bar is overlaid on the right.
@@ -2506,6 +2508,8 @@ internal sealed class MainForm : Form, IMessageFilter
 
     /// <summary>Render harness: show the list's <paramref name="row"/> as the playing song (no audio), with a
     /// synthetic cover when <paramref name="coverId"/> ≥ 0.</summary>
+    internal void PreviewTextSlide(float v) => _nowPlaying.PreviewTextSlide(v);
+
     public void PreviewNowPlaying(int row, double atSec, int coverId)
     {
         Track? t;
@@ -2870,7 +2874,10 @@ internal sealed class MainForm : Form, IMessageFilter
     private void TransitionCenter(Action switchViews)
     {
         var center = _center;
-        if (center is null || !Anim.MotionEnabled || _viewTransitionBusy || !center.IsHandleCreated || center.Width < 8 || center.Height < 8)
+        // Cyber: no slide from the right (Erik: out) - the page switches at once and the HUD's own motion marks it: a scan
+        // line down the page and its tags typing in (CyberFx.PlayReveal, from the header's new title). It also spares the
+        // two whole-page snapshots the slide takes.
+        if (center is null || !Anim.MotionEnabled || Theme.Cyber || _viewTransitionBusy || !center.IsHandleCreated || center.Width < 8 || center.Height < 8)
         {
             switchViews();
             return;
