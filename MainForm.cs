@@ -1198,7 +1198,7 @@ internal sealed class MainForm : Form, IMessageFilter
         // raised on the rail directly: a SENT WM_MOUSEMOVE arms leave-tracking while the real pointer is elsewhere, and the
         // WM_MOUSELEAVE that follows at once repaints the rail whole - which hid exactly what was left on screen
         var onMove = typeof(Control).GetMethod("OnMouseMove", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        foreach (var k in kinds.Concat(kinds.Reverse()).Concat(kinds))
+        foreach (var k in kinds.Concat(Enumerable.Reverse(kinds)).Concat(kinds))
             if (_sidebar.PreviewRowCenter(k) is { } p)
             {
                 onMove.Invoke(_sidebar, new object[] { new MouseEventArgs(MouseButtons.None, 0, p.X, p.Y, 0) });
