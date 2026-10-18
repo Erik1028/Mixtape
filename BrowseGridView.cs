@@ -246,6 +246,9 @@ internal sealed class BrowseGridView : Panel
         // instead of all dumping on the right (matches PhotoGridView, which fixed the same gutter).
         int gridW = cols * CoverW + Math.Max(0, cols - 1) * Gap;
         int x0 = Math.Max(Pad, (Width - gridW) / 2);
+        // Only the cards the paint actually covers: a cover arriving (its fade) or a hover lift invalidates ONE card, and
+        // drawing every visible cover again - each a bicubic resample - for that was most of what such a frame cost.
+        var clip = Rectangle.Ceiling(g.ClipBounds);
         for (int i = 0; i < _cards.Count; i++)
         {
             int col = i % cols, row = i / cols;
@@ -254,6 +257,7 @@ internal sealed class BrowseGridView : Panel
             var tile = new Rectangle(x, y, CoverW, TileH);
             _hit.Add((tile, _cards[i]));
             if (y + TileH < 0 || y > Height) continue; // cull off-screen
+            if (!clip.IntersectsWith(Rectangle.Inflate(tile, 10, 10))) continue;   // (10: the hover lift's growth + its shadow)
             DrawCard(g, x, y, _cards[i]);
         }
 

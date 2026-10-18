@@ -245,6 +245,7 @@ internal sealed class PhotoGridView : Panel
             var rect = new Rectangle(x, y, TileW, TileH);
             _hit.Add((rect, _tiles[i]));
             if (y + TileH < 0 || y > Height) continue; // cull off-screen
+            if (!g.ClipBounds.IntersectsWith(RectangleF.Inflate(rect, 10, 10))) continue;   // only what this paint covers (a thumbnail arriving invalidates one tile)
             DrawTile(g, rect, _tiles[i]);
         }
 

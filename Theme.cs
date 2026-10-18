@@ -523,6 +523,15 @@ internal static class Theme
     /// Cyber: a caption as a yellow TAG (Orbit's CyberHud.Tag) - black UPPERCASE monospace on a yellow label whose right
     /// end is slanted, its top-left corner at (<paramref name="x"/>, <paramref name="y"/>). Returns its width.
     /// </summary>
+    /// <summary>How wide <see cref="DrawCyberTag"/> draws <paramref name="text"/> (h 17).</summary>
+    public static int CyberTagWidth(Graphics g, string text)
+    {
+        _cyberTagFont ??= new Font(CyberMono, 7.25f, CyberMono.Contains("SemiBold") ? FontStyle.Regular : FontStyle.Bold);
+        string s = text.ToUpper(System.Globalization.CultureInfo.CurrentCulture);
+        int tw = TextRenderer.MeasureText(g, s, _cyberTagFont, new Size(int.MaxValue, 17), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+        return tw + 2 * 6 + 6 - 2;
+    }
+
     public static int DrawCyberTag(Graphics g, string text, int x, int y, Color? fill = null, int h = 17, bool animate = true)
     {
         _cyberTagFont ??= new Font(CyberMono, 7.25f, CyberMono.Contains("SemiBold") ? FontStyle.Regular : FontStyle.Bold);

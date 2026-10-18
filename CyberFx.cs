@@ -16,6 +16,23 @@ internal static class CyberFx
     private static Tween? _tw;
     private static readonly List<WeakReference<Control>> _targets = new();
 
+    // Where each view drew its tags in its last paint, with the colour under them: the reveal redraws exactly these,
+    // straight onto the window. Repainting the whole page every frame of the reveal (what it did first) cost the UI
+    // thread ~400 ms of every page switch - the transitions stuttered and clicks waited (measured: MIX_SWITCHBENCH).
+    private sealed record Spot(string Text, int X, int Y, Color Bg);
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, List<Spot>> Spots = new();
+
+    /// <summary>A tag view starts a paint: forget where its tags were (they are recorded again as they are drawn).</summary>
+    public static void BeginPaint(Control c) { if (Spots.TryGetValue(c, out var l)) l.Clear(); }
+
+    /// <summary>Draw a page tag for <paramref name="c"/> on its <paramref name="bg"/>, and remember where, so the reveal
+    /// can redraw just it.</summary>
+    public static void Tag(Control c, Graphics g, string text, int x, int y, Color bg)
+    {
+        Theme.DrawCyberTag(g, text, x, y);
+        Spots.GetOrCreateValue(c).Add(new Spot(text, x, y, bg));
+    }
+
     /// <summary>A control that draws tags (Theme.DrawCyberTag) and must repaint while they are drawn in.</summary>
     public static void Watch(Control c)
     {
@@ -32,18 +49,38 @@ internal static class CyberFx
         _tw?.Cancel();
         if (!Theme.Cyber || !Anim.MotionEnabled) { TagT = 1f; return; }
         TagT = 0f;
-        _tw = Anim.Run(560, v => { TagT = (float)v; Repaint(); }, () => { _tw = null; TagT = 1f; Repaint(); }, Easings.OutCubic);
+        _tw = Anim.Run(560, v => { TagT = (float)v; RedrawTags(); }, () => { _tw = null; TagT = 1f; RedrawTags(); }, Easings.OutCubic);
     }
 
-    private static void Repaint()
+    /// <summary>One frame of the reveal: each recorded tag drawn at the current phase into a small bitmap over its own
+    /// background, and that blitted onto the window - a few hundred pixels, not the page.</summary>
+    private static void RedrawTags()
     {
         Control[] live;
         lock (_targets)
         {
-            live = _targets.Select(w => w.TryGetTarget(out var t) ? t : null).Where(t => t is { IsDisposed: false, Visible: true }).ToArray()!;
+            live = _targets.Select(w => w.TryGetTarget(out var t) ? t : null).Where(t => t is { IsDisposed: false, Visible: true, IsHandleCreated: true }).ToArray()!;
         }
-        foreach (var c in live) c.Invalidate();
+        foreach (var c in live)
+        {
+            if (!Spots.TryGetValue(c, out var spots) || spots.Count == 0) continue;
+            if (GetUpdateRect(c.Handle, IntPtr.Zero, false)) continue;   // a paint is pending: it draws the tags at this phase itself (and knows where they are now)
+            using var g = c.CreateGraphics();
+            foreach (var t in spots.ToArray())
+            {
+                int w = Theme.CyberTagWidth(g, t.Text) + 2;
+                using var bmp = new Bitmap(w, 17);
+                using (var bg = Graphics.FromImage(bmp))
+                {
+                    bg.Clear(t.Bg);
+                    Theme.DrawCyberTag(bg, t.Text, 0, 0);
+                }
+                g.DrawImageUnscaled(bmp, t.X, t.Y);
+            }
+        }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetUpdateRect(IntPtr hwnd, IntPtr rect, bool erase);
 
     /// <summary>The tag's two phases at <see cref="TagT"/>: the body's wipe, then the typing.</summary>
     public static (float Wipe, float Type) TagPhases(float t) =>

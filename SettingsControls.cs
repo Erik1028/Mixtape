@@ -517,8 +517,10 @@ internal sealed class CyberTagLabel : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        e.Graphics.Clear(Parent?.BackColor ?? Theme.Bg);
-        Theme.DrawCyberTag(e.Graphics, Text, 0, Math.Max(0, Height - 17));
+        var bg = Parent?.BackColor ?? Theme.Bg;
+        e.Graphics.Clear(bg);
+        CyberFx.BeginPaint(this);
+        CyberFx.Tag(this, e.Graphics, Text, 0, Math.Max(0, Height - 17), bg);
     }
 
     protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }

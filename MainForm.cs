@@ -1117,6 +1117,42 @@ internal sealed class MainForm : Form, IMessageFilter
         return $"spin: {Easter.SpinFrames} frames in {secs:0.00} s = {Easter.SpinFrames / secs:0.0} fps; painting a frame {(paints > 0 ? paintMs / paints : 0):0.0} ms";
     }
 
+    /// <summary>Harness (MIX_SWITCHBENCH=view,view,..., with MIX_LIVE): page switches as a click makes them, with motion
+    /// ON, through a plain message loop - the click's own work, when the first WM_PAINT lands, and what the UI thread
+    /// paints in the 1.5 s after (count and time), i.e. the cost of every transition animation together.</summary>
+    internal string PreviewSwitchBench(string[] views)
+    {
+        bool motion = Anim.MotionEnabled; Anim.MotionEnabled = true;
+        var sb = new System.Text.StringBuilder();
+        foreach (var v in views)
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            PreviewSelectView(v);
+            double clickMs = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+            int paints = 0; double paintMs = 0, first = -1, maxPaint = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 1500)
+            {
+                if (PeekMessage(out var m, IntPtr.Zero, 0, 0, 1))
+                {
+                    long t = System.Diagnostics.Stopwatch.GetTimestamp();
+                    bool paint = m.message == 0x000F;
+                    TranslateMessage(ref m); DispatchMessage(ref m);
+                    if (paint)
+                    {
+                        double ms = System.Diagnostics.Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+                        paintMs += ms; paints++; maxPaint = Math.Max(maxPaint, ms);
+                        if (first < 0) first = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+                    }
+                }
+                else Thread.Sleep(0);
+            }
+            sb.AppendLine($"{v,-8} click {clickMs,6:0.0} ms | first paint at {first,6:0.0} ms | {paints,4} WM_PAINT in 1.5 s, {paintMs,6:0} ms painting (avg {paintMs / Math.Max(1, paints):0.0}, max {maxPaint:0.0})");
+        }
+        Anim.MotionEnabled = motion;
+        return sb.ToString();
+    }
+
     internal string PreviewPaintBench(int n)
     {
         const uint RDW_INVALIDATE = 0x1, RDW_ERASE = 0x4, RDW_NOCHILDREN = 0x40, RDW_ALLCHILDREN = 0x80, RDW_UPDATENOW = 0x100;

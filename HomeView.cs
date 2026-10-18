@@ -220,6 +220,7 @@ internal sealed class HomeView : Panel
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.Bg);
+        CyberFx.BeginPaint(this);
         _hit.Clear();
         if (IsEmpty)
         {
@@ -280,7 +281,7 @@ internal sealed class HomeView : Panel
     private void DrawLabel(Graphics g, int x, int y, int w, string text)
     {
         if (Theme.Classic) return;   // Classic: the caption rides the group box's frame instead (ClassicGroup)
-        if (Theme.Cyber) { Theme.DrawCyberTag(g, text, x, y + (LabelH - 17) / 2); return; }
+        if (Theme.Cyber) { CyberFx.Tag(this, g, text, x, y + (LabelH - 17) / 2, Theme.Bg); return; }
         CrispText.DrawText(g, Theme.Caps(text), _fLabel, new Rectangle(x, y, w, LabelH), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
@@ -310,6 +311,7 @@ internal sealed class HomeView : Panel
         DrawLabel(g, x, y, w, s.Label);
         int ty = y + LabelH;
         int cover = CoverW, n = Math.Min(Cols, s.Tiles.Count);
+        var clip = Rectangle.Ceiling(g.ClipBounds);   // only the tiles this paint covers (a hover lift invalidates one)
         for (int i = 0; i < n; i++)
         {
             var t = s.Tiles[i];
@@ -317,6 +319,7 @@ internal sealed class HomeView : Panel
             var rect = new Rectangle(tx, ty, cover, TileH);
             _hit.Add((rect, t));
             if (ty + TileH < 0 || ty > Height) continue;
+            if (!clip.IntersectsWith(Rectangle.Inflate(rect, 10, 10))) continue;
             DrawTile(g, tx, ty, cover, t);
         }
         ClassicGroup(g, x, y, w, ty + TileH, s.Label);

@@ -138,6 +138,7 @@ internal sealed class StatsView : Panel
     {
         var g = e.Graphics;
         g.Clear(Theme.Bg);
+        CyberFx.BeginPaint(this);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = Theme.TextHint;
         _hit.Clear();
@@ -216,7 +217,7 @@ internal sealed class StatsView : Panel
         }
         // Classic: the label is the group box's caption, so the figure has the box to itself. Cyber: the label is a
         // yellow tag at the top-left (as on Orbit's HUD cards) and the figure sits under it.
-        if (Theme.Cyber) Theme.DrawCyberTag(g, s.Label, r.X + 14, r.Y + 12);
+        if (Theme.Cyber) CyberFx.Tag(this, g, s.Label, r.X + 14, r.Y + 12, Theme.PanelBg);
         var at = Theme.Classic ? new Rectangle(r.X + 16, top + 2, box, r.Bottom - top - 4)
             : Theme.Cyber ? new Rectangle(r.X + 14, r.Y + 32, box, r.Bottom - r.Y - 38)
             : new Rectangle(r.X + 16, r.Y + 11, box, 36);
@@ -256,7 +257,7 @@ internal sealed class StatsView : Panel
         using (var b = new SolidBrush(Theme.PanelBg))
         using (var p = Theme.RoundedRect(card, Theme.RadCard)) g.FillPath(b, p);
         if (Theme.Classic) ClassicGroup(g, card, sec.Label);
-        else if (Theme.Cyber) Theme.DrawCyberTag(g, sec.Label, card.X + 14, card.Y + 8);
+        else if (Theme.Cyber) CyberFx.Tag(this, g, sec.Label, card.X + 14, card.Y + 8, Theme.PanelBg);
         else CrispText.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
