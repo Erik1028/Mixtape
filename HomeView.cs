@@ -275,6 +275,8 @@ internal sealed class HomeView : Panel
         }
     }
 
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); CyberFx.Watch(this); }
+
     private void DrawLabel(Graphics g, int x, int y, int w, string text)
     {
         if (Theme.Classic) return;   // Classic: the caption rides the group box's frame instead (ClassicGroup)
@@ -430,6 +432,7 @@ internal sealed class HomeView : Panel
     public static Bitmap HeaderTile(int size)
     {
         if (Theme.Classic) return Theme.ClassicHeaderIcon(ClassicIcons.Id.Home);
+        if (Theme.Cyber) return Theme.CyberIconTile(size, Theme.DrawHouse);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;

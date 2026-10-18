@@ -58,6 +58,13 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             ClientSize = new Size(ClientSize.Width + 4, ClientSize.Height + 4);
             Paint += (_, pe) => Theme.Bevel(pe.Graphics, ClientRectangle, raised: true);
         }
+        else if (Theme.Cyber)
+        {
+            // the HUD console: its frame in a two-pixel margin round the docked caption, rail and pane
+            Padding = new Padding(2);
+            ClientSize = new Size(ClientSize.Width + 4, ClientSize.Height + 4);
+            Paint += (_, pe) => Theme.PaintCyberConsole(pe.Graphics, ClientRectangle, 14);
+        }
         ForeColor = Theme.TextCol;
         Font = Theme.UiFont(9.5f);
 
@@ -191,6 +198,7 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         // full-screen on the dense Library page) — content taller than the viewport scrolls via the themed
         // ThinScrollBar. Capped to the screen so it never opens taller than the desktop.
         int desired = Math.Min(PageHeight, Screen.FromControl(this).WorkingArea.Height - 72);
+        if (Theme.Cyber) desired += 4;   // its console margin
         if (!Theme.Classic && ClientSize.Height != desired) ClientSize = new Size(ClientSize.Width, desired);   // Classic: a property sheet keeps one size
 
         // Re-lay-out the themed scrollbar for the (rare) case content still exceeds the screen-capped window.

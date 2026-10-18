@@ -110,16 +110,39 @@ internal sealed class DeviceHero : Control
         var box = new Rectangle(cx - r, cy - r, r * 2, r * 2);
         // Base ring = the remainder (last segment); used segments overlay it from 12 o'clock — no seam math.
         Color baseCol = _segs.Length > 0 ? _segs[^1].Color : Theme.Blend(Theme.Bg, Color.White, 0.07);
-        using (var bb = new SolidBrush(baseCol)) g.FillPie(bb, box, 0, 360);
-        float start = -90f;
-        for (int i = 0; i < _segs.Length - 1; i++)
+        if (Theme.Cyber)
         {
-            var s = _segs[i];
-            if (s.Bytes <= 0) continue;
-            float sweep = (float)(s.Bytes / (double)_total * 360.0) * _sweep;
-            using var sb = new SolidBrush(s.Color);
-            g.FillPie(sb, box, start, sweep);
-            start += sweep;
+            // the HUD's gauge: a ring of 60 segments, each the colour of what fills its angle (free space dim)
+            const int n = 60;
+            const float step = 360f / n, gapDeg = 1.8f;
+            var arc = Rectangle.Inflate(box, -ringW / 2, -ringW / 2);
+            using var pen = new Pen(Theme.CyberTrack, ringW);
+            for (int k = 0; k < n; k++)
+            {
+                double at = (k + 0.5) / n, acc = 0;
+                Color c = Theme.Blend(baseCol, Theme.CyberCard, 0.55);
+                for (int i = 0; i < _segs.Length - 1; i++)
+                {
+                    acc += _segs[i].Bytes / (double)Math.Max(1, _total) * _sweep;
+                    if (at < acc) { c = _segs[i].Color; break; }
+                }
+                pen.Color = c;
+                g.DrawArc(pen, arc, -90f + k * step + gapDeg / 2, step - gapDeg);
+            }
+        }
+        else
+        {
+            using (var bb = new SolidBrush(baseCol)) g.FillPie(bb, box, 0, 360);
+            float start = -90f;
+            for (int i = 0; i < _segs.Length - 1; i++)
+            {
+                var s = _segs[i];
+                if (s.Bytes <= 0) continue;
+                float sweep = (float)(s.Bytes / (double)_total * 360.0) * _sweep;
+                using var sb = new SolidBrush(s.Color);
+                g.FillPie(sb, box, start, sweep);
+                start += sweep;
+            }
         }
         int ri = r - ringW;
         _hub = new Rectangle(cx - ri, cy - ri, ri * 2, ri * 2);
@@ -138,7 +161,9 @@ internal sealed class DeviceHero : Control
         int lx = cx + r + legendGap, ly = cy - _segs.Length * lineH / 2;
         foreach (var s in _segs)
         {
-            using (var b = new SolidBrush(s.Color)) g.FillEllipse(b, lx, ly + (lineH - 11) / 2, 11, 11);
+            using (var b = new SolidBrush(s.Color))
+                if (Theme.Cyber) g.FillRectangle(b, lx, ly + (lineH - 10) / 2, 10, 10);   // the HUD's keys are square
+                else g.FillEllipse(b, lx, ly + (lineH - 11) / 2, 11, 11);
             CrispText.DrawText(g, s.Label, f, new Rectangle(lx + legendDot, ly, legendInnerW, lineH), Theme.TextCol, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             CrispText.DrawText(g, CapacityBar.Human(s.Bytes), f, new Rectangle(lx + legendDot, ly, legendInnerW, lineH), Theme.Subtle, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
             ly += lineH;

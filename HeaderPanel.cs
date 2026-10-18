@@ -169,7 +169,7 @@ internal sealed class HeaderPanel : Panel
         bool moved = title != _title || subtitle != _subtitle;
         _kicker = kicker; _title = title; _subtitle = subtitle; _seed = seed;
         MetaChanged?.Invoke();
-        if (moved) SlideText();
+        if (moved) { SlideText(); CyberFx.PlayReveal(); }   // Cyber: the new page's tags are drawn in
         // keepArt: hold the CURRENT cover on screen instead of reverting to the seed gradient — the caller then
         // cross-dissolves straight to the new cover (or a null-fallback gradient), so switching playlists fades
         // cover→cover with no ♪-placeholder flash in between. Without it, revert to the gradient (disposes prior art).

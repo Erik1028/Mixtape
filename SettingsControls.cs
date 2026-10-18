@@ -513,6 +513,8 @@ internal sealed class CyberTagLabel : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
 
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); CyberFx.Watch(this); }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(Parent?.BackColor ?? Theme.Bg);

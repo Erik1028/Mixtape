@@ -48,9 +48,9 @@ internal static class MenuStyle
 
     public static readonly RoundMenuRenderer Renderer = new();
 
-    public static Color Surface => Theme.Classic ? Theme.Face : Theme.Blend(Theme.PanelBg, Color.White, 0.05);   // a touch elevated off the content
-    public static Color BorderCol => Theme.Blend(Surface, Color.White, 0.10);
-    public static Color Hover => Theme.Classic ? Theme.ClassicNavy : Theme.Blend(Surface, Theme.Accent, 0.20);
+    public static Color Surface => Theme.Classic ? Theme.Face : Theme.Cyber ? Theme.CyberCard : Theme.Blend(Theme.PanelBg, Color.White, 0.05);   // a touch elevated off the content
+    public static Color BorderCol => Theme.Cyber ? Theme.CyberEdge : Theme.Blend(Surface, Color.White, 0.10);
+    public static Color Hover => Theme.Classic ? Theme.ClassicNavy : Theme.Cyber ? Theme.CyberCard3 : Theme.Blend(Surface, Theme.Accent, 0.20);
     public static Color SeparatorCol => Theme.Blend(Surface, Color.White, 0.09);
 
     public static Font Font() => Theme.UiFont(Theme.SzBody);
@@ -274,6 +274,7 @@ internal sealed class RoundMenuRenderer : ToolStripProfessionalRenderer
         using var path = Theme.RoundedRect(rc, MenuStyle.PillRadius);
         using var b = new SolidBrush(MenuStyle.Hover);
         g.FillPath(b, path);
+        if (Theme.Cyber) { using var bar = new SolidBrush(Theme.CyberCyan); g.FillRectangle(bar, rc.X, rc.Y + 4, 2, rc.Height - 8); }   // the HUD's cyan marker
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)

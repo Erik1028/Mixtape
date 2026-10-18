@@ -197,6 +197,8 @@ internal sealed class StatsView : Panel
         DrawScrollBar(g);
     }
 
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); CyberFx.Watch(this); }
+
     private void DrawStat(Graphics g, Rectangle r, Stat s)
     {
         using (var b = new SolidBrush(Theme.PanelBg))
@@ -218,7 +220,7 @@ internal sealed class StatsView : Panel
         var at = Theme.Classic ? new Rectangle(r.X + 16, top + 2, box, r.Bottom - top - 4)
             : Theme.Cyber ? new Rectangle(r.X + 14, r.Y + 32, box, r.Bottom - r.Y - 38)
             : new Rectangle(r.X + 16, r.Y + 11, box, 36);
-        CrispText.DrawText(g, s.Value, f, at, s.Accent ? Theme.AccentBright : Theme.TextCol,
+        CrispText.DrawText(g, Theme.Cyber ? CyberFx.CountUp(s.Value, (float)_enter) : s.Value, f, at, s.Accent ? Theme.AccentBright : Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         fit?.Dispose();
         if (Theme.Classic || Theme.Cyber) return;
@@ -333,6 +335,7 @@ internal sealed class StatsView : Panel
     public static Bitmap HeaderTile(int size)
     {
         if (Theme.Classic) return Theme.ClassicHeaderIcon(ClassicIcons.Id.Chart);
+        if (Theme.Cyber) return Theme.CyberIconTile(size, Theme.DrawBars);
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;

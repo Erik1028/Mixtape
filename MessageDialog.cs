@@ -180,6 +180,7 @@ internal sealed class MessageDialog : GlassDialog
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         CrispText.DrawText(g, _message, _msgFont, _msgRect, Theme.Blend(Theme.TextCol, Theme.Subtle, 0.45),
             TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        if (Theme.Cyber) Theme.PaintCyberConsole(g, ClientRectangle);   // the HUD console frame
     }
 
     /// <summary>The 95 message icons: a white speech balloon with a navy i or ? in it, a yellow warning

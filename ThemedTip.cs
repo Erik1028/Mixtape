@@ -18,7 +18,7 @@ internal static class Tip
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            BackColor = Theme.Classic ? Theme.ClassicInfo : Theme.Blend(Theme.PanelBg, Color.White, 0.08);   // Classic: the pale yellow of a 95 tooltip
+            BackColor = Theme.Classic ? Theme.ClassicInfo : Theme.Cyber ? Theme.CyberCard2 : Theme.Blend(Theme.PanelBg, Color.White, 0.08);   // Classic: the pale yellow of a 95 tooltip
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
         }
 
@@ -42,7 +42,7 @@ internal static class Tip
         /// otherwise leave the tooltip painted in the old colours until the app restarts.</summary>
         public void Restyle()
         {
-            BackColor = Theme.Classic ? Theme.ClassicInfo : Theme.Blend(Theme.PanelBg, Color.White, 0.08);   // Classic: the pale yellow of a 95 tooltip
+            BackColor = Theme.Classic ? Theme.ClassicInfo : Theme.Cyber ? Theme.CyberCard2 : Theme.Blend(Theme.PanelBg, Color.White, 0.08);   // Classic: the pale yellow of a 95 tooltip
             if (IsHandleCreated)
                 try { int bc = Theme.DwmBorder(Theme.Border); DwmSetWindowAttribute(Handle, 34, ref bc, sizeof(int)); } catch { }
             Invalidate();
@@ -59,6 +59,12 @@ internal static class Tip
             var g = e.Graphics;
             g.Clear(BackColor);
             if (Theme.Classic) using (var k = new Pen(Theme.FaceDark)) g.DrawRectangle(k, 0, 0, Width - 1, Height - 1);   // and its black hairline
+            if (Theme.Cyber)   // a small HUD label: a cyan-grey outline, a cyan tick at the left
+            {
+                using (var k = new Pen(Theme.CyberCyanDim)) g.DrawRectangle(k, 0, 0, Width - 1, Height - 1);
+                using var tick = new SolidBrush(Theme.CyberCyan);
+                g.FillRectangle(tick, 0, 3, 2, Height - 6);
+            }
             CrispText.DrawText(g, Caption, _f, ClientRectangle, Theme.TextCol, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
     }

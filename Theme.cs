@@ -523,20 +523,91 @@ internal static class Theme
     /// Cyber: a caption as a yellow TAG (Orbit's CyberHud.Tag) - black UPPERCASE monospace on a yellow label whose right
     /// end is slanted, its top-left corner at (<paramref name="x"/>, <paramref name="y"/>). Returns its width.
     /// </summary>
-    public static int DrawCyberTag(Graphics g, string text, int x, int y, Color? fill = null, int h = 17)
+    public static int DrawCyberTag(Graphics g, string text, int x, int y, Color? fill = null, int h = 17, bool animate = true)
     {
         _cyberTagFont ??= new Font(CyberMono, 7.25f, CyberMono.Contains("SemiBold") ? FontStyle.Regular : FontStyle.Bold);
         string s = text.ToUpper(System.Globalization.CultureInfo.CurrentCulture);
         const TextFormatFlags f = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
         int tw = TextRenderer.MeasureText(g, s, _cyberTagFont, new Size(int.MaxValue, h), f).Width;
         int pad = 6, slant = 6 * h / 17, w = tw + 2 * pad + slant - 2;
+        // drawn in when a page opens (CyberFx): the body wiped in from the left, then the letters typed with a block cursor
+        var (wipe, type) = animate ? CyberFx.TagPhases(CyberFx.TagT) : (1f, 1f);
+        if (wipe <= 0f) return w;
         var sm = g.SmoothingMode;
+        var clip = g.Clip;
+        if (wipe < 1f) g.SetClip(new RectangleF(x - 1, y - 1, w * wipe + 1, h + 2), CombineMode.Intersect);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using (var b = new SolidBrush(fill ?? CyberYellow))
             g.FillPolygon(b, new PointF[] { new(x, y), new(x + w, y), new(x + w - slant, y + h), new(x, y + h) });
         g.SmoothingMode = sm;
-        CrispText.DrawText(g, s, _cyberTagFont, new Rectangle(x + pad, y, tw + 4, h), CyberInk, f);
+        if (type >= 1f) CrispText.DrawText(g, s, _cyberTagFont, new Rectangle(x + pad, y, tw + 4, h), CyberInk, f);
+        else if (type > 0f && s.Length > 0)
+        {
+            int n = Math.Clamp((int)(type * s.Length), 0, s.Length);
+            string typed = s[..n];
+            int px = n > 0 ? TextRenderer.MeasureText(g, typed, _cyberTagFont, new Size(int.MaxValue, h), f).Width : 0;
+            if (n > 0) CrispText.DrawText(g, typed, _cyberTagFont, new Rectangle(x + pad, y, px + 4, h), CyberInk, f);
+            if (n < s.Length)
+            {
+                int cw = Math.Max(3, tw / s.Length - 1);
+                using var ink = new SolidBrush(CyberInk);
+                g.FillRectangle(ink, x + pad + px + 1, y + 4, cw, h - 8);
+            }
+        }
+        g.Clip = clip;
+        clip.Dispose();
         return w;
+    }
+
+    /// <summary>
+    /// Cyber: a page-header / category tile as one of Orbit's HUD tiles - a dark slab with its corners cut, a thin cyan
+    /// outline, L-shaped brackets in two opposite corners, and the glyph drawn in cyan. The caller owns the bitmap.
+    /// </summary>
+    public static Bitmap CyberIconTile(int size, Action<Graphics, RectangleF, Color> glyph)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var r = new RectangleF(1, 1, size - 3, size - 3);
+        using (var p = RoundedRect(r, size * 0.13f))
+        {
+            using (var b = new SolidBrush(CyberCard2)) g.FillPath(b, p);
+            using var pen = new Pen(CyberCyanDim, Math.Max(1.5f, size * 0.016f));
+            g.DrawPath(pen, p);
+        }
+        float arm = size * 0.15f, w = Math.Max(2f, size * 0.03f), inset = size * 0.08f;
+        if (size >= 56)   // the brackets only where they have room (not on a list row's 40 px art)
+        using (var bb = new SolidBrush(CyberCyan))
+        {
+            float tx = size - inset, ty = inset;
+            g.FillRectangle(bb, tx - arm, ty, arm, w); g.FillRectangle(bb, tx - w, ty, w, arm);          // top-right
+            float bx = inset, by = size - inset;
+            g.FillRectangle(bb, bx, by - w, arm, w); g.FillRectangle(bb, bx, by - arm, w, arm);           // bottom-left
+        }
+        glyph(g, new RectangleF(size * 0.2f, size * 0.2f, size * 0.6f, size * 0.6f), CyberCyan);
+        return bmp;
+    }
+
+    /// <summary>Cyber's house glyph (the Home tile), filled, in <paramref name="r"/>.</summary>
+    public static void DrawHouse(Graphics g, RectangleF r, Color c)
+    {
+        float s = Math.Min(r.Width, r.Height), x = r.X + (r.Width - s) / 2, y = r.Y + (r.Height - s) / 2;
+        using var b = new SolidBrush(c);
+        g.FillPolygon(b, new[] { new PointF(x + s * 0.5f, y + s * 0.10f), new PointF(x + s * 0.06f, y + s * 0.48f), new PointF(x + s * 0.94f, y + s * 0.48f) });
+        using var hole = new GraphicsPath();
+        hole.AddRectangle(new RectangleF(x + s * 0.18f, y + s * 0.48f, s * 0.64f, s * 0.40f));
+        hole.AddRectangle(new RectangleF(x + s * 0.42f, y + s * 0.62f, s * 0.16f, s * 0.26f));   // the door, cut out
+        g.FillPath(b, hole);
+    }
+
+    /// <summary>Cyber's chart glyph (the Listening tile): three rising bars.</summary>
+    public static void DrawBars(Graphics g, RectangleF r, Color c)
+    {
+        float s = Math.Min(r.Width, r.Height), x = r.X + (r.Width - s) / 2, y = r.Y + (r.Height - s) / 2;
+        using var b = new SolidBrush(c);
+        float bw = s * 0.22f, gap = s * 0.11f, baseY = y + s * 0.92f;
+        float[] tops = { 0.52f, 0.30f, 0.08f };
+        for (int i = 0; i < 3; i++) g.FillRectangle(b, x + s * 0.06f + i * (bw + gap), y + s * tops[i], bw, baseY - (y + s * tops[i]));
     }
 
     /// <summary>
@@ -704,6 +775,7 @@ internal static class Theme
     public static Bitmap IdleNoteTile(int size)
     {
         if (Classic) return ClassicHeaderIcon(ClassicIcons.Id.Songs);
+        if (Cyber) return CyberIconTile(size, (g, r, c) => DrawNote(g, r, c));
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -741,6 +813,7 @@ internal static class Theme
     public static Bitmap LocalMusicTile(int size)
     {
         if (Classic) return ClassicHeaderIcon(ClassicIcons.Id.Computer);
+        if (Cyber) return CyberIconTile(size, (g, r, c) => DrawComputer(g, RectangleF.Inflate(r, r.Width * 0.12f, r.Height * 0.12f), c));
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -781,6 +854,7 @@ internal static class Theme
     public static Bitmap PhotoTile(int size)
     {
         if (Classic) return ClassicHeaderIcon(ClassicIcons.Id.Photos);
+        if (Cyber) return CyberIconTile(size, (g, r, c) => DrawPhoto(g, RectangleF.Inflate(r, r.Width * 0.2f, r.Height * 0.2f), c));
         var bmp = new Bitmap(size, size);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -1141,7 +1215,20 @@ internal static class Theme
         var key = (size, seed, initials ?? "");
         if (ArtCache.TryGetValue(key, out var cached)) return cached;
 
-        var bmp = new Bitmap(size, size);
+        // Cyber: no gradient - one of the HUD's slots (CyberIconTile), the initials or the note in cyan
+        var bmp = Cyber ? CyberIconTile(size, (cg, cr, cc) =>
+            {
+                if (initials is not null && size >= 32)
+                {
+                    using var f = DisplayFont(size * 0.26f, FontStyle.Bold);
+                    using var b = new SolidBrush(Color.FromArgb(225, cc));
+                    using var fmt = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                    cg.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                    cg.DrawString(initials, f, b, new RectangleF(0, 0, size, size), fmt);
+                }
+                else if (size >= 32) DrawNote(cg, cr, Color.FromArgb(150, cc));
+            }) : new Bitmap(size, size);
+        if (!Cyber)
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -1256,6 +1343,8 @@ internal sealed class ThemedButton : Button
     protected override bool ShowFocusCues => false;   // no dotted focus rectangle on our custom buttons
     private float _hoverT;  // 0→1 hover wash
     private float _pressT;  // 0→1 press (insets the content → a scale-down that reads as a tap)
+    private float _sweepT = 1f;   // Cyber: 0→1 the light sweep across the slab on hover (1 = none)
+    private Tween? _sweepTw;
     private bool _painted;
     private Tween? _hoverTw, _pressTw;
     private string? _blockedReason;
@@ -1295,7 +1384,7 @@ internal sealed class ThemedButton : Button
         Cursor = Theme.HandCursor;   // 1995 pointed at a button with an arrow
         Font = Theme.UiFont(Theme.SzTitle, Theme.Classic ? FontStyle.Regular : FontStyle.Bold);   // a 95 button's label was regular weight
         Height = 34;
-        MouseEnter += (_, _) => { if (Enabled && !IsBlocked) AnimHover(1f); };
+        MouseEnter += (_, _) => { if (Enabled && !IsBlocked) { AnimHover(1f); Sweep(); } };
         MouseLeave += (_, _) => { AnimHover(0f); AnimPress(0f); };
         MouseDown += (_, me) => { if (me.Button == MouseButtons.Left && Enabled && !IsBlocked) AnimPress(1f); };
         MouseUp += (_, me) => { if (me.Button == MouseButtons.Left) AnimPress(0f); };
@@ -1348,6 +1437,15 @@ internal sealed class ThemedButton : Button
         _hoverTw = Anim.Run(130, v => { _hoverT = from + (float)((to - from) * v); if (!IsDisposed) Invalidate(); }, null, Easings.OutCubic);
     }
 
+    /// <summary>Cyber: Orbit's button light sweep - a pale band crossing the slab once as the pointer arrives.</summary>
+    private void Sweep()
+    {
+        if (!Theme.Cyber || Ghost || !_painted || !Anim.MotionEnabled) return;
+        _sweepTw?.Cancel();
+        _sweepT = 0f;
+        _sweepTw = Anim.Run(420, v => { _sweepT = (float)v; if (!IsDisposed) Invalidate(); }, () => { _sweepTw = null; _sweepT = 1f; if (!IsDisposed) Invalidate(); }, Easings.OutCubic);
+    }
+
     private void AnimPress(float to)
     {
         if (!_painted || !Anim.MotionEnabled) { _pressT = to; Invalidate(); return; }
@@ -1387,6 +1485,17 @@ internal sealed class ThemedButton : Button
             else if (Danger) { cf = Theme.Blend(Theme.CyberCard2, Theme.CyberRed, 0.08 + 0.10 * h); cl = Theme.CyberRed; ct = Theme.CyberRed; }
             else { cf = Theme.Blend(Theme.CyberCard2, Theme.CyberCard3, h); cl = Theme.Blend(Theme.CyberCyanDim, Theme.CyberCyan, 0.6 * h); ct = Theme.TextCol; }
             using (var b = new SolidBrush(cf)) g.FillPath(b, path);
+            if (_sweepT < 1f)
+            {
+                // the sweep: a slanted pale band moving left to right, clipped to the slab
+                var saved = g.Clip;
+                g.SetClip(path, CombineMode.Intersect);
+                float bw = Math.Max(14f, r.Width * 0.22f), cx = r.X - bw + (r.Width + 2 * bw) * _sweepT;
+                using (var sb = new SolidBrush(Color.FromArgb((int)(70 * (1f - _sweepT * 0.6f)), 255, 255, 255)))
+                    g.FillPolygon(sb, new PointF[] { new(cx, r.Y), new(cx + bw, r.Y), new(cx + bw - r.Height * 0.5f, r.Bottom), new(cx - r.Height * 0.5f, r.Bottom) });
+                g.Clip = saved;
+                saved.Dispose();
+            }
             using (var p = new Pen(cl)) g.DrawPath(p, path);
             if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, ct); return; }
             string cyLabel = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";

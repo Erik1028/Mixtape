@@ -29,6 +29,12 @@ internal sealed class ThemedProgressBar : Control
         }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? Theme.PanelBg);
+        if (Theme.Cyber)
+        {
+            // the HUD's bar: cyan blocks leaning right
+            Theme.CyberSegments(g, new RectangleF(0, 0, Width, Height), Maximum > 0 ? Math.Min(1f, (float)_value / Maximum) : 0, Theme.CyberCyan);
+            return;
+        }
         float r = Height / 2f;
         using (var tp = Theme.RoundedRect(new RectangleF(0, 0, Width - 1, Height - 1), r))
         using (var tb = new SolidBrush(Theme.RowBg))

@@ -444,7 +444,7 @@ internal sealed class Sidebar : Panel
                 if (anyDrawn) y += 10; // breathing room above each group after the first
                 if (y >= clip.Top && y + SectionH <= clip.Bottom)   // fully inside (see the item-row note: avoid text bleeding past the edges)
                 {
-                    if (Theme.Cyber) Theme.DrawCyberTag(g, row.Text, Pad + 4, y + SectionH - 19);   // Cyber: a yellow tag
+                    if (Theme.Cyber) Theme.DrawCyberTag(g, row.Text, Pad + 4, y + SectionH - 19, animate: false);   // Cyber: a yellow tag
                     else CrispText.DrawText(g, Theme.ClassicCase(row.Text), _fSection,   // Classic: "Library", not "LIBRARY"
                         new Rectangle(Pad + 4, y, Width - Pad * 2, SectionH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.Bottom);
@@ -553,6 +553,15 @@ internal sealed class Sidebar : Panel
                         g.DrawPath(bp, ip2);
                     }
                     g.InterpolationMode = prevI; g.PixelOffsetMode = prevP;
+                }
+                else if (Theme.Cyber && row.Kind is not (SidebarRowKind.Playlist or SidebarRowKind.SmartPlaylist or SidebarRowKind.LocalPlaylist))
+                {
+                    // the HUD's icon: a dark slot with a cyan outline and a cyan glyph; the current place filled cyan, glyph in black
+                    bool on = row.Active;
+                    using var tp = Theme.RoundedRect(new RectangleF(tile.X + 0.5f, tile.Y + 0.5f, tile.Width - 1, tile.Height - 1), Theme.RadTileSmall + 3);
+                    using (var tb = new SolidBrush(on ? Theme.CyberCyan : Theme.CyberCard2)) g.FillPath(tb, tp);
+                    using (var tpen = new Pen(on ? Theme.CyberCyan : Theme.CyberCyanDim)) g.DrawPath(tpen, tp);
+                    DrawRowGlyph(g, Rectangle.Inflate(tile, 2, 2), row.Kind, on ? Theme.CyberInk : Theme.CyberCyan);
                 }
                 else
                 {
