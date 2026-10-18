@@ -20,6 +20,19 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!-- Start-up: a publish ships the app's own code precompiled, so a launch does not first JIT ~2,200 methods (~220 of
+       the ~900 ms to a painted Home page, measured with MIX_STARTUP). Only the app's own code: the framework ships
+       precompiled already (a self-contained publish would otherwise compile it all again into one 137 MB composite
+       image), and the Windows SDK projection stays IL - compiled, its 25 MB would grow the exe a lot for the few calls
+       the media session makes. -->
+  <PropertyGroup>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishReadyToRunComposite>false</PublishReadyToRunComposite>
+  </PropertyGroup>
+  <ItemGroup>
+    <PublishReadyToRunExclude Include="Microsoft.Windows.SDK.NET.dll" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />

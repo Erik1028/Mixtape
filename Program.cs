@@ -7,6 +7,8 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        StartupClock.UiThread = Environment.CurrentManagedThreadId;
+        StartupClock.Mark("Main");
         // Headless self-test: build a synthetic iTunesDB, parse it back, assert. Lets us
         // validate the chunk walker with no device attached. Output: ipod-test.txt next to exe.
         if (args.Contains("--test")) { RunSelfTest(); return; }
@@ -256,7 +258,9 @@ internal static class Program
         // GUI launch — enforce a single instance. Two copies racing the same iPod database swap
         // (or both writing %APPDATA%\Mixtape\settings.json) corrupt each other; a second launch
         // just surfaces the running window instead of starting a rival process.
-        using var mutex = new System.Threading.Mutex(initiallyOwned: true, @"Local\MixtapeSingleInstance", out bool isFirst);
+        // (the start-up bench runs beside the user's own copy, never in its way: its own lock, and nothing saved)
+        if (StartupClock.On) AppSettings.Frozen = true;
+        using var mutex = new System.Threading.Mutex(initiallyOwned: true, StartupClock.On ? @"Local\MixtapeStartupBench" : @"Local\MixtapeSingleInstance", out bool isFirst);
         if (!isFirst)
         {
             // A "Restart now" relaunch (e.g. after a language change) races the closing instance for the lock —
@@ -274,20 +278,26 @@ internal static class Program
 
         // Resolve the UI language ONCE, before any window is built (a language change restarts the app, so it
         // never changes mid-run). MIX_LANG env overrides for testing/renders without touching saved settings.
-        Loc.Lang = Environment.GetEnvironmentVariable("MIX_LANG") is { Length: > 0 } ml ? Loc.Resolve(ml) : Loc.Resolve(AppSettings.Load().Language);
+        // (one read of settings.json, handed on to the main window - see AppSettings.TakeStartup)
+        var boot = AppSettings.LoadForStartup();
+        Loc.Lang = Environment.GetEnvironmentVariable("MIX_LANG") is { Length: > 0 } ml ? Loc.Resolve(ml) : Loc.Resolve(boot.Language);
         // The skin too, and for the same reason: MainForm's FIELD initialisers build controls (the song list's
         // scrollbar, the rail, their fonts) before its constructor body runs, and they must already see it.
-        Theme.SetSkin(AppSettings.Load().ClassicSkin, AppSettings.Load().CyberSkin);
-        Theme.DitherCovers = AppSettings.Load().DitherCovers;
+        Theme.SetSkin(boot.ClassicSkin, boot.CyberSkin);
+        Theme.DitherCovers = boot.DitherCovers;
         // 1995 had no motion: views, dialogs, menus and tips appeared in one go, and the wheel scrolled by the line.
         // Every tween in the app answers to this one switch (the one "Show animations in Windows" turns off), and
         // each window takes Windows 11's own open / close / minimize animation off itself (Theme.ClassicNoTransitions).
         if (Theme.Classic) Anim.MotionEnabled = false;
 
+        StartupClock.Mark("settings + skin");
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
-        Application.Run(new MainForm());
+        var main = new MainForm();
+        StartupClock.Mark("MainForm built");
+        if (StartupClock.On) { main.NoActivate = true; main.Opacity = 0.02; }   // on screen as a launch is, but out of the user's way
+        Application.Run(main);
         // Hand the lock over on the way out (a "Restart now" relaunch is waiting on it) - releasing it here, on the
         // thread that owns it, is what keeps the next instance's wait from ending in an abandoned mutex.
         try { mutex.ReleaseMutex(); } catch { }
@@ -1187,6 +1197,44 @@ internal static class Program
         }
 
         Check(Hash58.SelfCheck(), "hash58 substitution tables are valid inverse AES S-boxes (transcription OK)");
+
+        try
+        {
+            var sample = new AppSettings
+            {
+                Accent = "#3366FF", ThemeVariant = "Midnight", CyberSkin = true, Compact = true, Language = "hu", Shuffle = true,
+                RepeatMode = "All", DefaultSort = "Added", DefaultSortDescending = true, ShowRating = false, Volume = 0.25,
+                LocalMusicFolders = { @"E:\Music", @"D:\Más zene" }, EqEnabled = true, EqGains = new float[] { 6, 5, 4, 2, 0, 0, 0, 0, -1.5f, 0 },
+                ResumeTrack = @"file:E:\Music\a.flac", ResumeSeconds = 68.175, FfmpegPath = null, CrossfadeSeconds = 4.5,
+            };
+            sample.LocalPlays[@"E:\Music\a.flac"] = new LocalPlay { Count = 3, Last = new DateTime(2026, 9, 21, 17, 9, 28, DateTimeKind.Local) };
+            sample.LocalPlaylists.Add(new LocalPlaylistData { Id = "01b1", Name = "Latest", Paths = { @"E:\Music\a.flac" } });
+            sample.SmartPlaylists.Add(new SmartPlaylistDef { PersistentId = 0x8AD5B0156E4EB0BFUL, Name = "Rock", Rules = { new SmartRule { Field = "Genre", Op = "is", Value = "Rock" } }, Limit = 25 });
+            sample.Covers["pl:4"] = 2; sample.LyricSync["a993"] = -3000;
+            string json = System.Text.Json.JsonSerializer.Serialize(sample);
+            var viaReflection = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json)!;
+            var viaGenerated = AppSettings.FromJson(json)!;
+            string a = System.Text.Json.JsonSerializer.Serialize(viaReflection), b = System.Text.Json.JsonSerializer.Serialize(viaGenerated);
+            Check(a == b && a == json, "settings.json: the generated reader reads exactly what the reflection one does");
+            // and this PC's own file, if there is one (only read)
+            string mine = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Mixtape", "settings.json");
+            if (File.Exists(mine))
+            {
+                string text = File.ReadAllText(mine);
+                string r = System.Text.Json.JsonSerializer.Serialize(System.Text.Json.JsonSerializer.Deserialize<AppSettings>(text));
+                string g = System.Text.Json.JsonSerializer.Serialize(AppSettings.FromJson(text));
+                Check(r == g, $"this PC's settings.json ({text.Length / 1024} KB) reads the same both ways");
+            }
+        }
+        catch (Exception ex) { Check(false, "settings reader: " + ex.Message); }
+
+        try
+        {
+            var (diff, worst, inner) = ArtworkService.KeptCoverSelfTest();
+            // (the cover itself is the same pixel for pixel; its soft edge may round a level or three differently)
+            Check(inner == 0 && worst <= 3, $"kept covers: a tile from the kept picture matches a fresh decode ({diff} edge pixels differ, by at most {worst}; {inner} inside the cover)");
+        }
+        catch (Exception ex) { Check(false, "kept covers: " + ex.Message); }
 
         log.AppendLine();
         log.AppendLine("--- device detection ---");

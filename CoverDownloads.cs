@@ -30,13 +30,20 @@ internal static class CoverDownloads
     private static Thread? _worker;
     private static Control? _ui;
     private static bool _scanned;
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(12), MaxResponseContentBufferSize = 6 * 1024 * 1024 };
+    // made on the first download (on the worker), not while the main window is built: the HTTP stack's start-up is a
+    // few ms of the launch that no launch needs
+    private static readonly Lazy<HttpClient> LazyHttp = new(() =>
+    {
+        var h = new HttpClient { Timeout = TimeSpan.FromSeconds(12), MaxResponseContentBufferSize = 6 * 1024 * 1024 };
+        try { h.DefaultRequestHeaders.UserAgent.ParseAdd("Mixtape/1.0 (+https://github.com/Erik1028/Mixtape)"); } catch { }
+        return h;
+    });
+    private static HttpClient Http => LazyHttp.Value;
 
     /// <summary>Call once from the main form (marshals <see cref="Arrived"/> onto its thread).</summary>
     public static void Init(Control ui)
     {
         _ui = ui;
-        try { Http.DefaultRequestHeaders.UserAgent.ParseAdd("Mixtape/1.0 (+https://github.com/Erik1028/Mixtape)"); } catch { }
         Scan();
     }
 

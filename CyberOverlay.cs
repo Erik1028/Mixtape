@@ -62,12 +62,23 @@ internal sealed class CyberOverlay : Form
         if (!Can(target)) return;
         var area = target.RectangleToScreen(target.ClientRectangle);
         if (area.Width < 80 || area.Height < 80) return;
-        var ov = new CyberOverlay(target.FindForm()!) { _bmp = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppPArgb) };
+        // The card-sized picture is a DIB section GDI+ draws into directly: a frame used to copy all of it into a new
+        // GDI bitmap first (GetHbitmap, ~1.8 MB) - 3-6 ms of the UI thread each, right while the window starts. The
+        // brackets are drawn again only while they move; the hold and the fade only change the window's own alpha.
+        var ov = new CyberOverlay(target.FindForm()!);
+        ov.NewSurface(area.Width, area.Height);
+        float lastK = -1; int lastA = -1;
         void Frame(float k, float alpha)
         {
-            using (var g = Graphics.FromImage(ov._bmp!)) DrawBrackets(g, area.Size, k, alpha);
-            ov.Repicture();
-            ov.Push(area.X, area.Y);
+            int a = (int)Math.Round(255 * Math.Clamp(alpha, 0f, 1f));
+            if (k != lastK)
+            {
+                using (var g = Graphics.FromImage(ov._bmp!)) DrawBrackets(g, area.Size, k, 1f);
+                GdiFlush();
+                ov.Push(area.X, area.Y, alpha: (byte)a);
+            }
+            else if (a != lastA) ov.PushAlpha((byte)a);
+            lastK = k; lastA = a;
         }
         Frame(0, 1);
         ShowNoActivate(ov);
@@ -134,8 +145,28 @@ internal sealed class CyberOverlay : Form
         }
     }
 
+    /// <summary>A w×h premultiplied picture that GDI+ draws into and GDI shows as it is - one DIB section, no copies.</summary>
+    private void NewSurface(int w, int h)
+    {
+        var bi = new BITMAPINFOHEADER { biSize = Marshal.SizeOf<BITMAPINFOHEADER>(), biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32 };
+        _hbmp = CreateDIBSection(IntPtr.Zero, ref bi, 0, out IntPtr bits, IntPtr.Zero, 0);
+        if (_hbmp == IntPtr.Zero) { _bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb); return; }   // the copying way
+        _dib = true;
+        _bmp = new Bitmap(w, h, w * 4, PixelFormat.Format32bppPArgb, bits);
+    }
+
+    private bool _dib;   // _hbmp is the picture's own memory (never re-made from _bmp)
+
+    /// <summary>The same picture with another overall alpha: the window keeps its bitmap, only the blend changes.</summary>
+    private void PushAlpha(byte alpha)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        var blend = new BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = alpha, AlphaFormat = 1 };
+        if (UpdateLayeredWindowBlend(Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, ref blend, 2 /* ULW_ALPHA */)) Frames++; else Failures++;
+    }
+
     /// <summary>Put the bitmap on screen at (x, y) - optionally only the part inside <paramref name="clipTo"/>.</summary>
-    private void Push(int x, int y, Rectangle? clipTo = null)
+    private void Push(int x, int y, Rectangle? clipTo = null, byte alpha = 255)
     {
         if (_bmp is null || IsDisposed) return;
         int sx = 0, sy = 0, w = _bmp.Width, h = _bmp.Height;
@@ -152,7 +183,7 @@ internal sealed class CyberOverlay : Form
             var size = new SIZE { cx = w, cy = h };
             var src = new POINT { x = sx, y = sy };
             var dst = new POINT { x = x, y = y };
-            var blend = new BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = 1 };
+            var blend = new BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = alpha, AlphaFormat = 1 };
             if (UpdateLayeredWindow(Handle, screen, ref dst, ref size, mem, ref src, 0, ref blend, 2 /* ULW_ALPHA */)) Frames++; else Failures++;
         }
         finally
@@ -162,7 +193,7 @@ internal sealed class CyberOverlay : Form
     }
 
     /// <summary>The bitmap was drawn again: GDI's copy is stale.</summary>
-    private void Repicture() { if (_hbmp != IntPtr.Zero) { DeleteObject(_hbmp); _hbmp = IntPtr.Zero; } }
+    private void Repicture() { if (_hbmp != IntPtr.Zero && !_dib) { DeleteObject(_hbmp); _hbmp = IntPtr.Zero; } }
 
     private static void ShowNoActivate(CyberOverlay ov)
     {
@@ -173,12 +204,17 @@ internal sealed class CyberOverlay : Form
     {
         Repicture();
         if (disposing) { _bmp?.Dispose(); _bmp = null; }
+        if (_dib && _hbmp != IntPtr.Zero) { DeleteObject(_hbmp); _hbmp = IntPtr.Zero; }   // after the Bitmap that wraps its memory
         base.Dispose(disposing);
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int x, y; }
     [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx, cy; }
     [StructLayout(LayoutKind.Sequential, Pack = 1)] private struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+    [StructLayout(LayoutKind.Sequential)] private struct BITMAPINFOHEADER { public int biSize, biWidth, biHeight; public short biPlanes, biBitCount; public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant; }
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
+    [DllImport("gdi32.dll")] private static extern bool GdiFlush();
+    [DllImport("user32.dll", EntryPoint = "UpdateLayeredWindow")] private static extern bool UpdateLayeredWindowBlend(IntPtr hwnd, IntPtr hdcDst, IntPtr pptDst, IntPtr psize, IntPtr hdcSrc, IntPtr pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);

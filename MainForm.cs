@@ -39,7 +39,7 @@ internal sealed class MainForm : Form, IMessageFilter
     /// where the database swap could be interrupted — so the close is refused while this is set.</summary>
     private volatile bool _bgWriteRunning;
     private readonly bool _autoDetect;
-    private readonly AppSettings _settings = AppSettings.Load();
+    private readonly AppSettings _settings = AppSettings.TakeStartup();
     private int _artGen;          // bumped each ShowCurrent; cancels stale background art loads
     private int _sidebarArtGen;   // same, for sidebar playlist covers
     private int _photoArtGen;     // same, for the photo grid's background thumbnail decode
@@ -128,6 +128,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     public MainForm(bool autoDetect = true)
     {
+        StartupClock.Mark("MainForm fields");
         _autoDetect = autoDetect;
         Text = "Mixtape";
         Font = Theme.UiFont(9f);
@@ -145,6 +146,15 @@ internal sealed class MainForm : Form, IMessageFilter
         SeedDefaultSort();
 
         BuildLayout();
+        StartupClock.Mark("BuildLayout");
+        // The launch's slow reads start now, beside the window being built: the drive scan with the first iPod's
+        // databases, and the PC folders' tags. When the window shows they are usually in, so its first paint is the
+        // library - not "Looking for your iPod…" first, then the page built and painted again (MIX_STARTUP).
+        if (_autoDetect)
+        {
+            _bootLoad = Task.Run(LoadBoot);
+            if (_settings.LocalMusicFolders.Count > 0) { _localStale = false; ScanLocalMusicAsync(); }
+        }
 
         _sidebar.RowActivated += OnSidebarActivated;
         _sidebar.RefreshClicked += RefreshDevices;
@@ -168,6 +178,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         WireDragDrop(); // drop music/video/photo files (or folders) anywhere on the window to add them
 
+        if (StartupClock.On) StartupBench();
         if (_autoDetect) Shown += (_, _) => RefreshDevices();
         // MIX_TEST_RESTART=1|play|busy (test harness): open Settings the way the gear does, and SettingsForm then
         // restarts the app. "play" first starts a PC song (muted), so there is a live audio engine to shut down;
@@ -277,6 +288,7 @@ internal sealed class MainForm : Form, IMessageFilter
     private string? _countedPath;             // the PC file this playback already counted
     private Dictionary<string, Track>? _homeReps;        // representative track per home tile, so a cover that arrives later finds its tile
     private int _homeArtGen;
+    private long _homeArtAt;   // when the page asked for its covers (Stopwatch ticks)
     private bool _landOnHome = true;                     // the first library to load opens on the home page; a navigation after that is the user's choice
     private SidePanel? _side;                            // the Up Next · History · Lyrics card beside the content (wide windows)
     private bool _sideOpen;
@@ -2284,21 +2296,57 @@ internal sealed class MainForm : Form, IMessageFilter
 
     private bool _firstScan = true;   // the startup scan — see RefreshDevices
 
+    /// <summary>A drive scan's result: the iPods found and - for the launch's scan - the first one's databases, read on
+    /// the same background thread (pure file reads and parsing; on an iPod with a hard disk that spins up, seconds the
+    /// window used to stand frozen for).</summary>
+    private sealed record BootLoad(List<IPodDevice> Devices, IPodDevice? First, IpodLibrary? Lib, ArtworkLibrary? Art, PhotoLibrary? Photos, Exception? LibError);
+    private Task<BootLoad>? _bootLoad;   // started by the constructor, taken by the first RefreshDevices
+
+    /// <summary>The drive scan - none at all under the harness's MIX_NO_IPOD=1 (a launch with nothing plugged in).</summary>
+    private static List<IPodDevice> DetectDevices() =>
+        Environment.GetEnvironmentVariable("MIX_NO_IPOD") == "1" ? new List<IPodDevice>() : DeviceDetector.DetectAll().ToList();
+
+    private static BootLoad LoadBoot()
+    {
+        StartupClock.Mark("boot: scanning drives");
+        var devices = DetectDevices();
+        StartupClock.Mark($"boot: {devices.Count} iPod(s)");
+        if (devices.Count == 0) return new BootLoad(devices, null, null, null, null, null);
+        var d = devices[0];
+        try
+        {
+            var lib = IpodLibrary.Load(d);
+            var art = ArtworkLibrary.Load(d);
+            var photos = d.Profile.SupportsPhotos ? PhotoLibrary.Load(d) : null;
+            StartupClock.Mark("boot: databases read");
+            return new BootLoad(devices, d, lib, art, photos, null);
+        }
+        catch (Exception ex) { return new BootLoad(devices, d, null, null, null, ex); }   // LoadDevice reports it, as it always has
+    }
+
     private async void RefreshDevices()
     {
         if (_scanning) return;
         _scanning = true;
         _ejectedRoots.Clear(); // an explicit Refresh means the user wants to re-detect everything
-        if (_device is null) ShowScanning(); // instant feedback on first open — never a blank, frozen window
+        // The launch's scan is the one the constructor started; a Refresh scans anew.
+        var scan = _bootLoad ?? Task.Run(() => new BootLoad(DetectDevices(), null, null, null, null, null));
+        _bootLoad = null;
+        // Instant feedback while the scan is out - never a blank, frozen window. A launch whose scan is already in goes
+        // straight to the library: "Looking for your iPod…" would only be built, painted and replaced a moment later.
+        if (_device is null && !scan.IsCompleted) ShowScanning();
         try
         {
             // Scan drives off the UI thread: enumerating drives can stall for seconds on an empty card
             // reader or optical drive, which would otherwise freeze the just-opened window.
-            var found = await Task.Run(() => DeviceDetector.DetectAll().ToList());
+            StartupClock.Mark("device scan start" + (scan.IsCompleted ? " (already in)" : ""));
+            var boot = await scan;
+            var found = boot.Devices;
+            StartupClock.Mark($"device scan done ({found.Count})");
             if (IsDisposed) return;
             _devices.Clear();
             _devices.AddRange(found);
-            if (_devices.Count > 0) LoadDevice(_devices[0]);
+            if (_devices.Count > 0) LoadDevice(_devices[0], boot);
             else
             {
                 ShowNoDevice();
@@ -2741,8 +2789,9 @@ internal sealed class MainForm : Form, IMessageFilter
         SetSideOpen(true, SidePanel.ParseTab(tab));
     }
 
-    private void LoadDevice(IPodDevice device)
+    private void LoadDevice(IPodDevice device, BootLoad? pre = null)
     {
+        if (pre is not null && !ReferenceEquals(pre.First, device)) pre = null;   // read for another device
         _nowPlaying.StopAndHide(); // release any open audio file so the previous iPod can be ejected
         _playingTrack = null;
         _device = device;
@@ -2750,8 +2799,11 @@ internal sealed class MainForm : Form, IMessageFilter
         if (!_devices.Contains(device)) _devices.Add(device);
         try
         {
-            _lib = IpodLibrary.Load(device);
-            _lib.Artwork = ArtworkLibrary.Load(device);   // cover-art sync on colour-screen models (no-op otherwise)
+            if (pre?.LibError is { } preErr) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(preErr).Throw();
+            _lib = pre?.Lib ?? IpodLibrary.Load(device);
+            StartupClock.Mark("iTunesDB read");
+            _lib.Artwork = pre?.Art ?? ArtworkLibrary.Load(device);   // cover-art sync on colour-screen models (no-op otherwise)
+            StartupClock.Mark("ArtworkDB read");
             _db = _lib.View;
         }
         catch (Exception ex)
@@ -2761,7 +2813,8 @@ internal sealed class MainForm : Form, IMessageFilter
             return;
         }
 
-        _photos = device.Profile.SupportsPhotos ? PhotoLibrary.Load(device) : null;
+        _photos = device.Profile.SupportsPhotos ? pre?.Photos ?? PhotoLibrary.Load(device) : null;
+        StartupClock.Mark("Photo Database read");
 
         RebuildPlaylists();
         SeedDefaultSort();
@@ -2771,6 +2824,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _browseFilter = null;
         BuildSidebar();
         ShowCurrent();
+        StartupClock.Mark("device page built");
         if (_viewKind == SidebarRowKind.Home && _localStale && _settings.LocalMusicFolders.Count > 0) { _localStale = false; ScanLocalMusicAsync(); }   // the page's PC shelf
         MaybeAutoRecoverGuid();
     }
@@ -3473,6 +3527,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
         if (!_settings.ShowArtwork || reps.Count == 0) return;
         int gen = ++_homeArtGen;
+        _homeArtAt = System.Diagnostics.Stopwatch.GetTimestamp();
         string? mount = _device?.MountRoot;
         _homeReps = reps;
         var jobs = reps.Select(kv => (kv.Key, Path: kv.Value.LocalPath ?? (mount is not null ? kv.Value.ResolveFilePath(mount) : null), ArtKey: ArtworkService.KeyFor(kv.Value), Track: kv.Value)).ToList();
@@ -3484,15 +3539,20 @@ internal sealed class MainForm : Form, IMessageFilter
             else pending.Add(j);
         }
         if (pending.Count == 0) return;
+        StartupClock.Mark($"home covers: {pending.Count} to load");
         Task.Run(() =>
         {
             foreach (var j in pending)
             {
                 if (_homeArtGen != gen) return;
                 var art = ArtworkService.Load("br:" + j.ArtKey, j.Path, BrowseCover);
-                if (art != null) { string key = j.Key; TryBeginInvoke(() => { if (_homeArtGen == gen) { _homeView.SetCover(key, art); ScheduleSnap(); } }); }
+                // A cover that is in while the page is still appearing (kept on disk: the launch's covers, all at once)
+                // just appears with it - a fade each was a whole-page repaint a frame for 28 covers at a time. One that
+                // comes later (a first read, a slow iPod) fades in as before.
+                if (art != null) { string key = j.Key; TryBeginInvoke(() => { if (_homeArtGen == gen) { _homeView.SetCover(key, art, animate: System.Diagnostics.Stopwatch.GetElapsedTime(_homeArtAt).TotalMilliseconds > 200); ScheduleSnap(); } }); }
                 else CoverDownloads.Request(j.Track, j.Path);
             }
+            StartupClock.Mark("home covers: loaded");
         });
     }
 
@@ -6419,8 +6479,10 @@ internal sealed class MainForm : Form, IMessageFilter
         var plays = new Dictionary<string, LocalPlay>(_settings.LocalPlays, StringComparer.OrdinalIgnoreCase);
         if (folders.Count == 0) { _localTracks.Clear(); return; }
         if (_localTracks.Count == 0) SetStatus(Loc.T("Scanning your music…"));
+        StartupClock.Mark("PC scan queued");
         Task.Run(() =>
         {
+            StartupClock.Mark("PC scan start");
             var found = new List<Track>();
             foreach (var dir in folders)
             {
@@ -6432,6 +6494,7 @@ internal sealed class MainForm : Form, IMessageFilter
                         .Where(f => AudioExt.Contains(Path.GetExtension(f).ToLowerInvariant())).ToArray();
                 }
                 catch { continue; }
+                StartupClock.Mark($"PC scan: {files.Length} files listed");
                 foreach (var f in files)
                 {
                     if (_localGen != gen) return;
@@ -6450,12 +6513,16 @@ internal sealed class MainForm : Form, IMessageFilter
                 }
             }
             if (_localGen != gen) return;
+            StartupClock.Mark("PC scan: tags read");
+            if (!IsHandleCreated) _handleUp.Wait(30000);   // started with the window (the constructor): handed over once it exists
             TryBeginInvoke(() =>
             {
                 if (_localGen != gen) return;
                 _localTracks.Clear(); _localTracks.AddRange(found);
                 if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();
                 else if (_viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists or SidebarRowKind.Home) { BuildSidebar(); ShowCurrent(); }
+                StartupClock.Mark("PC library shown");
+                _startupPcDone = true;
             });
         });
     }
@@ -8055,9 +8122,51 @@ internal sealed class MainForm : Form, IMessageFilter
         }
     }
 
+    /// <summary>Harness (MIX_STARTUP): marks the window's own milestones, then - the iPod and the PC library both in,
+    /// and the message queue idle - writes the timeline (and with MIX_STARTUP_EXIT=1 closes the window).</summary>
+    private bool _startupPcDone;
+    private readonly ManualResetEventSlim _handleUp = new(false);   // the window exists: a scan started with it may report
+    private void StartupBench()
+    {
+        bool painted = false;
+        Paint += (_, _) => { if (!painted) { painted = true; StartupClock.Mark("first paint (window)"); } };
+        Shown += (_, _) =>
+        {
+            StartupClock.Mark("Shown");
+            void FirstIdle(object? s, EventArgs e) { Application.Idle -= FirstIdle; StartupClock.Mark("first idle"); }
+            Application.Idle += FirstIdle;
+            var poll = new System.Windows.Forms.Timer { Interval = 10 };
+            poll.Tick += (_, _) =>
+            {
+                bool pcDone = _settings.LocalMusicFolders.Count == 0 || _startupPcDone;
+                if (_scanning || _firstScan || !pcDone) return;
+                poll.Dispose();
+                StartupClock.Mark("READY (iPod + PC library in)");
+                void ReadyIdle(object? s, EventArgs e)
+                {
+                    Application.Idle -= ReadyIdle;
+                    StartupClock.Mark("READY + idle (everything painted)");
+                    var settle = new System.Windows.Forms.Timer { Interval = 1500 };
+                    settle.Tick += (_, _) =>
+                    {
+                        settle.Dispose();
+                        StartupClock.Mark("1.5 s later");
+                        StartupClock.Write();
+                        if (Environment.GetEnvironmentVariable("MIX_STARTUP_EXIT") == "1") Close();
+                    };
+                    settle.Start();
+                }
+                Application.Idle += ReadyIdle;
+            };
+            poll.Start();
+        };
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
+        StartupClock.Mark("window handle");
         base.OnHandleCreated(e);
+        _handleUp.Set();
         Theme.ClassicNoTransitions(Handle);   // Classic: no Windows 11 open/close/minimize animation
         ApplyWindowChrome();
     }

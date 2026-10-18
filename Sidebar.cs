@@ -56,7 +56,6 @@ internal sealed class Sidebar : Panel
     private Row? _dropRow;   // playlist row highlighted as the current drag-drop target (songs → playlist)
     private int _scroll;
     private int _contentH; // total laid-out row height, captured each paint; used to clamp scrolling
-    private Bitmap? _logo;
     // Cached fonts — Theme.UiFont/DisplayFont allocate a fresh GDI Font per call; the rail repaints on every
     // hover/scroll and the row font was allocated PER ROW. Reuse instead.
     private readonly Font _fWordmark = Theme.DisplayFont(Theme.SzDisplay, FontStyle.Bold);
@@ -104,7 +103,6 @@ internal sealed class Sidebar : Panel
         _settings.Click += (_, _) => SettingsClicked?.Invoke();
         _tip.SetToolTip(_settings, Loc.T("Settings"));
 
-        try { if (Environment.ProcessPath is string p) _logo = System.Drawing.Icon.ExtractAssociatedIcon(p)?.ToBitmap(); } catch { }
 
         MouseMove += (_, e) =>
         {
@@ -867,7 +865,7 @@ internal sealed class Sidebar : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _fWordmark.Dispose(); _fHint.Dispose(); _fSection.Dispose(); _fRow.Dispose(); _fRowBold.Dispose(); _logo?.Dispose(); }
+        if (disposing) { _fWordmark.Dispose(); _fHint.Dispose(); _fSection.Dispose(); _fRow.Dispose(); _fRowBold.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -175,7 +175,7 @@ internal sealed class AppSettings
     public static AppSettings Load()
     {
         AppSettings s = new();
-        try { if (File.Exists(FilePath)) s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new(); }
+        try { if (File.Exists(FilePath)) s = FromJson(File.ReadAllText(FilePath)) ?? new(); }
         catch { }
         // MIX_CLASSIC=1|0 forces the skin for a render or a test without touching the saved file (the same
         // kind of harness switch as MIX_LANG). Every window loads its own settings, so it belongs here.
@@ -185,6 +185,17 @@ internal sealed class AppSettings
         if (Environment.GetEnvironmentVariable("MIX_CYBER") is { Length: > 0 } cy) { s.CyberSkin = cy == "1"; if (s.CyberSkin) s.ClassicSkin = false; Frozen = true; }
         return s;
     }
+
+    /// <summary>settings.json read by generated code (AppSettingsJson), not by reflection: the reflection reader builds
+    /// itself on first use, ~60-70 ms of every launch before the window could start (MIX_STARTUP). Same default
+    /// options, same result - the self-test reads one file both ways and compares.</summary>
+    internal static AppSettings? FromJson(string json) => JsonSerializer.Deserialize(json, AppSettingsJson.Default.AppSettings);
+
+    // The launch reads the file once (Program: the language and the look must be known before any window exists) and
+    // the main window takes that copy instead of reading it again - it used to be read six times before the first paint.
+    private static AppSettings? _startup;
+    public static AppSettings LoadForStartup() => _startup = Load();
+    public static AppSettings TakeStartup() => Interlocked.Exchange(ref _startup, null) ?? Load();
 
     /// <summary>Set by the render harness: the previews must never write the user's real settings.json (opening
     /// the side card, a bookmark tick, a volume push all call Save).</summary>
@@ -247,6 +258,10 @@ internal sealed class AppSettings
         return true;
     }
 }
+
+/// <summary>The settings file's reader, generated at build time (see <see cref="AppSettings.FromJson"/>).</summary>
+[System.Text.Json.Serialization.JsonSerializable(typeof(AppSettings))]
+internal sealed partial class AppSettingsJson : System.Text.Json.Serialization.JsonSerializerContext { }
 
 /// <summary>A PC-side playlist: a name plus an ordered list of local audio file paths.</summary>
 /// <summary>One PC file's listening record.</summary>
