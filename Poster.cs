@@ -20,10 +20,11 @@ internal static class Poster
         // An exported picture is not part of the window, so it keeps the app's own typography and colours whatever
         // skin the window wears (MS Sans Serif at poster size is just unreadable). The call is synchronous on the UI
         // thread - nothing else paints while the tokens are briefly modern.
-        if (!Theme.Classic) return RenderCore(title, subtitle, songs, covers, footer);
-        Theme.SetSkin(false);
+        if (!Theme.Classic && !Theme.Cyber) return RenderCore(title, subtitle, songs, covers, footer);
+        bool classic = Theme.Classic, cyber = Theme.Cyber;
+        Theme.SetSkin(false, false);
         try { return RenderCore(title, subtitle, songs, covers, footer); }
-        finally { Theme.SetSkin(true); }
+        finally { Theme.SetSkin(classic, cyber); }
     }
 
     private static Bitmap RenderCore(string title, string subtitle, IReadOnlyList<Song> songs, IReadOnlyList<Bitmap> covers, string footer)

@@ -258,15 +258,15 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         Row(Loc.T("Language"), Loc.T("Choose the app's language. Mixtape restarts to apply."), lang);
 
         Group(Loc.T("Look"));
-        var look = new SegmentedControl { Options = new[] { Loc.T("Modern"), Loc.T("Windows 95") }, SelectedIndex = _s.ClassicSkin ? 1 : 0, Width = 260 };
+        var look = new SegmentedControl { Options = new[] { Loc.T("Modern"), Loc.T("Windows 95"), Loc.T("Cyber") }, SelectedIndex = _s.ClassicSkin ? 1 : _s.CyberSkin ? 2 : 0, Width = 330 };
         look.SelectedChanged += () =>
         {
-            bool classic = look.SelectedIndex == 1;
-            if (classic == _s.ClassicSkin) return;
-            _s.ClassicSkin = classic; _s.Save();
+            bool classic = look.SelectedIndex == 1, cyber = look.SelectedIndex == 2;
+            if (classic == _s.ClassicSkin && cyber == _s.CyberSkin) return;
+            _s.ClassicSkin = classic; _s.CyberSkin = cyber; _s.Save();
             PromptRestart(Loc.T("The look changes after a restart. Restart Mixtape now?"));
         };
-        Row(Loc.T("Look"), Loc.T("Modern is this app's own look. Windows 95 skins the whole window the way a program looked in 1995: grey panels with 3D edges, square corners, navy selection and the era's typeface. Takes effect after a restart."), look);
+        Row(Loc.T("Look"), Loc.T("Modern is this app's own look. Windows 95 skins the whole window the way a program looked in 1995: grey panels with 3D edges, square corners, navy selection and the era's typeface. Cyber is a sci-fi HUD: near-black panels with cut corners, yellow tags and cyan highlights. Takes effect after a restart."), look);
 
         if (_s.ClassicSkin)
         {
@@ -275,6 +275,8 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             Row(Loc.T("256-colour pictures"), Loc.T("Show covers the way a 256-colour display of 1995 did: on the Windows halftone palette, dithered."),
                 Toggle(_s.DitherCovers, v => { _s.DitherCovers = v; _s.Save(); Theme.DitherCovers = v; _applyChanged(); }));
         }
+        else if (_s.CyberSkin)
+            Row(Loc.T("Colours"), Loc.T("The Cyber look has a palette of its own — the accent colour and the background are used by the Modern look."), null);
         else
         {
         var accent = new AccentPicker(_s.Accent);

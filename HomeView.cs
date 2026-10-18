@@ -278,6 +278,7 @@ internal sealed class HomeView : Panel
     private void DrawLabel(Graphics g, int x, int y, int w, string text)
     {
         if (Theme.Classic) return;   // Classic: the caption rides the group box's frame instead (ClassicGroup)
+        if (Theme.Cyber) { Theme.DrawCyberTag(g, text, x, y + (LabelH - 17) / 2); return; }
         CrispText.DrawText(g, Theme.Caps(text), _fLabel, new Rectangle(x, y, w, LabelH), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }

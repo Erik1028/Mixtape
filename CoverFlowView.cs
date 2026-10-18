@@ -1061,7 +1061,7 @@ internal sealed class CoverFlowView : Control
             BufW = bufW, CoverH = coverH, ReflH = reflH, Src = src,
             PwF = Math.Max(1f, coverH * (float)Math.Cos(theta)), Phase = phase,
             Q = (dv - coverH / 2f * sinT) / (dv + coverH / 2f * sinT),   // far-edge height fraction
-            NearRight = nearRight, CornerR = Theme.TileFrac,
+            NearRight = nearRight, CornerR = Theme.Cyber ? 0f : Theme.TileFrac,   // Cyber: square - the warp rounds corners only
             FloorR = floor.R, FloorG = floor.G, FloorB = floor.B,
             FrameA = Theme.Classic ? 0f : FrameAlpha,
             Dither = Theme.Classic && Theme.DitherCovers,

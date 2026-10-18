@@ -49,6 +49,29 @@ internal static class Theme
     // buttons, a navy caption) ask Classic and take another path.
     public static bool Classic { get; private set; }
 
+    // ---- the Cyber skin -------------------------------------------------------------------------------
+    // Settings > Appearance > Look > Cyber: OrbitOverlay's sci-fi HUD (Erik's own concept; Orbit's Gfx/Cyber.cs) brought
+    // over. A SIBLING of the modern look, not of Classic: Classic stays false, so every surface keeps its modern layout
+    // and behaviour, and the token layer does the rest - near-black surfaces, a thin dark-red outline, corners CUT
+    // instead of rounded (top-left a little, bottom-right more; RoundedRect does it for all its call sites), cyan for
+    // what is on or live, YELLOW TAGS for captions (black monospace capitals, a slanted right end), Bahnschrift's
+    // condensed widths for the type. It has its own palette: the accent and background pickers do not apply.
+    public static bool Cyber { get; private set; }
+
+    // the palette (Orbit's CyberHud, sampled from the concept pictures)
+    public static readonly Color CyberPage = Color.FromArgb(0x0B, 0x0A, 0x0C);     // the window behind the cards
+    public static readonly Color CyberCard = Color.FromArgb(0x14, 0x12, 0x16);     // a card: the rail, the content
+    public static readonly Color CyberCard2 = Color.FromArgb(0x1B, 0x19, 0x1D);    // a raised surface: a field, a button, a tile
+    public static readonly Color CyberCard3 = Color.FromArgb(0x27, 0x24, 0x2A);    // hover, the selected row
+    public static readonly Color CyberEdge = Color.FromArgb(0x5C, 0x30, 0x33);     // a card's thin dark-red outline
+    public static readonly Color CyberLine = Color.FromArgb(0x3B, 0x2D, 0x30);     // a divider
+    public static readonly Color CyberYellow = Color.FromArgb(0xF2, 0xE3, 0x4B);   // caption tags, bars
+    public static readonly Color CyberCyan = Color.FromArgb(0x7D, 0xE8, 0xEE);     // what is on or live
+    public static readonly Color CyberCyanDim = Color.FromArgb(0x3D, 0x82, 0x88);  // a button's outline
+    public static readonly Color CyberRed = Color.FromArgb(0xEC, 0x5E, 0x52);      // a warning
+    public static readonly Color CyberTrack = Color.FromArgb(0x2B, 0x27, 0x26);    // a bar's empty segments
+    public static readonly Color CyberInk = Color.FromArgb(0x0B, 0x0A, 0x0C);      // dark text on yellow / cyan
+
     /// <summary>Classic: show pictures in 256 colours (Settings > Appearance, on by default; see Halftone).</summary>
     public static bool DitherCovers { get; set; } = true;
 
@@ -135,9 +158,13 @@ internal static class Theme
 
     /// <summary>Turn the Windows 95 look on or off. Re-applies the stored background + accent, so the modern
     /// palette comes back exactly as it was.</summary>
-    public static void SetSkin(bool classic)
+    public static void SetSkin(bool classic) => SetSkin(classic, false);
+
+    /// <summary>Pick the look: Windows 95 (<paramref name="classic"/>, which wins), Cyber, or the modern one.</summary>
+    public static void SetSkin(bool classic, bool cyber)
     {
         Classic = classic;
+        Cyber = cyber && !classic;
         SetRadii(classic);
         SetThemeVariant(_variant);
         SetAccent(_accentSpec);
@@ -157,6 +184,14 @@ internal static class Theme
             AccentBright = ClassicNavy;   // no lighter "hot" shade: 1995 had one highlight colour, and nothing lit up under the pointer
             AccentDim = Color.FromArgb(0, 0, 80);
             OnAccent = Color.White;
+        }
+        else if (Cyber)
+        {
+            // cyan is the HUD's "on"; the accent picker belongs to the modern look
+            Accent = CyberCyan;
+            AccentBright = Blend(CyberCyan, Color.White, 0.25);
+            AccentDim = CyberCyanDim;
+            OnAccent = CyberInk;
         }
         Revision++;
     }
@@ -181,6 +216,7 @@ internal static class Theme
     {
         _variant = name;
         if (Classic) { ApplyClassicSurfaces(); return; }
+        if (Cyber) { ApplyCyberSurfaces(); return; }
         TextCol = Color.FromArgb(242, 242, 243);
         Subtle = Color.FromArgb(168, 172, 176);
         Faint = Color.FromArgb(138, 143, 152);
@@ -215,6 +251,23 @@ internal static class Theme
         Revision++;
     }
 
+    /// <summary>The Cyber surfaces: near-black cards on a blacker page, warm whites and greys, the dark-red outline.</summary>
+    private static void ApplyCyberSurfaces()
+    {
+        Bg = CyberCard;
+        SidebarBg = CyberCard;
+        PanelBg = CyberCard2;
+        RowBg = CyberCard2;
+        RowHover = CyberCard3;
+        HairLine = CyberLine;
+        Border = CyberEdge;
+        TextCol = Color.FromArgb(0xEF, 0xEC, 0xE2);
+        Subtle = Color.FromArgb(0x9C, 0x97, 0x8E);
+        Faint = Color.FromArgb(0x7A, 0x74, 0x6D);
+        ErrorCol = CyberRed;
+        Revision++;
+    }
+
     public static Color OnAccent { get; private set; } = Color.FromArgb(8, 14, 13);
 
     /// <summary>The surface of a LIST - the song grid - which 1995 drew white inside a grey window
@@ -223,7 +276,7 @@ internal static class Theme
 
     /// <summary>DWMWA_WINDOW_CORNER_PREFERENCE for a window that asks for <paramref name="modern"/>: Classic
     /// asks Windows 11 NOT to round it (DWMWCP_DONOTROUND), since a 95 window was a rectangle.</summary>
-    public static int DwmCorner(int modern) => Classic ? 1 : modern;
+    public static int DwmCorner(int modern) => Classic || Cyber ? 1 : modern;   // Cyber: its corners are cut, never rounded
 
     /// <summary>The pointer over something clickable: the hand - or, Classic, the arrow, which 1995 pointed at
     /// everything with (the hand arrived with the web).</summary>
@@ -423,6 +476,13 @@ internal static class Theme
     private static readonly string? TextSemibold = FirstInstalled("Segoe UI Variable Text Semibold");
     private static readonly string DisplayFamily = FirstInstalled("Segoe UI Variable Display") ?? "Segoe UI";
     private static readonly string? DisplaySemibold = FirstInstalled("Segoe UI Variable Display Semib");
+    // Cyber: Bahnschrift's condensed widths (GDI lists each width and weight of the variable font as a family of its
+    // own), a monospace for the tags
+    private static readonly string? CyberText = FirstInstalled("Bahnschrift SemiCondensed");
+    private static readonly string? CyberTextBold = FirstInstalled("Bahnschrift SemiBold SemiConden");
+    private static readonly string? CyberDisplay = FirstInstalled("Bahnschrift Condensed");
+    private static readonly string? CyberDisplayBold = FirstInstalled("Bahnschrift SemiBold Condensed");
+    private static readonly string CyberMono = FirstInstalled("Cascadia Mono SemiBold", "Cascadia Mono", "Consolas") ?? "Courier New";
 
     // 1995's UI typeface: MS Sans Serif 8pt. It is a BITMAP face (.FON), which GDI+ does not enumerate, so
     // it is named directly rather than looked up - the GDI font mapper resolves it, and where it is missing
@@ -435,15 +495,112 @@ internal static class Theme
 
     public static Font UiFont(float size, FontStyle style = FontStyle.Regular) =>
         Classic ? new Font(ClassicFamily, ClassicSize(size), style)
+        : Cyber && CyberFont(false, size, style) is { } cf ? cf
         : style.HasFlag(FontStyle.Bold) && TextSemibold != null
             ? new Font(TextSemibold, size, style & ~FontStyle.Bold)
             : new Font(TextFamily, size, style);
 
     public static Font DisplayFont(float size, FontStyle style = FontStyle.Regular) =>
         Classic ? new Font(ClassicFamily, ClassicSize(size), style)
+        : Cyber && CyberFont(true, size, style) is { } cf ? cf
         : style.HasFlag(FontStyle.Bold) && DisplaySemibold != null
             ? new Font(DisplaySemibold, size, style & ~FontStyle.Bold)
             : new Font(DisplayFamily, size, style);
+
+    /// <summary>Cyber: Bahnschrift (Condensed for display, SemiCondensed for text), a touch larger than Segoe at the same
+    /// size since its letters are narrower and shorter; null where Bahnschrift is missing (then the modern faces).</summary>
+    private static Font? CyberFont(bool display, float size, FontStyle style)
+    {
+        bool bold = style.HasFlag(FontStyle.Bold);
+        string? fam = display ? (bold ? CyberDisplayBold : CyberDisplay) : (bold ? CyberTextBold : CyberText);
+        if (fam is null) return null;
+        return new Font(fam, size + (display ? 1.5f : 0.75f), bold ? style & ~FontStyle.Bold : style);
+    }
+
+    private static Font? _cyberTagFont;
+
+    /// <summary>
+    /// Cyber: a caption as a yellow TAG (Orbit's CyberHud.Tag) - black UPPERCASE monospace on a yellow label whose right
+    /// end is slanted, its top-left corner at (<paramref name="x"/>, <paramref name="y"/>). Returns its width.
+    /// </summary>
+    public static int DrawCyberTag(Graphics g, string text, int x, int y, Color? fill = null, int h = 17)
+    {
+        _cyberTagFont ??= new Font(CyberMono, 7.25f, CyberMono.Contains("SemiBold") ? FontStyle.Regular : FontStyle.Bold);
+        string s = text.ToUpper(System.Globalization.CultureInfo.CurrentCulture);
+        const TextFormatFlags f = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+        int tw = TextRenderer.MeasureText(g, s, _cyberTagFont, new Size(int.MaxValue, h), f).Width;
+        int pad = 6, slant = 6 * h / 17, w = tw + 2 * pad + slant - 2;
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var b = new SolidBrush(fill ?? CyberYellow))
+            g.FillPolygon(b, new PointF[] { new(x, y), new(x + w, y), new(x + w - slant, y + h), new(x, y + h) });
+        g.SmoothingMode = sm;
+        CrispText.DrawText(g, s, _cyberTagFont, new Rectangle(x + pad, y, tw + 4, h), CyberInk, f);
+        return w;
+    }
+
+    /// <summary>
+    /// Cyber: a SEGMENTED bar (Orbit's CyberHud.Segments) - blocks leaning right with gaps between, <paramref name="frac"/>
+    /// of them lit in <paramref name="on"/>, the rest in the track colour; each block a little over twice as long as the
+    /// bar is tall.
+    /// </summary>
+    public static void CyberSegments(Graphics g, RectangleF bar, float frac, Color on, Color? off = null)
+    {
+        float h = bar.Height;
+        if (h < 1 || bar.Width < 4) return;
+        float gap = Math.Max(2, MathF.Round(h * 0.5f)), lean = Math.Min(h * 0.45f, 4);
+        int n = Math.Max(3, (int)MathF.Round((bar.Width + gap) / (h * 2.6f + gap)));
+        float bw = (bar.Width - lean - (n - 1) * gap) / n;
+        int lit = frac <= 0 ? 0 : Math.Clamp((int)MathF.Ceiling(Math.Clamp(frac, 0, 1) * n - 0.02f), 1, n);
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var onB = new SolidBrush(on);
+        using var offB = new SolidBrush(off ?? CyberTrack);
+        for (int i = 0; i < n; i++)
+        {
+            float x = bar.X + i * (bw + gap);
+            g.FillPolygon(i < lit ? onB : offB, new PointF[] { new(x + lean, bar.Y), new(x + lean + bw, bar.Y), new(x + bw, bar.Bottom), new(x, bar.Bottom) });
+        }
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>
+    /// Cyber: a window as one of Orbit's consoles - its top-left and bottom-right corners cut (the window's own square
+    /// corner outside each cut painted in the page black), the thin dark-red outline along the edge and the cuts, and
+    /// the two cuts struck in yellow. Painted LAST over the window's client area (dialogs, flyouts).
+    /// </summary>
+    public static void PaintCyberConsole(Graphics g, Rectangle client, int cut = 12)
+    {
+        if (client.Width < 4 * cut || client.Height < 4 * cut) cut = Math.Max(4, Math.Min(client.Width, client.Height) / 4);
+        int tl = cut / 2;
+        float x0 = client.X, y0 = client.Y, x1 = client.Right - 1, y1 = client.Bottom - 1;
+        var sm = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var page = new SolidBrush(CyberPage))
+        {
+            g.FillPolygon(page, new PointF[] { new(x0 - 1, y0 - 1), new(x0 + tl + 0.5f, y0 - 1), new(x0 - 1, y0 + tl + 0.5f) });
+            g.FillPolygon(page, new PointF[] { new(x1 + 1, y1 + 1), new(x1 - cut - 0.5f, y1 + 1), new(x1 + 1, y1 - cut - 0.5f) });
+        }
+        using (var edge = new Pen(CyberEdge))
+            g.DrawPolygon(edge, new PointF[] { new(x0 + tl, y0), new(x1, y0), new(x1, y1 - cut), new(x1 - cut, y1), new(x0, y1), new(x0, y0 + tl) });
+        using (var y = new Pen(CyberYellow, 2f))
+        {
+            g.DrawLine(y, x0, y0 + tl, x0 + tl, y0);
+            g.DrawLine(y, x1 - cut, y1, x1, y1 - cut);
+        }
+        g.SmoothingMode = sm;
+    }
+
+    /// <summary>Cyber: the cuts a rounded corner of <paramref name="radius"/> becomes (after Orbit's CyberHud.Cuts) - the
+    /// bottom-right one a little over the radius, the top-left one half of it; (0, 0) when too small to cut.</summary>
+    public static (float Tl, float Br) CyberCuts(RectangleF r, float radius)
+    {
+        float br = Math.Min(Math.Min(radius * 1.1f, 14f), Math.Min(r.Width, r.Height) * 0.35f);
+        if (br < 1.5f) return (0, 0);
+        br = MathF.Round(br * 2) / 2;
+        float tl = MathF.Round(br) / 2;
+        return (tl >= 1 ? tl : 0, br);
+    }
 
     /// <summary>How text is smoothed. Classic asks GDI+ for the aliased path; the bitmap face carries the
     /// rest on its own. (Every paint site reads this instead of naming ClearType directly.)</summary>
@@ -495,6 +652,13 @@ internal static class Theme
     {
         var path = new GraphicsPath();
         if (radius < 0.05f) { path.AddRectangle(r); return path; }   // Classic: square, and GDI+ cannot arc a zero-size box
+        if (Cyber)
+        {
+            // the HUD's corner: cut, not rounded - a little top-left, more bottom-right, the other two square
+            var (tl, br) = CyberCuts(r, radius);
+            path.AddPolygon(new PointF[] { new(r.X + tl, r.Y), new(r.Right, r.Y), new(r.Right, r.Bottom - br), new(r.Right - br, r.Bottom), new(r.X, r.Bottom), new(r.X, r.Y + tl) });
+            return path;
+        }
         float d = radius * 2;
         path.AddArc(r.X, r.Y, d, d, 180, 90);
         path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
@@ -769,6 +933,16 @@ internal static class Theme
         // Classic: the window's own face, flat. No gradient, no accent glow - the cards that float on it
         // become the panels of one grey window, which is what the era's programs looked like.
         if (Classic) { using var face = new SolidBrush(Face); g.FillRectangle(face, r); return; }
+        if (Cyber)
+        {
+            // Cyber: the black page under the HUD, with a faint grid
+            using (var page = new SolidBrush(CyberPage)) g.FillRectangle(page, r);
+            g.SmoothingMode = SmoothingMode.None;
+            using var grid = new Pen(Color.FromArgb(0x17, 0x15, 0x19));
+            for (int x = r.Left + 12; x < r.Right; x += 24) g.DrawLine(grid, x, r.Top, x, r.Bottom);
+            for (int y = r.Top + 12; y < r.Bottom; y += 24) g.DrawLine(grid, r.Left, y, r.Right, y);
+            return;
+        }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color a0 = WallpaperTop;                                              // deep near-black base
         Color a1 = Blend(SidebarBg, Color.Black, 0.42);
@@ -793,6 +967,7 @@ internal static class Theme
     {
         if (Classic) return;   // 1995 had no drop shadow anywhere
         if (card.Width <= 0 || card.Height <= 0) return;
+        if (Cyber) { PaintCyberFrame(g, card, radius); return; }
         g.SmoothingMode = SmoothingMode.AntiAlias;
         for (int i = 5; i >= 1; i--)
         {
@@ -841,6 +1016,21 @@ internal static class Theme
     /// in, so the wedge is pixel-identical to the gap around the card (no seam, no square shadow edge). Unlike a
     /// control <see cref="Region"/>, whose clip can only stair-step, this gives a smooth curve. Call at the END of
     /// the card's own OnPaint, for whichever corners sit on the card's outer edge. No-op outside the shell.</summary>
+    /// <summary>Cyber: no shadow - the card's thin dark-red outline one pixel outside it, along its cuts, and its two cuts
+    /// struck in yellow (Orbit's console frame). Baked into the wallpaper like the shadow it replaces, so the carved cuts
+    /// (CarveCardCorners) show it too.</summary>
+    private static void PaintCyberFrame(Graphics g, Rectangle card, int radius)
+    {
+        var o = RectangleF.Inflate(card, 1, 1);
+        var (tl, br) = CyberCuts(card, radius);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var edge = new Pen(CyberEdge))
+            g.DrawPolygon(edge, new PointF[] { new(o.X + tl, o.Y), new(o.Right - 1, o.Y), new(o.Right - 1, o.Bottom - 1 - br), new(o.Right - 1 - br, o.Bottom - 1), new(o.X, o.Bottom - 1), new(o.X, o.Y + tl) });
+        using var cut = new Pen(CyberYellow, 2f);
+        if (tl > 0) g.DrawLine(cut, o.X - 0.5f, o.Y + tl + 0.5f, o.X + tl + 0.5f, o.Y - 0.5f);
+        if (br > 0) g.DrawLine(cut, o.Right - 1 - br - 0.5f, o.Bottom - 0.5f, o.Right - 0.5f, o.Bottom - 1 - br - 0.5f);
+    }
+
     public static void CarveCardCorners(Graphics g, Control card, float radius, bool tl, bool tr, bool br, bool bl)
     {
         if (Classic) return;   // square corners have nothing to carve
@@ -871,6 +1061,19 @@ internal static class Theme
     private static void FillCornerWedge(Graphics g, Brush brush, RectangleF r, float radius, int corner)
     {
         float d = radius * 2, o = 1.2f;
+        if (Cyber)
+        {
+            // the cut corner: only top-left and bottom-right are cut, the triangle outside the cut is the wallpaper
+            var (ct, cb) = CyberCuts(r, radius);
+            PointF[]? tri = corner switch
+            {
+                0 when ct > 0 => new PointF[] { new(r.X + ct, r.Y), new(r.X, r.Y + ct), new(r.X - o, r.Y + ct), new(r.X - o, r.Y - o), new(r.X + ct, r.Y - o) },
+                2 when cb > 0 => new PointF[] { new(r.Right - cb, r.Bottom), new(r.Right, r.Bottom - cb), new(r.Right + o, r.Bottom - cb), new(r.Right + o, r.Bottom + o), new(r.Right - cb, r.Bottom + o) },
+                _ => null,
+            };
+            if (tri is not null) g.FillPolygon(brush, tri);
+            return;
+        }
         using var p = new GraphicsPath();
         switch (corner)
         {
@@ -1175,6 +1378,21 @@ internal sealed class ThemedButton : Button
         bool disabled = !Enabled || IsBlocked;
 
         if (Theme.Classic) { PaintClassic(g, disabled, h, press); return; }
+        if (Theme.Cyber && !Ghost)
+        {
+            // Orbit's HUD buttons: a dark slab with a cyan-grey outline; the primary one filled with cyan, black text
+            Color cf, cl, ct;
+            if (disabled) { cf = Theme.CyberCard2; cl = Theme.CyberLine; ct = Theme.Faint; }
+            else if (Primary) { cf = Theme.Blend(Theme.CyberCyan, Color.White, 0.18 * h); cl = cf; ct = Theme.CyberInk; }
+            else if (Danger) { cf = Theme.Blend(Theme.CyberCard2, Theme.CyberRed, 0.08 + 0.10 * h); cl = Theme.CyberRed; ct = Theme.CyberRed; }
+            else { cf = Theme.Blend(Theme.CyberCard2, Theme.CyberCard3, h); cl = Theme.Blend(Theme.CyberCyanDim, Theme.CyberCyan, 0.6 * h); ct = Theme.TextCol; }
+            using (var b = new SolidBrush(cf)) g.FillPath(b, path);
+            using (var p = new Pen(cl)) g.DrawPath(p, path);
+            if (CompactIcon && Icon != Ico.None) { DrawIcon(g, r, Icon, ct); return; }
+            string cyLabel = string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph}  {Text}";
+            CrispText.DrawText(g, cyLabel, Font, textRect, ct, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            return;
+        }
 
         if (Ghost)
         {

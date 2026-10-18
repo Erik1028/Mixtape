@@ -80,6 +80,7 @@ internal sealed class ToggleSwitch : Control
         int d = Height - 8;
         float x = 4 + (Width - d - 8) * _t;   // slides between the off/on insets (OutBack adds a tiny overshoot)
         using var knob = new SolidBrush(Theme.Blend(Color.FromArgb(220, 225, 230), Theme.OnAccent, tc));
+        if (Theme.Cyber) { using var kp = Theme.RoundedRect(new RectangleF(x, 4, d, d), 4); g.FillPath(knob, kp); return; }   // the HUD's switch has a square knob
         g.FillEllipse(knob, x, 4, d, d);
     }
 
@@ -371,7 +372,7 @@ internal sealed class CardPanel : Panel
     public CardPanel(int width)
     {
         Width = width;
-        Height = Theme.Classic ? 2 : 0;   // Classic: the rows start inside the group box's 2 px etched frame, not on top of it
+        Height = Theme.Classic ? 2 : Theme.Cyber ? 1 : 0;   // Classic: the rows start inside the group box's 2 px etched frame (Cyber: its 1 px outline), not on top of it
         BackColor = Theme.PanelBg;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
@@ -401,6 +402,7 @@ internal sealed class CardPanel : Panel
         using var p = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Theme.RadCard);
         using var b = new SolidBrush(Theme.PanelBg);
         g.FillPath(b, p);
+        if (Theme.Cyber) { using var edge = new Pen(Theme.CyberEdge); g.DrawPath(edge, p); }   // the HUD card's thin dark-red outline
     }
 
     protected override void Dispose(bool disposing)
@@ -415,6 +417,7 @@ internal sealed class CardPanel : Panel
     {
         var rule = new Panel { Height = 1, BackColor = Theme.Classic ? Theme.FaceShadow : Theme.HairLine, Left = 16, Width = Width - 32, Top = y };
         Controls.Add(rule);
+        if (Theme.Cyber) { _rules.Add(rule); return; }   // Cyber's dividers SHOW (modern's are a whisper), so they too sit above the row labels
         if (!Theme.Classic) return;
         // Classic: an etched rule, and it has to sit ABOVE the row labels that are added after it - they start at
         // the same y, so otherwise only the rule's two ends show, as a pair of stray dots.
@@ -494,11 +497,29 @@ internal sealed class CardPanel : Panel
     public void Finish()
     {
         if (Theme.Classic && !_finished) Height += 2;   // and end inside it
+        else if (Theme.Cyber && !_finished) Height += 1;
         _finished = true;
         // The rounded card is now owner-painted (anti-aliased) in OnPaint — just trigger a repaint at
         // the final size. (Was a Region clip, which hard-aliased the corners.)
         Invalidate();
     }
+}
+
+/// <summary>Cyber: a section caption as a yellow tag (Theme.DrawCyberTag), sitting at the bottom of its strip.</summary>
+internal sealed class CyberTagLabel : Control
+{
+    public CyberTagLabel()
+    {
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent?.BackColor ?? Theme.Bg);
+        Theme.DrawCyberTag(e.Graphics, Text, 0, Math.Max(0, Height - 17));
+    }
+
+    protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }
 }
 
 /// <summary>

@@ -13,6 +13,7 @@ internal sealed class AppSettings
     /// <summary>The Windows 95 look (Settings > Appearance > Look). Applied before any control is built,
     /// so the skin is chosen at startup - which is why changing it offers a restart.</summary>
     public bool ClassicSkin { get; set; }
+    public bool CyberSkin { get; set; }   // the Cyber look (OrbitOverlay's HUD); ClassicSkin wins if both are set
     /// <summary>The Windows 95 look's covers in 256 colours (dithered onto the halftone palette). Live.</summary>
     public bool DitherCovers { get; set; } = true;
     public bool ShowWelcome { get; set; } = true;   // Classic: 1995's welcome screen greets each start (its own box turns it off)
@@ -181,6 +182,7 @@ internal sealed class AppSettings
         // Frozen too: an overridden value must never be written back by a later Save (a window-position save on
         // close would otherwise persist the forced skin into the user's own settings file).
         if (Environment.GetEnvironmentVariable("MIX_CLASSIC") is { Length: > 0 } skin) { s.ClassicSkin = skin == "1"; Frozen = true; }
+        if (Environment.GetEnvironmentVariable("MIX_CYBER") is { Length: > 0 } cy) { s.CyberSkin = cy == "1"; if (s.CyberSkin) s.ClassicSkin = false; Frozen = true; }
         return s;
     }
 

@@ -46,7 +46,8 @@ internal abstract class FlyoutForm : Form, IGlassHost
         TopMost = true;          // float above the (possibly top-most) mini player
         DoubleBuffered = true;
         BackColor = Theme.Bg;
-        if (Theme.Classic) Padding = new Padding(3);   // the raised edge (OnPaintBackground) and a face pixel: a docked panel would cover it
+        if (Theme.Classic) Padding = new Padding(3);
+        else if (Theme.Cyber) Padding = new Padding(2);   // its console outline (PaintCyberConsole) must not be covered   // the raised edge (OnPaintBackground) and a face pixel: a docked panel would cover it
     }
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
@@ -145,6 +146,7 @@ internal abstract class FlyoutForm : Form, IGlassHost
             return;
         }
         if (Theme.Classic) { Theme.Bevel(e.Graphics, ClientRectangle, raised: true); return; }   // a popup of 1995: a small raised window
+        if (Theme.Cyber) { Theme.PaintCyberConsole(e.Graphics, ClientRectangle, 10); return; }   // a popup of the HUD: a small console
         // A faint rounded edge that aligns with the DWM-rounded corners (the OS clips the window to this radius).
         using var path = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Radius);
         using var pen = new Pen(Theme.Blend(Theme.Bg, Color.White, 0.12));

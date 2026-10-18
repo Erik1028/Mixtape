@@ -274,7 +274,7 @@ internal static class Program
         Loc.Lang = Environment.GetEnvironmentVariable("MIX_LANG") is { Length: > 0 } ml ? Loc.Resolve(ml) : Loc.Resolve(AppSettings.Load().Language);
         // The skin too, and for the same reason: MainForm's FIELD initialisers build controls (the song list's
         // scrollbar, the rail, their fonts) before its constructor body runs, and they must already see it.
-        Theme.SetSkin(AppSettings.Load().ClassicSkin);
+        Theme.SetSkin(AppSettings.Load().ClassicSkin, AppSettings.Load().CyberSkin);
         Theme.DitherCovers = AppSettings.Load().DitherCovers;
         // 1995 had no motion: views, dialogs, menus and tips appeared in one go, and the wheel scrolled by the line.
         // Every tween in the app answers to this one switch (the one "Show animations in Windows" turns off), and
@@ -1312,7 +1312,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("MIX_MOTION") != "1") Anim.MotionEnabled = false;
         if (double.TryParse(Environment.GetEnvironmentVariable("MIX_SPIN"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double spin)) Easter.SpinT = spin;   // the Konami turn, frozen at this point (0..1)
         var rset = AppSettings.Load();                  // dialogs rendered on their own also deserve the live palette
-        Theme.SetSkin(rset.ClassicSkin);   // MIX_CLASSIC=1|0 overrides this in AppSettings.Load
+        Theme.SetSkin(rset.ClassicSkin, rset.CyberSkin);   // MIX_CLASSIC / MIX_CYBER=1|0 overrides this in AppSettings.Load
         Theme.DitherCovers = rset.DitherCovers && Environment.GetEnvironmentVariable("MIX_DITHER") != "0";
         Theme.SetThemeVariant(rset.ThemeVariant);
         Theme.SetAccent(rset.Accent);
@@ -2335,7 +2335,7 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         var s = AppSettings.Load();
-        Theme.SetSkin(s.ClassicSkin);
+        Theme.SetSkin(s.ClassicSkin, s.CyberSkin);
         try { Theme.SetThemeVariant(s.ThemeVariant); } catch { }
         Theme.SetAccent(s.Accent);
 
@@ -2868,7 +2868,7 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
 
         var settings = AppSettings.Load();
-        Theme.SetSkin(settings.ClassicSkin);
+        Theme.SetSkin(settings.ClassicSkin, settings.CyberSkin);
         Theme.SetThemeVariant(settings.ThemeVariant); // match the live background (e.g. Forest)
         Theme.SetAccent(settings.Accent);             // and the accent so the hover pill colour is accurate
 

@@ -1837,9 +1837,17 @@ internal sealed class NowPlayingBar : Panel
         if (Theme.Classic) { DrawClassicPlay(g, r, hover, dim, morph >= 0.5f); return; }
         Color disc = dim ? Theme.Blend(Theme.SidebarBg, Color.White, 0.12)
                          : hover ? Theme.AccentBright : Theme.Accent;
-        using (var b = new SolidBrush(disc)) g.FillEllipse(b, r);
+        if (Theme.Cyber)
+        {
+            // the HUD's play button (Orbit's media card): a yellow slab with cut corners, the glyph in black
+            disc = dim ? Theme.CyberCard3 : hover ? Theme.Blend(Theme.CyberYellow, Color.White, 0.25) : Theme.CyberYellow;
+            using var cb = new SolidBrush(disc);
+            using var cp = Theme.RoundedRect(new RectangleF(r.X, r.Y, r.Width, r.Height), r.Width / 2.6f);
+            g.FillPath(cb, cp);
+        }
+        else using (var b = new SolidBrush(disc)) g.FillEllipse(b, r);
         var c = new PointF(r.X + r.Width / 2f, r.Y + r.Height / 2f);
-        Color fg = dim ? Theme.Faint : Theme.OnAccent;
+        Color fg = dim ? Theme.Faint : Theme.Cyber ? Theme.CyberInk : Theme.OnAccent;
         if (dim)   // idle → just the play triangle
         {
             using var p = new SolidBrush(fg);

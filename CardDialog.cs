@@ -44,7 +44,7 @@ internal class CardDialog : GlassDialog
         // Classic: the frame runs down both sides and along the bottom of the whole dialog (OnPaint), and a child
         // covers what its parent paints - so docked content keeps inside it by the padding, and content laid out
         // from the very edge is pulled in off it.
-        int fr = Theme.Classic ? ClassicFrame : 0;
+        int fr = Theme.Classic ? ClassicFrame : Theme.Cyber ? 2 : 0;   // Cyber: its console outline (PaintCyberConsole) must not be covered either
         Padding = new Padding(Padding.Left + fr, Padding.Top + TitleH, Padding.Right + fr, Padding.Bottom + fr);   // docked children start under the strip
         ClientSize = new Size(cs.Width, cs.Height + TitleH);                                        // bottom-anchored children ride down with this
         ResumeLayout(true);
@@ -132,6 +132,7 @@ internal class CardDialog : GlassDialog
         g.SmoothingMode = SmoothingMode.None;
         using var hair = new Pen(Theme.Blend(BackColor, Color.White, 0.08));
         g.DrawLine(hair, 0, TitleH - 1, ClientSize.Width, TitleH - 1);
+        if (Theme.Cyber) Theme.PaintCyberConsole(g, ClientRectangle);   // the HUD console: cut corners, the dark-red outline, yellow cuts
     }
 
     protected override void Dispose(bool disposing)

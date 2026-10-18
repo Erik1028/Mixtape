@@ -138,7 +138,7 @@ internal sealed class MainForm : Form, IMessageFilter
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.None; // custom title bar — chrome handled in WndProc/CreateParams
         try { if (Environment.ProcessPath is string p) Icon = System.Drawing.Icon.ExtractAssociatedIcon(p); } catch { }
-        Theme.SetSkin(_settings.ClassicSkin);   // the skin FIRST: it decides what the palette, the radii and the font even are
+        Theme.SetSkin(_settings.ClassicSkin, _settings.CyberSkin);   // the skin FIRST: it decides what the palette, the radii and the font even are
         Theme.DitherCovers = _settings.DitherCovers;
         Theme.SetAccent(_settings.Accent); // apply saved accent before any control styles bake it in
         Theme.SetThemeVariant(_settings.ThemeVariant); // and the background palette, before controls bake their BackColors
@@ -4786,7 +4786,8 @@ internal sealed class MainForm : Form, IMessageFilter
         int y = 18;
         void SectionLabel(string t)
         {
-            _deviceScrollPanel.Controls.Add(new CrispLabel { Text = Theme.ClassicCase(t), Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
+            if (Theme.Cyber) _deviceScrollPanel.Controls.Add(new CyberTagLabel { Text = t, Left = x, Top = y, Width = cardW, Height = 20 });
+            else _deviceScrollPanel.Controls.Add(new CrispLabel { Text = Theme.ClassicCase(t), Font = Theme.UiFont(8f, FontStyle.Bold), ForeColor = Theme.Faint, AutoSize = false, Left = x + 4, Top = y, Width = cardW, Height = 20, TextAlign = ContentAlignment.BottomLeft });
             y += 24;
         }
         void Add(Control c) { c.Left = x; c.Top = y; _deviceScrollPanel.Controls.Add(c); y += c.Height + 18; }

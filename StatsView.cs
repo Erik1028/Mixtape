@@ -212,12 +212,16 @@ internal sealed class StatsView : Panel
             fit = Theme.DisplayFont(Math.Max(12f, 21f * box / wNeed), FontStyle.Bold);
             f = fit;
         }
-        // Classic: the label is the group box's caption, so the figure has the box to itself
-        var at = Theme.Classic ? new Rectangle(r.X + 16, top + 2, box, r.Bottom - top - 4) : new Rectangle(r.X + 16, r.Y + 11, box, 36);
+        // Classic: the label is the group box's caption, so the figure has the box to itself. Cyber: the label is a
+        // yellow tag at the top-left (as on Orbit's HUD cards) and the figure sits under it.
+        if (Theme.Cyber) Theme.DrawCyberTag(g, s.Label, r.X + 14, r.Y + 12);
+        var at = Theme.Classic ? new Rectangle(r.X + 16, top + 2, box, r.Bottom - top - 4)
+            : Theme.Cyber ? new Rectangle(r.X + 14, r.Y + 32, box, r.Bottom - r.Y - 38)
+            : new Rectangle(r.X + 16, r.Y + 11, box, 36);
         CrispText.DrawText(g, s.Value, f, at, s.Accent ? Theme.AccentBright : Theme.TextCol,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         fit?.Dispose();
-        if (Theme.Classic) return;
+        if (Theme.Classic || Theme.Cyber) return;
         CrispText.DrawText(g, Theme.Caps(s.Label), _fLabel, new Rectangle(r.X + 16, r.Bottom - 30, r.Width - 32, 20), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
     }
@@ -250,6 +254,7 @@ internal sealed class StatsView : Panel
         using (var b = new SolidBrush(Theme.PanelBg))
         using (var p = Theme.RoundedRect(card, Theme.RadCard)) g.FillPath(b, p);
         if (Theme.Classic) ClassicGroup(g, card, sec.Label);
+        else if (Theme.Cyber) Theme.DrawCyberTag(g, sec.Label, card.X + 14, card.Y + 8);
         else CrispText.DrawText(g, Theme.Caps(sec.Label), _fLabel, new Rectangle(card.X + 16, card.Y + 8, card.Width - 32, LabelH - 6), Theme.Faint,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
@@ -285,6 +290,14 @@ internal sealed class StatsView : Panel
             {
                 // the bars become the era's progress bar: a sunken trough with navy chunks
                 Theme.ClassicProgress(g, new Rectangle(barX, row.Y + RowH / 2 - 7, barW, 14), bw, hot ? Theme.AccentBright : null);
+                CrispText.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
+                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                continue;
+            }
+            if (Theme.Cyber)
+            {
+                // the HUD's segmented bar: yellow, cyan under the pointer
+                Theme.CyberSegments(g, new RectangleF(track.X, track.Y + 1, track.Width, 6), barW > 0 ? bw / (float)barW : 0, hot ? Theme.CyberCyan : Theme.CyberYellow);
                 CrispText.DrawText(g, b.Figure, _fFig, new Rectangle(card.Right - 16 - figW, row.Y, figW, RowH), Theme.Faint,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 continue;

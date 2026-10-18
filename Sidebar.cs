@@ -444,7 +444,8 @@ internal sealed class Sidebar : Panel
                 if (anyDrawn) y += 10; // breathing room above each group after the first
                 if (y >= clip.Top && y + SectionH <= clip.Bottom)   // fully inside (see the item-row note: avoid text bleeding past the edges)
                 {
-                    CrispText.DrawText(g, Theme.ClassicCase(row.Text), _fSection,   // Classic: "Library", not "LIBRARY"
+                    if (Theme.Cyber) Theme.DrawCyberTag(g, row.Text, Pad + 4, y + SectionH - 19);   // Cyber: a yellow tag
+                    else CrispText.DrawText(g, Theme.ClassicCase(row.Text), _fSection,   // Classic: "Library", not "LIBRARY"
                         new Rectangle(Pad + 4, y, Width - Pad * 2, SectionH), Theme.Faint,
                         TextFormatFlags.Left | TextFormatFlags.Bottom);
                     if (row.ShowAdd)   // a 2-stroke vector "+" on the right of the header → New Playlist (creation was right-click-only)

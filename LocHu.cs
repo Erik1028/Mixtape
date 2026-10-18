@@ -78,6 +78,10 @@ internal static partial class LocHu
         ["Top Rated"] = "Legjobbra értékelt",
         ["Most Played"] = "Legtöbbet játszott",
         ["Never Played"] = "Sosem játszott",
+        // ---- the Cyber look ----
+        ["Cyber"] = "Cyber",
+        ["Modern is this app's own look. Windows 95 skins the whole window the way a program looked in 1995: grey panels with 3D edges, square corners, navy selection and the era's typeface. Cyber is a sci-fi HUD: near-black panels with cut corners, yellow tags and cyan highlights. Takes effect after a restart."] = "A Modern az app saját kinézete. A Windows 95 az egész ablakot olyanná teszi, amilyen egy 1995-ös program volt: szürke panelek 3D élekkel, szögletes sarkok, sötétkék kijelölés és a korabeli betűtípus. A Cyber egy sci-fi HUD: közel fekete panelek levágott sarkokkal, sárga címkék és cián kiemelések. Újraindítás után lép életbe.",
+        ["The Cyber look has a palette of its own \u2014 the accent colour and the background are used by the Modern look."] = "A Cyber kinézetnek saját palettája van \u2014 a kiemelőszínt és a hátteret a Modern kinézet használja.",
         // ---- the iPod's own system (IPodFirmware): Rockbox or Encore OS ----
         ["System"] = "Rendszer",
         ["Plays on Encore OS"] = "Encore OS-en lejátszható",
