@@ -1182,6 +1182,17 @@ internal sealed class MainForm : Form, IMessageFilter
             if (_sidebar.PreviewRowCenter(k) is { } p) hov.Add(Measure(() => SendMessage(_sidebar.Handle, 0x0200, IntPtr.Zero, XY(p)), 200));
         Report("rail hover", hov);
         sb.AppendLine(RailConsistency("after the hovers"));
+        // a FAST sweep: the pointer crosses a row every 25 ms, so each fade is cut short by the next hover. The moves are
+        // raised on the rail directly: a SENT WM_MOUSEMOVE arms leave-tracking while the real pointer is elsewhere, and the
+        // WM_MOUSELEAVE that follows at once repaints the rail whole - which hid exactly what was left on screen
+        var onMove = typeof(Control).GetMethod("OnMouseMove", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        foreach (var k in kinds.Concat(kinds.Reverse()).Concat(kinds))
+            if (_sidebar.PreviewRowCenter(k) is { } p)
+            {
+                onMove.Invoke(_sidebar, new object[] { new MouseEventArgs(MouseButtons.None, 0, p.X, p.Y, 0) });
+                var w = System.Diagnostics.Stopwatch.StartNew(); while (w.ElapsedMilliseconds < 25) { Application.DoEvents(); Thread.Sleep(1); }
+            }
+        sb.AppendLine(RailConsistency("after a fast sweep"));
         // and one row at a time, repainted on its own - the partial-paint path exactly
         foreach (var k in new[] { SidebarRowKind.AllSongs, SidebarRowKind.Albums, SidebarRowKind.Stats })
             if (_sidebar.PreviewRowCenter(k) is { } rc)

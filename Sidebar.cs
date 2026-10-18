@@ -218,10 +218,14 @@ internal sealed class Sidebar : Panel
     /// crosses constantly, so a hard on/off there is what makes an app feel cheap.</summary>
     private void SetRowHover(object? row)
     {
+        // The row still fading out from the hover before is dropped here, its fade cut short: it must be painted once more
+        // at rest, or - now that a fade repaints only its own row - its half-faded wash stays on it for good.
+        var dropped = _hoverLeaving as Row;
         _hoverLeaving = _hover; _leaveT = _hoverT;
         _hover = row as Row; _hoverT = 0;
         _hoverTw?.Cancel(); _leaveTw?.Cancel();
         if (!Anim.MotionEnabled) { _hoverT = row is null ? 0 : 1; _leaveT = 0; _hoverLeaving = null; Invalidate(); return; }
+        if (dropped is not null && !ReferenceEquals(dropped, _hover) && !ReferenceEquals(dropped, _hoverLeaving)) InvalidateRow(dropped);
         if (_hoverLeaving is not null)
         {
             float from = _leaveT;
