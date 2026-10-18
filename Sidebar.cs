@@ -497,7 +497,9 @@ internal sealed class Sidebar : Panel
             int rh = row.Height;
             var rowRect = new Rectangle(0, y, Width, rh);
             if (!partial) _hit.Add((rowRect, row));
-            if (partial && !pc.IntersectsWith(rowRect)) { y += rh; continue; }
+            // a row this paint does not cover still COUNTS as laid out: the next section adds its breathing room only after
+            // something came before it - skipping that made every row below the first section draw 10 px too high
+            if (partial && !pc.IntersectsWith(rowRect)) { y += rh; anyDrawn = true; continue; }
             if (y >= clip.Top && y + rh <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
             {
                 var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, rh - 4);

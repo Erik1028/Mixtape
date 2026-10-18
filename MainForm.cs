@@ -1181,6 +1181,25 @@ internal sealed class MainForm : Form, IMessageFilter
         foreach (var k in kinds.Concat(kinds))
             if (_sidebar.PreviewRowCenter(k) is { } p) hov.Add(Measure(() => SendMessage(_sidebar.Handle, 0x0200, IntPtr.Zero, XY(p)), 200));
         Report("rail hover", hov);
+        sb.AppendLine(RailConsistency("after the hovers"));
+        // and one row at a time, repainted on its own - the partial-paint path exactly
+        foreach (var k in new[] { SidebarRowKind.AllSongs, SidebarRowKind.Albums, SidebarRowKind.Stats })
+            if (_sidebar.PreviewRowCenter(k) is { } rc)
+            {
+                _sidebar.Invalidate(new Rectangle(0, rc.Y - 10, _sidebar.Width, 20)); _sidebar.Update();
+                sb.AppendLine(RailConsistency("row " + k + " repainted alone"));
+            }
+        // the same with the rail scrolled a notch (a long rail scrolls)
+        SendMessage(_sidebar.Handle, 0x020A, (IntPtr)(-120 << 16), XY(_sidebar.PointToScreen(new Point(_sidebar.Width / 2, _sidebar.Height / 2))));
+        { var w = System.Diagnostics.Stopwatch.StartNew(); while (w.ElapsedMilliseconds < 500) { Application.DoEvents(); Thread.Sleep(5); } }
+        foreach (var k in new[] { SidebarRowKind.Albums, SidebarRowKind.Stats })
+            if (_sidebar.PreviewRowCenter(k) is { } rc)
+            {
+                Measure(() => SendMessage(_sidebar.Handle, 0x0200, IntPtr.Zero, XY(rc)), 250);
+                sb.AppendLine(RailConsistency("scrolled, hovering " + k));
+                _sidebar.Invalidate(new Rectangle(0, rc.Y - 10, _sidebar.Width, 20)); _sidebar.Update();
+                sb.AppendLine(RailConsistency("scrolled, row " + k + " repainted alone"));
+            }
         foreach (var k in new[] { SidebarRowKind.AllSongs, SidebarRowKind.Albums, SidebarRowKind.Stats, SidebarRowKind.Home })
         {
             var clicks = new List<(double, double, double, int)>();
@@ -3041,6 +3060,27 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         catch { }
         return null;
+    }
+
+    /// <summary>The harness: the rail as the screen shows it after the pointer has crossed it (partial repaints) against a
+    /// clean whole render - they must be the same picture (rows drawn at the wrong height or a fade left behind show here).</summary>
+    private string RailConsistency(string when, bool leave = false)
+    {
+        // (no WM_MOUSELEAVE by default: the rail answers it with a WHOLE repaint, which would hide what the partial ones left)
+        if (leave) SendMessage(_sidebar.Handle, 0x02A3, IntPtr.Zero, IntPtr.Zero);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 400) { Application.DoEvents(); Thread.Sleep(5); }
+        using var a = ScreenSnapshot(_sidebar);
+        if (a is null) return "rail check: no snapshot";
+        using var b = new Bitmap(_sidebar.Width, _sidebar.Height);
+        _sidebar.DrawToBitmap(b, new Rectangle(0, 0, b.Width, b.Height));
+        int diff = 0, minY = int.MaxValue, maxY = -1;
+        // the search field is a text box (its cue text renders differently off screen): only the rows are compared
+        var skip = _sidebar.Controls.OfType<Control>().Where(c => c.Visible && c is not ThemedButton).Select(c => Rectangle.Inflate(c.Bounds, 2, 2)).ToList();
+        for (int y = 0; y < a.Height; y++) for (int x = 0; x < a.Width; x += 2)
+            if (!skip.Any(r => r.Contains(x, y)) && a.GetPixel(x, y).ToArgb() != b.GetPixel(x, y).ToArgb()) { diff++; minY = Math.Min(minY, y); maxY = Math.Max(maxY, y); }
+        if (diff > 0) a.Save(Path.Combine(Path.GetTempPath(), "mixtape-rail-screen.png")); 
+        return $"rail check ({when}): {diff} pixels differ from a clean paint" + (diff > 0 ? $" (rows {minY}-{maxY})" : "") + (diff == 0 ? "  OK" : "  FAIL");
     }
 
     /// <summary>The harness: the screen copy against a full render of the same region - how many pixels differ.</summary>
