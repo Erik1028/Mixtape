@@ -13,6 +13,12 @@ internal sealed class DoctorReport
     public int TotalPhotos;                                  // photos scanned (0 if the device has none / wasn't scanned)
     public List<Track> MissingFiles = new();                 // DB rows whose audio file is gone
     public List<(string Path, long Size)> OrphanFiles = new();// media files on the drive no track points at
+    /// <summary>Encore OS is on the iPod: it plays every file under iPod_Control\Music, registered or not, so
+    /// <see cref="OrphanFiles"/> then holds only the extra copies it hides (judged by its own duplicate rule) and
+    /// <see cref="EncoreOnlyCopies"/> the stray files that are the only copy of a song it plays (never deleted).</summary>
+    public bool EncoreAware;
+    public List<(string Path, long Size)> EncoreOnlyCopies = new();
+    public long EncoreOnlyBytes;
     public List<List<Track>> DuplicateGroups = new();        // each group sorted best-keeper-first
     public List<List<Photo>> DuplicatePhotoGroups = new();   // photos with identical thumbnails; each group keeper-first
     public List<(Track T, long OnDisk)> DamagedFiles = new();// DB rows whose file is SHORTER than the DB says (truncated copy)
@@ -93,6 +99,22 @@ internal static class LibraryDoctor
         }
         catch { /* enumeration failure (drive yanked) → just report no orphans */ }
 
+        // 2b) Encore OS plays every file under iPod_Control\Music, so a "stray" file can be the ONLY copy of a song
+        //     it plays. Only the copies Encore itself hides (the song is kept elsewhere, e.g. as FLAC in \Music)
+        //     stay deletable; without Encore's index nothing can be judged, so every stray file is kept.
+        if (lib.Encore is { } enc && rep.OrphanFiles.Count > 0)
+        {
+            rep.EncoreAware = true;
+            var extra = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (enc.HasIndex)
+                foreach (var g in enc.DuplicateGroups(e => OnDisk(dev.MountRoot, e)))
+                    for (int i = 1; i < g.Count; i++) extra.Add(g[i].Path);
+            var keep = rep.OrphanFiles.Where(o => !extra.Contains(EncoreData.IpodPath(dev.MountRoot, o.Path))).ToList();
+            foreach (var o in keep) { rep.OrphanFiles.Remove(o); rep.OrphanBytes -= o.Size; }
+            rep.EncoreOnlyCopies = keep;
+            rep.EncoreOnlyBytes = keep.Sum(o => o.Size);
+        }
+
         // 3) Duplicates: same normalized title+artist+album AND near-equal length (2 s bucket, so different
         //    versions/remasters aren't merged). Keeper = most-played, then highest bitrate.
         foreach (var g in tracks.Where(t => !MediaType.IsVideo(t.MediaType))
@@ -137,6 +159,18 @@ internal static class LibraryDoctor
         }
 
         return rep;
+    }
+
+    /// <summary>Encore's index entry still matches the file on the iPod (same size): a file deleted or replaced
+    /// since Encore's last scan must not count as the copy that's kept.</summary>
+    private static bool OnDisk(string mountRoot, EncoreData.Entry e)
+    {
+        try
+        {
+            var fi = new FileInfo(Path.Combine(mountRoot, e.Path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            return fi.Exists && fi.Length == e.Size;
+        }
+        catch { return false; }
     }
 
     private static string DupKey(Track t)

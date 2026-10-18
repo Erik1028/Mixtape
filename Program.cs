@@ -178,6 +178,10 @@ internal static class Program
         // Verify the add-time duplicate guard catches the cases that produced real-world duplicates
         // (multi-artist tag drift, Unicode NFC/NFD accents, same song twice in one batch). → ipod-duptest.txt
         if (args.Contains("--duptest")) { RunDupGuardTest(); return; }
+        // Encore OS's data on the iPod (read-only): its settings and library-index slots, its duplicate rule
+        // (which stray files are extra copies it hides vs the only copy it plays) and its play-count overlay,
+        // on a sandbox "iPod" built here. → ipod-encoretest.txt
+        if (args.Contains("--encoretest")) { RunEncoreTest(); return; }
 
         // Lyrics probe: what the Lyrics panel would show for a song, and from which source.
         // Usage: --lyricstest "<artist>" "<title>" [durationSeconds] -> console
@@ -524,6 +528,129 @@ internal static class Program
     /// <summary>Regression test for the add-time duplicate guard, built from REAL duplicates found on a
     /// user's iPod: the same audio file re-added under tags a different program wrote. Exercises the private
     /// statics in MainForm via reflection so no UI is needed.</summary>
+    private static void RunEncoreTest()
+    {
+        var log = new StringBuilder();
+        int pass = 0, fail = 0;
+        void Check(string what, object? got, object? want)
+        {
+            bool ok = Equals(got?.ToString(), want?.ToString());
+            log.AppendLine($"{(ok ? "PASS" : "FAIL")}  {what}: got {got}, want {want}");
+            if (ok) pass++; else fail++;
+        }
+        string root = Path.Combine(Path.GetTempPath(), "mixtape-encoretest-" + Environment.ProcessId);
+        try
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            // (1) Encore's path key = its C library_path_key (values from the C code and a Python copy).
+            Check("PathKey FLAC", EncoreData.PathKey("/Music/You - Lane 8; Kasablanca.flac").ToString("x8"), "806fa446");
+            Check("PathKey iTunes copy", EncoreData.PathKey("/iPod_Control/Music/F00/LANE.m4a").ToString("x8"), "e614be98");
+            Check("PathKey accents (UTF-8 bytes)", EncoreData.PathKey("/Music/Árvíztűrő.flac").ToString("x8"), "236914ae");
+            Check("PathKey ignores ASCII case", EncoreData.PathKey("/MUSIC/you - lane 8; kasablanca.FLAC").ToString("x8"), "806fa446");
+
+            // (2) A sandbox iPod: files on "disk", then Encore's index + settings describing them.
+            var files = new (string Path, string Title, string Artist, string Album, int Dur, int Size, bool Write)[]
+            {
+                ("/Music/You - Lane 8; Kasablanca.flac", "You", "Lane 8;Kasablanca", "Childish", 254, 3000, true),  // Encore keeps this
+                ("/iPod_Control/Music/F00/LANE.m4a", "You", "Lane 8", "Childish", 254, 2000, true),                   // registered copy
+                ("/iPod_Control/Music/F01/ABCD.m4a", "You", "Lane 8", "Childish", 255, 2001, true),                   // stray, extra copy
+                ("/iPod_Control/Music/F02/ONLY.m4a", "Solo", "Nobody", "Alone", 200, 1500, true),                    // stray, the only copy
+                ("/iPod_Control/Music/F03/TWO1.m4a", "Twin", "Z", "W", 180, 1800, true),                             // stray pair, no FLAC:
+                ("/iPod_Control/Music/F04/TWO2.m4a", "Twin", "Z", "W", 181, 1801, true),                             //   F03 kept, F04 extra
+                ("/Music/Other.flac", "You", "Someone Else", "Childish", 254, 3100, true),                           // other artist: not a copy
+                ("/Music/Gone.flac", "Lost", "Q", "R", 100, 900, false),                                             // deleted since the scan
+                ("/iPod_Control/Music/F05/LOST.m4a", "Lost", "Q", "R", 100, 800, true),                              //   → its copy is the only one
+                ("/iPod_Control/Music/F06/SIZE.m4a", "You", "Lane 8", "Childish", 254, 700, true),                   // replaced: size differs
+            };
+            foreach (var f in files.Where(f => f.Write))
+            {
+                string os = Path.Combine(root, f.Path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(os)!);
+                File.WriteAllBytes(os, new byte[f.Path.EndsWith("SIZE.m4a") ? 777 : f.Size]);
+            }
+            static byte[] U32(uint v) => BitConverter.GetBytes(v);
+            var idx = new List<byte>();
+            idx.AddRange(Encoding.ASCII.GetBytes("LIBIDX01")); idx.AddRange(U32((uint)files.Length));
+            foreach (var f in files)
+            {
+                idx.AddRange(U32((uint)f.Size)); idx.AddRange(BitConverter.GetBytes((ushort)f.Dur)); idx.AddRange(BitConverter.GetBytes((ushort)1));
+                idx.AddRange(U32(0)); idx.AddRange(U32(0)); idx.Add(0);
+                foreach (string str in new[] { f.Path, f.Title, f.Artist, f.Album, "" }) { idx.AddRange(Encoding.UTF8.GetBytes(str)); idx.Add(0); }
+            }
+            byte[] Slot(string magic, uint seq, byte[] data, int hdrLen, int slotLen)
+            {
+                var b = new byte[slotLen];
+                Encoding.ASCII.GetBytes(magic).CopyTo(b, 0);
+                U32(seq).CopyTo(b, 8); U32((uint)data.Length).CopyTo(b, 12); U32(EncoreData.Crc32(data)).CopyTo(b, 16);
+                data.CopyTo(b, hdrLen);
+                return b;
+            }
+            Directory.CreateDirectory(Path.Combine(root, "Encore"));
+            var cache = new List<byte>(new byte[4096]);
+            Encoding.ASCII.GetBytes("ENCCACH1").CopyTo(cache.ToArray(), 0);
+            var older = Slot("ENCLIB01", 4, Encoding.ASCII.GetBytes("LIBIDX01\0\0\0\0"), 512, 2 * 1024 * 1024);
+            var newer = Slot("ENCLIB01", 5, idx.ToArray(), 512, idx.Count + 512);
+            cache.AddRange(older); cache.AddRange(newer);
+            File.WriteAllBytes(Path.Combine(root, "Encore", "cache.bin"), cache.ToArray());
+
+            string settings = "# Encore OS settings=1\nplays=806fa446,5,14094000\nplays=e614be98,1,14090000\n" +
+                              "plays=deadbeef,9,1\nrating=4|/Music/You - Lane 8; Kasablanca.flac\nvolume=50\n";
+            var good = Slot("ENCSET01", 8, Encoding.UTF8.GetBytes(settings), 20, 65536);
+            var bad = Slot("ENCSET01", 9, Encoding.UTF8.GetBytes(settings.Replace("5,", "6,")), 20, 65536);
+            bad[25] ^= 0xFF;   // the newer slot is damaged (a write cut off): the older one must win
+            File.WriteAllBytes(Path.Combine(root, "Encore", "adatok.bin"), good.Concat(bad).ToArray());
+
+            var enc = EncoreData.Load(root);
+            Check("Encore detected", enc is not null, true);
+            Check("index from the newer cache slot", enc!.Index.Count, files.Length);
+            Check("plays from the older, intact settings slot", enc.Plays.TryGetValue(0x806fa446, out var pl) ? pl.Count : 0u, 5u);
+            Check("rating line", enc.Ratings.TryGetValue("/Music/You - Lane 8; Kasablanca.flac", out int st) ? st : 0, 4);
+            Check("no Encore → null", EncoreData.Load(Path.Combine(root, "Music")) is null, true);
+
+            // (3) Encore's artist rule.
+            Check("artist prefix + ';'", EncoreData.ArtistSame("Lane 8", "Lane 8;Kasablanca"), true);
+            Check("artist prefix + ' feat'", EncoreData.ArtistSame("Lane 8 feat. X", "Lane 8"), true);
+            Check("artist prefix without separator", EncoreData.ArtistSame("Lane 8", "Lane 80"), false);
+            Check("case-only difference is not the same artist (as in Encore)", EncoreData.ArtistSame("lane 8", "Lane 8"), false);
+
+            // (4) Stray files: which are extra copies Encore hides (deletable) and which it plays.
+            bool OnDisk(EncoreData.Entry e)
+            {
+                var fi = new FileInfo(Path.Combine(root, e.Path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+                return fi.Exists && fi.Length == e.Size;
+            }
+            var groups = enc.DuplicateGroups(OnDisk);
+            var extra = new HashSet<string>(groups.SelectMany(g => g.Skip(1)).Select(e => e.Path), StringComparer.OrdinalIgnoreCase);
+            var keepers = groups.Select(g => g[0].Path).ToList();
+            log.AppendLine("groups: " + string.Join(" | ", groups.Select(g => string.Join(", ", g.Select(e => e.Path)))));
+            Check("FLAC is the copy Encore keeps", keepers.Contains("/Music/You - Lane 8; Kasablanca.flac"), true);
+            Check("registered copy is an extra copy", extra.Contains("/iPod_Control/Music/F00/LANE.m4a"), true);
+            Check("stray ALAC twin of the FLAC is extra", extra.Contains("/iPod_Control/Music/F01/ABCD.m4a"), true);
+            Check("only copy is never extra", extra.Contains("/iPod_Control/Music/F02/ONLY.m4a"), false);
+            Check("stray pair: first path kept", extra.Contains("/iPod_Control/Music/F03/TWO1.m4a"), false);
+            Check("stray pair: second is extra", extra.Contains("/iPod_Control/Music/F04/TWO2.m4a"), true);
+            Check("other artist isn't a copy", extra.Contains("/Music/Other.flac") || keepers.Contains("/Music/Other.flac"), false);
+            Check("keeper deleted since the scan → its copy stays", extra.Contains("/iPod_Control/Music/F05/LOST.m4a"), false);
+            Check("file replaced since the scan → not judged", extra.Contains("/iPod_Control/Music/F06/SIZE.m4a"), false);
+
+            // (5) Play-count overlay: the registered copy collects the FLAC's plays too, plus Encore's stars.
+            var lane = new Track { Title = "You", Location = ":iPod_Control:Music:F00:LANE.m4a", PlayCount = 3, Rating = 0, MediaType = 1 };
+            var solo = new Track { Title = "Solo2", Location = ":iPod_Control:Music:F09:NONE.m4a", PlayCount = 2, Rating = 60, MediaType = 1 };
+            int changed = enc.ApplyPlays(new[] { lane, solo }, root);
+            Check("tracks changed", changed, 1);
+            Check("plays: own 3 + FLAC 5 + copy 1", lane.PlayCount, 9u);
+            Check("Encore's stars win", lane.Rating, (byte)80);
+            Check("last played = newest", lane.LastPlayed?.ToString("yyyy-MM-dd HH:mm"), EncoreData.StampToDate(14094000)?.ToString("yyyy-MM-dd HH:mm"));
+            Check("unrelated track untouched", $"{solo.PlayCount}/{solo.Rating}", "2/60");
+            Check("stamp 0 → no date", EncoreData.StampToDate(0) is null, true);
+        }
+        catch (Exception ex) { log.AppendLine("FAIL  exception: " + ex); fail++; }
+        finally { try { Directory.Delete(root, true); } catch { } }
+        log.Insert(0, $"Encore test: {pass} passed, {fail} failed{Environment.NewLine}");
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-encoretest.txt"), log.ToString());
+        Console.WriteLine(log.ToString());
+    }
+
     private static void RunDupGuardTest()
     {
         var log = new StringBuilder();

@@ -19,6 +19,14 @@ internal static partial class LocHu
 
     private static readonly Dictionary<string, string> Curated = new(StringComparer.Ordinal)
     {
+        // ---- Library Doctor: Encore OS ----
+        ["Extra copies"] = "Fölösleges másolatok",
+        ["{0} file(s) ({1}) are extra copies of songs Encore keeps in a better copy (e.g. FLAC). Delete them to reclaim space."] =
+            "{0} fájl ({1}) olyan dal fölösleges másolata, amelyet az Encore jobb példányban is megtart (pl. FLAC-ként). Töröld őket, hogy helyet szabadíts fel.",
+        ["Songs only Encore plays"] = "Csak az Encore-ban szóló dalok",
+        ["{0} file(s) ({1}) aren't in iTunes' list, but Encore plays them and they're the only copy, so they stay."] =
+            "{0} fájl ({1}) nincs az iTunes listájában, de az Encore lejátssza őket, és ez az egyetlen példányuk, ezért megmaradnak.",
+
         // ---- Sidebar sections & navigation ----
         ["DEVICE"] = "ESZKÖZ",
         ["LIBRARY"] = "KÖNYVTÁR",

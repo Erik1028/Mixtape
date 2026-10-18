@@ -43,12 +43,25 @@ internal sealed class IpodLibrary
         View = view;
     }
 
+    /// <summary>Encore OS's data on this iPod (its plays and library index), or null if Encore isn't installed.
+    /// Read-only; see <see cref="EncoreData"/>.</summary>
+    public EncoreData? Encore { get; private set; }
+
     public static IpodLibrary Load(IPodDevice device)
     {
         byte[] bytes = File.ReadAllBytes(device.ITunesDbPath);
         var lib = new IpodLibrary(device, RawDb.Parse(bytes), ITunesDbReader.Read(bytes));
         PlayCounts.Apply(lib); // overlay on-device play counts/ratings (the data iTunes would merge on sync)
+        lib.ApplyEncore();
         return lib;
+    }
+
+    /// <summary>Overlay what Encore OS counted (its plays, last-played dates, stars) — display only, like the
+    /// Play Counts overlay: the RawDb never sees it, so a save can't persist or double it.</summary>
+    private void ApplyEncore()
+    {
+        try { Encore = EncoreData.Load(Device.MountRoot); Encore?.ApplyPlays(View.Tracks, Device.MountRoot); }
+        catch { Encore = null; }   // a display nicety — never let it block loading the library
     }
 
     /// <summary>
@@ -185,6 +198,7 @@ internal sealed class IpodLibrary
         View = ITunesDbReader.Read(fresh);
         Raw = RawDb.Parse(fresh);
         PlayCounts.Apply(this); // keep any (now cleared) on-device play counts/ratings visible after a save+reload
+        ApplyEncore();
     }
 
     private static ulong RandomDbid()

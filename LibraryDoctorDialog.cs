@@ -85,8 +85,10 @@ internal sealed class LibraryDoctorDialog : CardDialog
             if (_r.OrphanFiles.Count > 0)
             {
                 _tOrphan = MakeToggle(false);
-                string d = Loc.T("{0} file(s) on the iPod ({1}) aren't in your library. Delete them to reclaim space.", _r.OrphanFiles.Count, HumanSize(_r.OrphanBytes));
-                fixes.AddRow(Loc.T("Stray files"), d, _tOrphan, RowHFor(d, _tOrphan));
+                string d = _r.EncoreAware
+                    ? Loc.T("{0} file(s) ({1}) are extra copies of songs Encore keeps in a better copy (e.g. FLAC). Delete them to reclaim space.", _r.OrphanFiles.Count, HumanSize(_r.OrphanBytes))
+                    : Loc.T("{0} file(s) on the iPod ({1}) aren't in your library. Delete them to reclaim space.", _r.OrphanFiles.Count, HumanSize(_r.OrphanBytes));
+                fixes.AddRow(_r.EncoreAware ? Loc.T("Extra copies") : Loc.T("Stray files"), d, _tOrphan, RowHFor(d, _tOrphan));
                 any = true;
             }
             if (any) { fixes.Finish(); Controls.Add(fixes); y += fixes.Height + 12; }
@@ -111,6 +113,16 @@ internal sealed class LibraryDoctorDialog : CardDialog
                 });
                 y += 26;
             }
+        }
+
+        // ---- Encore OS: stray files that are the only copy of a song it plays (kept, report only) ----
+        if (_r.EncoreOnlyCopies.Count > 0)
+        {
+            var enc = new CardPanel(CardW) { Left = Pad, Top = y };
+            enc.AddInfoRow(Loc.T("Songs only Encore plays"),
+                Loc.T("{0} file(s) ({1}) aren't in iTunes' list, but Encore plays them and they're the only copy, so they stay.",
+                      _r.EncoreOnlyCopies.Count, HumanSize(_r.EncoreOnlyBytes)));
+            enc.Finish(); Controls.Add(enc); y += enc.Height + 12;
         }
 
         // ---- buttons ----
