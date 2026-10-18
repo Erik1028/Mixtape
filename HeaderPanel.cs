@@ -161,7 +161,9 @@ internal sealed class HeaderPanel : Panel
         _textTw?.Cancel();
         if (!Anim.MotionEnabled) { _textT = 1; Invalidate(); return; }
         _textT = 0;
-        _textTw = Anim.Run(150, v => { if (IsDisposed) return; _textT = (float)v; Invalidate(); }, () => _textTw = null, Easings.OutQuint);
+        // only the title block moves: its strip repaints, not the art or the buttons
+        var strip = new Rectangle(Math.Max(0, TextX - 4), 0, Math.Max(1, Width - TextX + 4), Height);
+        _textTw = Anim.Run(150, v => { if (IsDisposed) return; _textT = (float)v; Invalidate(strip); }, () => _textTw = null, Easings.OutQuint);
     }
 
     public void SetInfo(string kicker, string title, string subtitle, int seed, bool keepArt = false)
@@ -305,6 +307,14 @@ internal sealed class HeaderPanel : Panel
             _searchLeft = sx;
         }
         else _searchLeft = _buttonsLeft;
+    }
+
+    /// <summary>The page buttons are opaque, not Transparent: a transparent child repaints with every paint of its parent
+    /// (each frame of the title's slide). A ThemedButton clears to its parent's colour itself, so nothing shows.</summary>
+    protected override void OnControlAdded(ControlEventArgs e)
+    {
+        base.OnControlAdded(e);
+        if (e.Control is ThemedButton b && b.BackColor.A < 255) b.BackColor = Theme.Bg;
     }
 
     protected override void OnPaint(PaintEventArgs e)

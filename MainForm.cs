@@ -1119,6 +1119,116 @@ internal sealed class MainForm : Form, IMessageFilter
         return $"spin: {Easter.SpinFrames} frames in {secs:0.00} s = {Easter.SpinFrames / secs:0.0} fps; painting a frame {(paints > 0 ? paintMs / paints : 0):0.0} ms";
     }
 
+    /// <summary>
+    /// Harness (MIX_INPUTBENCH=1, with MIX_LIVE): what the user waits for. Real input messages into the real controls -
+    /// rail hovers and CLICKS (the actual navigation, transitions included), song-list hovers and wheel notches, a
+    /// header button's hover and press - with motion ON, through a plain message loop. Per action: the input's own
+    /// handling, when its first paint has landed (what the eye waits for), and the UI thread's busy time and paints in
+    /// the 400 ms after (the animation it set off). Medians over the repeats.
+    /// </summary>
+    internal string PreviewInputBench()
+    {
+        bool motion = Anim.MotionEnabled; Anim.MotionEnabled = true;
+        var sb = new System.Text.StringBuilder();
+        var painters = new Dictionary<string, int>();
+        static IntPtr XY(Point p) => (IntPtr)((p.Y << 16) | (p.X & 0xFFFF));
+        // a click as the control sees it: WinForms drops a SENT button-down when the real mouse button is up, so the
+        // control's own down / up / click handlers are raised directly
+        static void Click(Control c, Point p)
+        {
+            var e = new MouseEventArgs(MouseButtons.Left, 1, p.X, p.Y, 0);
+            foreach (var name in new[] { "OnMouseDown", "OnMouseUp", "OnMouseClick" })
+                typeof(Control).GetMethod(name, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(c, new object[] { e });
+        }
+        (double handle, double first, double busy, int paints) Measure(Action send, int windowMs = 400)
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            send();
+            double handle = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds, first = -1, busy = handle;
+            int paints = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < windowMs)
+            {
+                if (PeekMessage(out var m, IntPtr.Zero, 0, 0, 1))
+                {
+                    long t = System.Diagnostics.Stopwatch.GetTimestamp();
+                    bool paint = m.message == 0x000F;
+                    TranslateMessage(ref m); DispatchMessage(ref m);
+                    busy += System.Diagnostics.Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+                    if (paint)
+                    {
+                        paints++; if (first < 0) first = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+                        string who = Control.FromHandle(m.hwnd) is { } pc ? pc.GetType().Name + (pc is ThemedButton tb ? "(" + tb.Text + "|" + tb.Parent?.GetType().Name + ")" : pc.Name.Length > 0 ? ":" + pc.Name : "") : "?";
+                        painters[who] = painters.GetValueOrDefault(who) + 1;
+                    }
+                }
+                else Thread.Sleep(1);
+            }
+            return (handle, first, busy, paints);
+        }
+        void Report(string what, List<(double handle, double first, double busy, int paints)> runs)
+        {
+            if (painters.Count > 0) { sb.AppendLine("   painted by: " + string.Join(", ", painters.OrderByDescending(kv => kv.Value).Take(4).Select(kv => kv.Key + " " + kv.Value))); painters.Clear(); }
+            if (runs.Count == 0) { sb.AppendLine($"{what,-26} (not measured)"); return; }
+            static double Med(IEnumerable<double> v) { var s = v.OrderBy(x => x).ToList(); return s[s.Count / 2]; }
+            var firsts = runs.Where(r => r.first >= 0).Select(r => r.first).ToList();
+            sb.AppendLine($"{what,-26} handle {Med(runs.Select(r => r.handle)),6:0.0} ms | first paint {(firsts.Count > 0 ? Med(firsts) : -1),6:0.0} ms | busy {Med(runs.Select(r => r.busy)),6:0.0} ms in 400 ms, {Med(runs.Select(r => (double)r.paints)),4:0} paints | worst first paint {(firsts.Count > 0 ? firsts.Max() : -1):0.0}");
+        }
+        Application.DoEvents();
+        // the rail: hovers down the library rows, then clicks
+        var kinds = new[] { SidebarRowKind.Home, SidebarRowKind.AllSongs, SidebarRowKind.Albums, SidebarRowKind.Artists, SidebarRowKind.Stats };
+        var hov = new List<(double, double, double, int)>();
+        foreach (var k in kinds.Concat(kinds))
+            if (_sidebar.PreviewRowCenter(k) is { } p) hov.Add(Measure(() => SendMessage(_sidebar.Handle, 0x0200, IntPtr.Zero, XY(p)), 200));
+        Report("rail hover", hov);
+        foreach (var k in new[] { SidebarRowKind.AllSongs, SidebarRowKind.Albums, SidebarRowKind.Stats, SidebarRowKind.Home })
+        {
+            var clicks = new List<(double, double, double, int)>();
+            for (int rep = 0; rep < 2; rep++)
+            {
+                foreach (var target in new[] { k, SidebarRowKind.Artists })
+                    if (_sidebar.PreviewRowCenter(target) is { } p)
+                    {
+                        var run = Measure(() => Click(_sidebar, p), 600);
+                        if (target == k) clicks.Add(run);
+                    }
+            }
+            Report("rail click -> " + k, clicks);
+        }
+        // the song list
+        if (_sidebar.PreviewRowCenter(SidebarRowKind.AllSongs) is { } songs)
+        {
+            Measure(() => Click(_sidebar, songs), 700);
+            var rows = new List<(double, double, double, int)>();
+            for (int i = 1; i <= 8 && i < _tracks.Rows.Count; i++)
+            {
+                var r = _tracks.GetRowDisplayRectangle(i, false);
+                rows.Add(Measure(() => SendMessage(_tracks.Handle, 0x0200, IntPtr.Zero, XY(new Point(_tracks.Width / 2, r.Y + r.Height / 2))), 150));
+            }
+            Report("song row hover", rows);
+            var wheel = new List<(double, double, double, int)>();
+            var at = _tracks.PointToScreen(new Point(_tracks.Width / 2, _tracks.Height / 2));
+            for (int i = 0; i < 6; i++) wheel.Add(Measure(() => SendMessage(_tracks.Handle, 0x020A, (IntPtr)((i < 3 ? -120 : 120) << 16), XY(at)), 300));
+            Report("song list wheel notch", wheel);
+        }
+        sb.AppendLine(PreviewSnapshotCheck());
+        // a header button: hover, then press and release
+        var btn = _header.Controls.OfType<ThemedButton>().FirstOrDefault(b => b.Visible);
+        if (btn is not null)
+        {
+            var c = new Point(btn.Width / 2, btn.Height / 2);
+            var hv = new List<(double, double, double, int)>();
+            for (int i = 0; i < 4; i++)
+            {
+                hv.Add(Measure(() => SendMessage(btn.Handle, 0x0200, IntPtr.Zero, XY(c)), 300));
+                Measure(() => SendMessage(btn.Handle, 0x02A3, IntPtr.Zero, IntPtr.Zero), 200);   // WM_MOUSELEAVE
+            }
+            Report("header button hover", hv);
+        }
+        Anim.MotionEnabled = motion;
+        return sb.ToString();
+    }
+
     /// <summary>Harness (MIX_SWITCHBENCH=view,view,..., with MIX_LIVE): page switches as a click makes them, with motion
     /// ON, through a plain message loop - the click's own work, when the first WM_PAINT lands, and what the UI thread
     /// paints in the 1.5 s after (count and time), i.e. the cost of every transition animation together.</summary>
@@ -2883,24 +2993,22 @@ internal sealed class MainForm : Form, IMessageFilter
             return;
         }
 
-        Bitmap? oldBmp = null, newBmp = null;
-        try
+        // The outgoing page is copied off the screen as it stands (~1 ms) - a DrawToBitmap rendered it all again first, and
+        // the incoming page too: 15-20 ms each for a page, 90-130 ms for the song list, all before the click showed anything
+        // (MIX_INPUTBENCH / MIX_TRACE). The incoming page needs no picture: it is live under the outgoing one, which slides
+        // off to the left and uncovers it - drawing itself as it comes into view, at once.
+        long tt0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        Bitmap? oldBmp = ScreenSnapshot(center);
+        if (oldBmp is null)
         {
-            oldBmp = new Bitmap(center.Width, center.Height);
-            center.DrawToBitmap(oldBmp, new Rectangle(0, 0, center.Width, center.Height));
+            try { oldBmp = new Bitmap(center.Width, center.Height); center.DrawToBitmap(oldBmp, new Rectangle(0, 0, center.Width, center.Height)); }
+            catch { oldBmp?.Dispose(); switchViews(); return; }
         }
-        catch { oldBmp?.Dispose(); switchViews(); return; }
-
+        double ttOld = System.Diagnostics.Stopwatch.GetElapsedTime(tt0).TotalMilliseconds;
         switchViews();
+        Trace($"transition: old snapshot {ttOld:0.0} ms, switch {System.Diagnostics.Stopwatch.GetElapsedTime(tt0).TotalMilliseconds - ttOld:0.0} ms");
 
-        try
-        {
-            newBmp = new Bitmap(center.Width, center.Height);
-            center.DrawToBitmap(newBmp, new Rectangle(0, 0, center.Width, center.Height));
-        }
-        catch { oldBmp.Dispose(); newBmp?.Dispose(); return; }
-
-        var overlay = new TransitionPanel(oldBmp, newBmp, ViewStyle) { Bounds = new Rectangle(0, 0, center.Width, center.Height) };
+        var overlay = new SlideAwayPanel(oldBmp) { Bounds = new Rectangle(0, 0, center.Width, center.Height) };
         _viewTransitionBusy = true;
         _snapTimer.Stop();
         // Slide the bar's frosted glass in sync with the content (buffered): build the NEW view's frost now and
@@ -2912,6 +3020,40 @@ internal sealed class MainForm : Form, IMessageFilter
         center.Controls.Add(overlay);
         overlay.BringToFront();
         overlay.Start(() => { if (!center.IsDisposed) center.Controls.Remove(overlay); overlay.Dispose(); _viewTransitionBusy = false; ScheduleSnap(); });
+    }
+
+    /// <summary>What <paramref name="c"/> shows on screen right now, copied off its window surface (no repaint). Null when
+    /// it cannot be (minimized, no handle, a failed copy) - the caller then renders it.</summary>
+    private static Bitmap? ScreenSnapshot(Control c)
+    {
+        try
+        {
+            if (!c.IsHandleCreated || c.FindForm() is not { Visible: true, WindowState: not FormWindowState.Minimized }) return null;
+            var bmp = new Bitmap(c.Width, c.Height);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                IntPtr dst = g.GetHdc(), src = GetDC(c.Handle);
+                bool ok = BitBlt(dst, 0, 0, c.Width, c.Height, src, 0, 0, 0x00CC0020);   // SRCCOPY
+                ReleaseDC(c.Handle, src); g.ReleaseHdc(dst);
+                if (ok) return bmp;
+            }
+            bmp.Dispose();
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>The harness: the screen copy against a full render of the same region - how many pixels differ.</summary>
+    internal string PreviewSnapshotCheck()
+    {
+        if (_center is null) return "no centre";
+        using var a = ScreenSnapshot(_center);
+        if (a is null) return "snapshot: none";
+        using var b = new Bitmap(_center.Width, _center.Height);
+        _center.DrawToBitmap(b, new Rectangle(0, 0, b.Width, b.Height));
+        int diff = 0;
+        for (int y = 0; y < a.Height; y += 2) for (int x = 0; x < a.Width; x += 2) if (a.GetPixel(x, y).ToArgb() != b.GetPixel(x, y).ToArgb()) diff++;
+        return $"screen snapshot vs render: {diff} of {(a.Width / 2) * (a.Height / 2)} sampled pixels differ";
     }
 
     // ---- track view ----

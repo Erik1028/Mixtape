@@ -2049,6 +2049,8 @@ internal static class Program
                 File.WriteAllText(outPng + ".idle.txt", IdleBench(idleSec));
             if (Environment.GetEnvironmentVariable("MIX_SPINBENCH") == "1")   // the Konami turn, live: frames that reached the screen
                 File.WriteAllText(outPng + ".spin.txt", form.PreviewSpinBench());
+            if (Environment.GetEnvironmentVariable("MIX_INPUTBENCH") == "1")   // what the user waits for: real input into real controls, motion on
+                File.WriteAllText(outPng + ".input.txt", form.PreviewInputBench());
             if (Environment.GetEnvironmentVariable("MIX_SWITCHBENCH") is { Length: > 0 } swv)   // page switches with motion on: latency + what the transitions paint
                 File.WriteAllText(outPng + ".switch.txt", form.PreviewSwitchBench(swv.Split(',')));
             if (int.TryParse(Environment.GetEnvironmentVariable("MIX_PAINTBENCH"), out int benchN) && benchN > 0)   // what a frame of this page costs

@@ -94,6 +94,10 @@ internal sealed class Sidebar : Panel
             v => { if (v != _scroll) { _scroll = v; Invalidate(); } });
         Controls.Add(_refresh);
         Controls.Add(_openFolder);
+        // Opaque, not Transparent: a transparent child is repainted with every paint of its parent, so the two footer
+        // buttons were drawn again on every frame of every rail animation (MIX_INPUTBENCH: ~200 extra paints a second).
+        // They clear to the rail's own colour in OnPaint either way, so nothing shows.
+        _refresh.BackColor = _openFolder.BackColor = Theme.SidebarBg;
         _settings.Visible = false;   // the gear moved to the window's caption strip
         _refresh.Click += (_, _) => RefreshClicked?.Invoke();
         _openFolder.Click += (_, _) => OpenFolderClicked?.Invoke();
@@ -221,12 +225,31 @@ internal sealed class Sidebar : Panel
         if (_hoverLeaving is not null)
         {
             float from = _leaveT;
-            _leaveTw = Anim.Run(110, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); Invalidate(); },
+            var leaving = _hoverLeaving as Row;
+            _leaveTw = Anim.Run(110, v => { if (IsDisposed) return; _leaveT = (float)(from * (1 - v)); InvalidateRow(leaving); },
                 () => { _leaveTw = null; _hoverLeaving = null; }, Easings.OutCubic);
         }
         if (row is not null)
-            _hoverTw = Anim.Run(90, v => { if (IsDisposed) return; _hoverT = (float)v; Invalidate(); }, () => _hoverTw = null, Easings.OutQuint);
+            _hoverTw = Anim.Run(90, v => { if (IsDisposed) return; _hoverT = (float)v; InvalidateRow(_hover); }, () => _hoverTw = null, Easings.OutQuint);
     }
+
+    /// <summary>The harness (MIX_INPUTBENCH): the centre of the first row of this kind, in the rail's coordinates.</summary>
+    internal Point? PreviewRowCenter(SidebarRowKind kind)
+    {
+        foreach (var (r, row) in _hit) if (row.Kind == kind) return new Point(r.X + r.Width / 2, r.Y + r.Height / 2);
+        return null;
+    }
+
+    /// <summary>Repaint one row only (a hover fade's frame): with the rail invalidated whole, every frame of every fade
+    /// drew all of it - ~100 ms of UI-thread time for each row the pointer crossed (MIX_INPUTBENCH).</summary>
+    private void InvalidateRow(Row? row)
+    {
+        if (row is null) return;
+        foreach (var (r, hr) in _hit) if (ReferenceEquals(hr, row)) { Invalidate(r); return; }
+        Invalidate();   // not laid out yet: the whole rail
+    }
+
+    private bool _hitValid;   // a whole paint has laid the rows out (a partial one keeps its hit lists)
 
     private float HoverOf(Row r) => ReferenceEquals(r, _hover) ? _hoverT : ReferenceEquals(r, _hoverLeaving) ? _leaveT : 0f;
 
@@ -422,10 +445,13 @@ internal sealed class Sidebar : Panel
         if (Theme.Classic) { PaintClassicTree(g); return; }
 
         // --- rows (scrollable region) ---
-        _hit.Clear();
-        _ejectHit.Clear();
-        _addHit.Clear();
         var clip = new Rectangle(0, HeaderH, Width, Height - HeaderH - FooterH);
+        // A paint that covers only some rows (a hover fade: InvalidateRow, or the system uncovering a piece) draws only
+        // those and keeps the hit lists of the last whole paint - nothing has moved: a scroll, a rebuild or anything that
+        // changes the layout repaints the rail whole.
+        var pc = e.ClipRectangle;
+        bool partial = _hitValid && !pc.Contains(clip);
+        if (!partial) { _hit.Clear(); _ejectHit.Clear(); _addHit.Clear(); _hitValid = true; }
         g.SetClip(clip);
         int y = HeaderH - _scroll;
         bool anyDrawn = false;
@@ -453,7 +479,7 @@ internal sealed class Sidebar : Panel
                     if (row.ShowAdd)   // a 2-stroke vector "+" on the right of the header → New Playlist (creation was right-click-only)
                     {
                         var hit = new Rectangle(Width - Pad - 22, y + SectionH - 22, 24, 22);
-                        _addHit.Add((hit, row.AddKind));
+                        if (!partial) _addHit.Add((hit, row.AddKind));
                         float cx = hit.X + hit.Width / 2f, cy = y + SectionH - 9f, arm = 4.5f;
                         bool over = _addHover && hit.Contains(PointToClient(MousePosition));
                         using var ap = new Pen(over ? Theme.AccentBright : Theme.Faint, 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
@@ -470,7 +496,8 @@ internal sealed class Sidebar : Panel
 
             int rh = row.Height;
             var rowRect = new Rectangle(0, y, Width, rh);
-            _hit.Add((rowRect, row));
+            if (!partial) _hit.Add((rowRect, row));
+            if (partial && !pc.IntersectsWith(rowRect)) { y += rh; continue; }
             if (y >= clip.Top && y + rh <= clip.Bottom)   // FULLY inside (TextRenderer ignores the GDI+ clip, so a partial row's centred text would bleed past the footer)
             {
                 var pill = new Rectangle(Pad - 2, y + 2, Width - (Pad - 2) * 2, rh - 4);
@@ -487,17 +514,20 @@ internal sealed class Sidebar : Panel
                         {
                             float fromY = _pillY, fromH = _pillH;
                             float toY = pill.Y, toH = pill.Height;
+                            // the band the pill travels through - not the whole rail - repaints with each frame
+                            var band = new Rectangle(0, (int)Math.Min(fromY, toY) - 3, Width, (int)(Math.Abs(toY - fromY) + Math.Max(fromH, toH)) + 6);
                             _pillTw = Anim.Run(160, v =>
                             {
                                 _pillY = (float)(fromY + (toY - fromY) * v);
                                 _pillH = (float)(fromH + (toH - fromH) * v);
-                                if (!IsDisposed) Invalidate();
+                                if (!IsDisposed) Invalidate(band);
                             }, () => _pillTw = null, Easings.OutQuint);
                             if (Theme.Cyber)   // the new place's icon fills with cyan from the left (Orbit's on-wipe)
                             {
                                 _iconTw?.Cancel();
                                 _iconWipe = 0f;
-                                _iconTw = Anim.Run(240, v => { _iconWipe = (float)v; if (!IsDisposed) Invalidate(); }, () => { _iconTw = null; _iconWipe = 1f; }, Easings.OutCubic);
+                                var wiping = row;
+                                _iconTw = Anim.Run(240, v => { _iconWipe = (float)v; if (!IsDisposed) InvalidateRow(wiping); }, () => { _iconTw = null; _iconWipe = 1f; }, Easings.OutCubic);
                             }
                         }
                     }
@@ -603,7 +633,7 @@ internal sealed class Sidebar : Panel
                 {
                     const int ew = 30;
                     var ejectRect = new Rectangle(pill.Right - ew, y, ew, rh);
-                    _ejectHit.Add((ejectRect, row));
+                    if (!partial) _ejectHit.Add((ejectRect, row));
                     Color ec = ReferenceEquals(row, _ejectHover) ? Theme.AccentBright : (row.Active ? Color.FromArgb(220, 255, 255, 255) : Theme.Faint);
                     float ex = ejectRect.X + ejectRect.Width / 2f, ey = y + rh / 2f;
                     using var eb = new SolidBrush(ec);

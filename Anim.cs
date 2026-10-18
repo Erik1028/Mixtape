@@ -175,6 +175,40 @@ internal static class Easings
     }
 }
 
+/// <summary>
+/// A view switch's outgoing page: its picture, sliding off to the left over the incoming page - which is LIVE under it
+/// and draws itself as it is uncovered. The panel is moved, not repainted: the system shifts its bits, so a frame costs
+/// the strip of new page it uncovers. It sits on top without taking clicks, then removes itself.
+/// </summary>
+internal sealed class SlideAwayPanel : Panel
+{
+    private readonly Bitmap _old;
+    private Action? _onDone;
+
+    public SlideAwayPanel(Bitmap oldBmp)
+    {
+        _old = oldBmp;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        Enabled = false;
+    }
+
+    public void Start(Action onDone)
+    {
+        _onDone = onDone;
+        int w = Width;
+        Anim.Run(300, v => { if (!IsDisposed) Left = -(int)Math.Round(w * v); },
+            () => { var d = _onDone; _onDone = null; d?.Invoke(); }, Easings.OutCubic);
+    }
+
+    protected override void OnPaint(PaintEventArgs e) => e.Graphics.DrawImageUnscaled(_old, 0, 0);
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _old.Dispose();
+        base.Dispose(disposing);
+    }
+}
+
 /// <summary>The motion used when swapping the centre view. Change the one constant in MainForm to restyle every
 /// view switch. Slide = horizontal push; Fade = cross-dissolve + small rise; Scale = zoom-in cross-dissolve.</summary>
 internal enum ViewTransition { Slide, Fade, Scale }

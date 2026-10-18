@@ -66,13 +66,23 @@ internal static class CyberFx
         if (!Theme.Cyber || !Anim.MotionEnabled) { TagT = 1f; return; }
         if (PageArea is { } area) CyberOverlay.Sweep(area);
         TagT = 0f;
-        _tw = Anim.Run(560, v => { TagT = (float)v; RedrawTags(); }, () => { _tw = null; TagT = 1f; RedrawTags(); }, Easings.OutCubic);
+        _lastSig = -1;
+        _tw = Anim.Run(560, v => { TagT = (float)v; RedrawTags(); }, () => { _tw = null; TagT = 1f; _lastSig = -1; RedrawTags(); }, Easings.OutCubic);
     }
 
     /// <summary>One frame of the reveal: each recorded tag drawn at the current phase into a small bitmap over its own
     /// background, and that blitted onto the window - a few hundred pixels, not the page.</summary>
+    private static int _lastSig = -1;   // the reveal's visible state last drawn: (wipe step, letters typed)
+    private static Bitmap? _scratch;    // one bitmap the tags are composed in, reused
+
     private static void RedrawTags()
     {
+        // a frame only when something visible changed: the wipe moved a step or another letter is typed (the tween ticks
+        // at the display's rate - most of its frames changed nothing a tag shows)
+        var (w0, t0) = TagPhases(TagT);
+        int sig = (int)(w0 * 24) * 1000 + (int)(t0 * 64);
+        if (sig == _lastSig) return;
+        _lastSig = sig;
         Control[] live;
         lock (_targets)
         {
@@ -86,13 +96,14 @@ internal static class CyberFx
             foreach (var t in spots.ToArray())
             {
                 int w = Theme.CyberTagWidth(g, t.Text) + 2;
-                using var bmp = new Bitmap(w, 17);
-                using (var bg = Graphics.FromImage(bmp))
+                if (_scratch is null || _scratch.Width < w) { _scratch?.Dispose(); _scratch = new Bitmap(Math.Max(w, 240), 17); }
+                using (var bg = Graphics.FromImage(_scratch))
                 {
+                    bg.SetClip(new Rectangle(0, 0, w, 17));
                     bg.Clear(t.Bg);
                     Theme.DrawCyberTag(bg, t.Text, 0, 0);
                 }
-                g.DrawImageUnscaled(bmp, t.X, t.Y);
+                g.DrawImage(_scratch, new Rectangle(t.X, t.Y, w, 17), new Rectangle(0, 0, w, 17), GraphicsUnit.Pixel);
             }
         }
     }
