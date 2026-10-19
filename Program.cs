@@ -259,6 +259,12 @@ internal static class Program
         // Verify playlist track reordering on a real DB. → ipod-reordertest.txt
         if (args.Length >= 2 && args[0] == "--reordertest") { RunReorderTest(args[1]); return; }
 
+        // The remote API (OrbitOverlay's VR watch): the server started in-process on a sandbox of a fixture DB, every song
+        // playing one silent sample through the real player, and a real pipe client asking everything the protocol has -
+        // reads, every command, garbage, hang-ups, reconnects, the window closing. Usage: --remotetest <fixtureDb>
+        //   → PASS/FAIL lines on the console + ipod-remotetest.txt; exit code 0 only when every check passed.
+        if (args.Length >= 2 && args[0] == "--remotetest") { RunRemoteTest(args[1]); return; }
+
         // GUI launch — enforce a single instance. Two copies racing the same iPod database swap
         // (or both writing %APPDATA%\Mixtape\settings.json) corrupt each other; a second launch
         // just surfaces the running window instead of starting a rival process.
@@ -335,6 +341,468 @@ internal static class Program
     private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private static readonly string[] TestImageExt = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp" };
+
+    /// <summary>The remote API end to end (see --remotetest above). The window is the real MainForm on a sandbox copy of the
+    /// fixture, pumped the way the render harness pumps it (no message loop, so no media flyout and no Discord), and every
+    /// song plays one silent sample through the real player - with a 300×200 cover beside it (so the fitted square has
+    /// transparent bands) and a .lrc. Nothing of the user's is written: settings frozen, the thumbnail store off, covers
+    /// offline; the pipe has a name of its own, so a running Mixtape is never touched.</summary>
+    private static void RunRemoteTest(string dbPath)
+    {
+        var log = new StringBuilder();
+        int pass = 0, fail = 0;
+        void Check(string what, bool ok, string detail)
+        {
+            string line = (ok ? "PASS " : "FAIL ") + what + (ok || detail.Length == 0 ? "" : "   -> " + detail);
+            lock (log) { if (ok) pass++; else fail++; log.AppendLine(line); }
+            Console.WriteLine(line);
+        }
+
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        Loc.Lang = "en";
+        AppSettings.Frozen = true;
+        Anim.MotionEnabled = false;
+        ArtworkService.KeepOnDisk = false;
+
+        // the sandbox: the fixture as an iPod, and the one sample every song plays (its cover and its lyrics beside it)
+        string sandbox = Path.Combine(Path.GetTempPath(), "mixtape-remotetest-" + Environment.ProcessId);
+        string control = Path.Combine(sandbox, "iPod_Control"), media = Path.Combine(sandbox, "media");
+        Directory.CreateDirectory(Path.Combine(control, "iTunes"));
+        Directory.CreateDirectory(Path.Combine(control, "Device"));
+        for (int i = 0; i < 10; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
+        Directory.CreateDirectory(media);
+        File.Copy(dbPath, Path.Combine(control, "iTunes", "iTunesDB"), overwrite: true);
+        File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
+        string wav = Path.Combine(media, "silence.wav");
+        WriteSilentWav(wav, 30);
+        using (var art = new Bitmap(300, 200))
+        {
+            using (var g = Graphics.FromImage(art))
+            using (var br = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, 300, 200), Color.FromArgb(200, 40, 70), Color.FromArgb(30, 110, 230), 30f))
+                g.FillRectangle(br, 0, 0, 300, 200);
+            art.Save(Path.Combine(media, "cover.png"), System.Drawing.Imaging.ImageFormat.Png);
+        }
+        File.WriteAllText(Path.Combine(media, "silence.lrc"), "[ar:Remote test]\n[00:01.00]First line\n[00:03.50]Second line\n[00:06.00]Third line\n");
+
+        // what the replies must hold: every audio song, and the playlists the sidebar lists (the master left out)
+        var fixture = ITunesDbReader.Read(File.ReadAllBytes(dbPath));
+        int songsInDb = fixture.Tracks.Count(t => MediaType.IsAudio(t.MediaType));
+        var seenPl = new HashSet<ulong>();
+        int playlistsInDb = 0;
+        foreach (var pl in fixture.Playlists)
+        {
+            if (pl.PersistentId != 0 && !seenPl.Add(pl.PersistentId)) continue;
+            if (!ReferenceEquals(pl, fixture.Master)) playlistsInDb++;
+        }
+        string version = typeof(Program).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "";
+
+        MainForm.PlayPathOverride = _ => wav;
+        var device = DeviceDetector.Build(sandbox);
+        var form = new MainForm(autoDetect: false)
+        {
+            StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), Size = new Size(1080, 700),
+            ShowInTaskbar = false, FormBorderStyle = FormBorderStyle.None,
+        };
+        form.Show();
+        Application.DoEvents();
+        if (device is not null) form.PreviewDevice(device);
+        Application.DoEvents();
+        form.PreviewSelectView("songs");
+        CoverDownloads.Enabled = false;   // (the window set it from the user's settings) - a test asks the internet nothing
+        bool canRate = form.PreviewCanEditRatings, askFirst = form.PreviewWillAskBeforeWrite;
+        string pipe = RemoteServer.PipeName + ".test-" + Environment.ProcessId;
+        form.StartRemoteForTest(pipe);
+        Console.WriteLine($"--remotetest {Path.GetFileName(dbPath)}: {songsInDb} songs, {playlistsInDb} playlists, pipe {pipe}, ratings {(canRate ? "writable" : "read-only")}");
+
+        RemoteTestClient? last = null;
+        var client = new Thread(() =>
+        {
+            try
+            {
+                last = RemoteChecks(pipe, version, songsInDb, playlistsInDb, canRate, askFirst, () => form.Invoke(() => form.PreviewConfirmWrite()),
+                                    i => form.Invoke(() => form.PreviewOpenPlaylist(i)), row => form.Invoke(() => form.PreviewActivateRow(row)), Check);
+            }
+            catch (Exception ex) { Check("the checks ran to the end", false, ex.GetType().Name + ": " + ex.Message); }
+        }) { IsBackground = true, Name = "remotetest client" };
+        client.Start();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (client.IsAlive && clock.Elapsed < TimeSpan.FromMinutes(3)) { Application.DoEvents(); Thread.Sleep(5); }
+        if (client.IsAlive) Check("the checks finished within 3 minutes", false, "still running");
+
+        // Mixtape closing with a client connected: the client sees the pipe go, and nothing answers on its name after
+        form.Close();
+        Application.DoEvents();
+        if (last is not null)
+        {
+            bool hungUp;
+            try { hungUp = last.ReadLineOrEnd(3000) is null; } catch (Exception ex) when (ex is IOException or AggregateException) { hungUp = true; }
+            Check("closing the window hangs up on the connected client", hungUp, "the pipe stayed open");
+            last.Dispose();
+        }
+        bool gone;
+        using (var late = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut))
+            try { late.Connect(300); gone = false; } catch (Exception ex) when (ex is TimeoutException or IOException) { gone = true; }
+        Check("after the window closed nothing answers on the pipe", gone, "a server is still there");
+        form.Dispose();
+        MainForm.PlayPathOverride = null;
+        try { Directory.Delete(sandbox, recursive: true); } catch { /* the sample can still be open for a moment */ }
+
+        string result = $"RESULT: {(fail == 0 ? "PASS" : "FAIL")}  ({pass} passed, {fail} failed)";
+        log.AppendLine(result);
+        Console.WriteLine(result);
+        try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-remotetest.txt"), log.ToString()); } catch { }
+        Environment.Exit(fail == 0 ? 0 : 1);
+    }
+
+    /// <summary>The --remotetest checks, run on a thread of their own against the pipe (the UI thread keeps pumping).
+    /// Returns the client still connected at the end, for the closing check.</summary>
+    private static RemoteTestClient RemoteChecks(string pipe, string version, int songsInDb, int playlistsInDb, bool canRate, bool askFirst,
+                                                 Action confirmWrite, Func<int, List<string>> openPlaylist, Action<int> activateRow,
+                                                 Action<string, bool, string> check)
+    {
+        void Check(string what, bool ok, string detail = "") => check(what, ok, detail);
+        static bool Ok(System.Text.Json.JsonElement r) => r.TryGetProperty("ok", out var o) && o.ValueKind == System.Text.Json.JsonValueKind.True;
+        static System.Text.Json.JsonElement P(System.Text.Json.JsonElement e, string n) =>
+            e.ValueKind == System.Text.Json.JsonValueKind.Object && e.TryGetProperty(n, out var x) ? x : default;
+        static string S(System.Text.Json.JsonElement e, string n) => P(e, n) is { ValueKind: System.Text.Json.JsonValueKind.String } x ? x.GetString()! : "";
+        static double N(System.Text.Json.JsonElement e, string n) => P(e, n) is { ValueKind: System.Text.Json.JsonValueKind.Number } x ? x.GetDouble() : double.NaN;
+        static bool B(System.Text.Json.JsonElement e, string n) => P(e, n).ValueKind == System.Text.Json.JsonValueKind.True;
+        static List<string> Ids(System.Text.Json.JsonElement a) => a.ValueKind == System.Text.Json.JsonValueKind.Array
+            ? a.EnumerateArray().Select(x => x.ValueKind == System.Text.Json.JsonValueKind.String ? x.GetString()! : S(x, "id")).ToList() : new();
+        static string Json(IEnumerable<string> ids) => System.Text.Json.JsonSerializer.Serialize(ids.ToArray());
+        static string Seq(IEnumerable<string> ids) => string.Join(",", ids.Select(i => i.Length > 6 ? i[^6..] : i));
+
+        var c = new RemoteTestClient(pipe);
+        System.Text.Json.JsonElement State() => c.Ask("state");
+        System.Text.Json.JsonElement Until(Func<System.Text.Json.JsonElement, bool> done, int ms = 4000)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var s = State();
+            while (!done(s) && sw.ElapsedMilliseconds < ms) { Thread.Sleep(40); s = State(); }
+            return s;
+        }
+        string Now(System.Text.Json.JsonElement s) => S(P(s, "track"), "id");
+        bool Cmd(string cmd, string args = "") => Ok(c.Ask(cmd, args));
+
+        // ---- the pipe itself ----
+        var rules = System.IO.Pipes.PipesAclExtensions.GetAccessControl(c.Pipe)
+            .GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.IO.Pipes.PipeAccessRule>().ToList();
+        var me = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+        Check("the pipe's ACL: this user's SID alone, full access",
+              rules.Count == 1 && rules[0].IdentityReference.Equals(me) && rules[0].AccessControlType == System.Security.AccessControl.AccessControlType.Allow
+              && (rules[0].PipeAccessRights & System.IO.Pipes.PipeAccessRights.FullControl) == System.IO.Pipes.PipeAccessRights.FullControl,
+              string.Join("; ", rules.Select(r => $"{r.IdentityReference} {r.AccessControlType} {r.PipeAccessRights}")));
+
+        // ---- hello, state, library ----
+        var hello = c.Ask("hello");
+        Check("hello: app, version, api", Ok(hello) && S(hello, "app") == "Mixtape" && S(hello, "version") == version && N(hello, "api") == 1, hello.ToString());
+        Check("hello: the library has a name", S(hello, "library").Length > 0, hello.ToString());
+
+        var s0 = State();
+        Check("state: idle - not playing, no track, Up Next empty",
+              Ok(s0) && !B(s0, "playing") && P(s0, "track").ValueKind == System.Text.Json.JsonValueKind.Null && Ids(P(s0, "queue")).Count == 0, Cut(s0.ToString()));
+        Check("state: every field of the protocol",
+              new[] { "v", "positionMs", "volume", "queueV", "libraryV", "lyricsV" }.All(f => !double.IsNaN(N(s0, f)))
+              && P(s0, "shuffle").ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
+              && S(s0, "repeat") is "off" or "all" or "one", Cut(s0.ToString()));
+
+        var lib = c.Ask("library");
+        var songs = P(lib, "songs");
+        var ids = Ids(songs);
+        Check("library: every song of the fixture", Ok(lib) && ids.Count == songsInDb, $"{ids.Count} of {songsInDb}");
+        Check("library: song ids present and unique", ids.All(i => i.Length > 0) && ids.Distinct().Count() == ids.Count, "");
+        var song0 = songs.ValueKind == System.Text.Json.JsonValueKind.Array && songs.GetArrayLength() > 0 ? songs[0] : default;
+        Check("library: a song has title, artist, album, albumArtist, durationMs, track, disc, year, cover",
+              new[] { "title", "artist", "album", "albumArtist", "cover" }.All(f => P(song0, f).ValueKind == System.Text.Json.JsonValueKind.String)
+              && new[] { "durationMs", "track", "disc", "year" }.All(f => !double.IsNaN(N(song0, f))) && S(song0, "title").Length > 0, Cut(song0.ToString()));
+        Check("library: its v is the state's libraryV", N(lib, "v") == N(s0, "libraryV"), $"{N(lib, "v")} vs {N(s0, "libraryV")}");
+        var pls = P(lib, "playlists");
+        int plCount = pls.ValueKind == System.Text.Json.JsonValueKind.Array ? pls.GetArrayLength() : -1;
+        Check("library: the library's own playlists, not the master", plCount == playlistsInDb, $"{plCount} of {playlistsInDb}");
+        var known = new HashSet<string>(ids);
+        Check("library: every playlist names songs of the list, with a key and a name",
+              plCount >= 0 && pls.EnumerateArray().All(p => S(p, "key").Length > 0 && P(p, "name").ValueKind == System.Text.Json.JsonValueKind.String && Ids(P(p, "songs")).All(known.Contains)), "");
+        if (ids.Count < 12) { Check("the fixture has at least 12 songs for the playback checks", false, ids.Count.ToString()); return c; }
+
+        // ---- garbage: every bad line gets an error reply, and the connection carries on ----
+        System.Text.Json.JsonElement Raw(byte[] line) { c.Send(line); using var d = System.Text.Json.JsonDocument.Parse(c.ReadLine()); return d.RootElement.Clone(); }
+        var g1 = Raw("this is not json\n"u8.ToArray());
+        Check("garbage: not JSON -> ok false, id null", !Ok(g1) && P(g1, "id").ValueKind == System.Text.Json.JsonValueKind.Null && S(g1, "error").Length > 0, g1.ToString());
+        var g2 = Raw("{\"id\":41}\n"u8.ToArray());
+        Check("garbage: no cmd -> ok false, the id echoed", !Ok(g2) && N(g2, "id") == 41, g2.ToString());
+        var g3 = Raw("[1,2,3]\n"u8.ToArray());
+        Check("garbage: not an object -> ok false", !Ok(g3), g3.ToString());
+        var g4 = Raw("{\"id\":\"x7\",\"cmd\":\"fly\"}\n"u8.ToArray());
+        Check("garbage: unknown cmd -> ok false, a string id echoed", !Ok(g4) && S(g4, "id") == "x7", g4.ToString());
+        var g5 = Raw(new byte[] { (byte)'{', 0xFF, 0xFE, (byte)'"', (byte)'}', (byte)'\n' });
+        Check("garbage: broken UTF-8 -> ok false", !Ok(g5), g5.ToString());
+        var huge = new byte[9 << 20];
+        Array.Fill(huge, (byte)'a');
+        huge[^1] = (byte)'\n';
+        var g6 = Raw(huge);
+        Check("garbage: a 9 MB line -> ok false (too long), read to its end", !Ok(g6) && S(g6, "error").Contains("too long"), g6.ToString());
+        c.Send("\n\r\n   \n"u8.ToArray());   // blank lines: no reply at all (the next reply must be the next request's)
+        foreach (var (cmd, args) in new[] { ("seek", ""), ("volume", "\"v\":\"loud\""), ("repeat", "\"mode\":\"sometimes\""), ("rate", "\"stars\":7"),
+                                            ("playSongs", "\"ids\":[]"), ("shuffle", "\"on\":1"), ("queueMove", "\"from\":0"), ("queueJump", "\"index\":0.5") })
+            Check($"bad arguments: {cmd} {args} -> ok false", !Cmd(cmd, args), "");
+        Check("after the garbage the connection still answers in order", Ok(c.Ask("hello")), "");
+
+        // ---- the player ----
+        Check("play with nothing loaded: refused (the play button does nothing then)", !Cmd("play"), "");
+        Check("next with nothing playing: refused", !Cmd("next"), "");
+        Cmd("shuffle", "\"on\":false");
+        Cmd("repeat", "\"mode\":\"off\"");
+        var five = ids.Take(5).ToList();
+        var before = State();
+        Check("playSongs: ok", Cmd("playSongs", $"\"ids\":{Json(five)},\"start\":1"), "");
+        var s1 = Until(s => Now(s) == five[1] && B(s, "playing"));
+        Check("playSongs: plays ids[start]", Now(s1) == five[1] && B(s1, "playing"), Cut(s1.ToString()));
+        Check("playSongs: Up Next = the rest after start, in order", Ids(P(s1, "queue")).SequenceEqual(five.Skip(2)), Seq(Ids(P(s1, "queue"))));
+        Check("playSongs: v, queueV and lyricsV moved", N(s1, "v") > N(before, "v") && N(s1, "queueV") > N(before, "queueV") && N(s1, "lyricsV") > N(before, "lyricsV"), "");
+        Check("playSongs: libraryV did not move", N(s1, "libraryV") == N(before, "libraryV"), "");
+        var t1 = P(s1, "track");
+        Check("state: the track has title, artist, album, durationMs, rating 0..5, cover",
+              S(t1, "title").Length > 0 && P(t1, "artist").ValueKind == System.Text.Json.JsonValueKind.String && P(t1, "album").ValueKind == System.Text.Json.JsonValueKind.String
+              && N(t1, "durationMs") > 0 && N(t1, "rating") is >= 0 and <= 5 && S(t1, "cover").Length > 0, Cut(t1.ToString()));
+        Check("state: Up Next entries have id, title, artist, durationMs, cover",
+              P(s1, "queue").EnumerateArray().All(q => S(q, "id").Length > 0 && S(q, "title").Length > 0 && P(q, "artist").ValueKind == System.Text.Json.JsonValueKind.String
+                                                       && !double.IsNaN(N(q, "durationMs")) && S(q, "cover").Length > 0), "");
+
+        Cmd("pause");
+        Check("pause", !B(Until(s => !B(s, "playing")), "playing"), "");
+        Cmd("play");
+        Check("play", B(Until(s => B(s, "playing")), "playing"), "");
+        Cmd("toggle");
+        Check("toggle -> paused", !B(Until(s => !B(s, "playing")), "playing"), "");
+        Cmd("toggle");
+        Check("toggle -> playing", B(Until(s => B(s, "playing")), "playing"), "");
+
+        foreach (var (set, want) in new[] { (0.42, 0.42), (7.0, 1.0), (0.0, 0.0), (0.25, 0.25) })
+        {
+            Cmd("volume", "\"v\":" + set.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var sv = State();
+            Check($"volume {set.ToString(System.Globalization.CultureInfo.InvariantCulture)} -> {want.ToString(System.Globalization.CultureInfo.InvariantCulture)}", Math.Abs(N(sv, "volume") - want) < 0.002, N(sv, "volume").ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        Cmd("shuffle", "\"on\":true");
+        Check("shuffle on", B(State(), "shuffle"), "");
+        Cmd("shuffle", "\"on\":false");
+        Check("shuffle off", !B(State(), "shuffle"), "");
+        foreach (var mode in new[] { "all", "one", "off" })
+        {
+            var vb = N(State(), "v");
+            Cmd("repeat", $"\"mode\":\"{mode}\"");
+            var sr = State();
+            Check($"repeat {mode} (and v moved)", S(sr, "repeat") == mode && N(sr, "v") > vb, S(sr, "repeat"));
+        }
+
+        Cmd("seek", "\"ms\":5000");
+        var sk = State();
+        Check("seek 5000 -> the position is there", N(sk, "positionMs") is >= 4000 and <= 6500, N(sk, "positionMs").ToString());
+        Thread.Sleep(600);
+        var sk2 = State();
+        Check("the position runs on while playing (and v stays put)", N(sk2, "positionMs") > N(sk, "positionMs") && N(sk2, "v") == N(sk, "v"), $"{N(sk, "positionMs")} -> {N(sk2, "positionMs")}");
+        Check("prev more than 3 s in: the same song from the start", Cmd("prev") && Until(s => N(s, "positionMs") < 2000) is var sp && Now(sp) == five[1] && N(sp, "positionMs") < 2000, "");
+
+        // ---- Up Next ----   (now: five[1] plays, Up Next = 2 3 4)
+        Cmd("queueAdd", $"\"ids\":{Json(new[] { five[0] })}");
+        Check("queueAdd: to the end", Ids(P(State(), "queue")).SequenceEqual(new[] { five[2], five[3], five[4], five[0] }), Seq(Ids(P(State(), "queue"))));
+        Cmd("queueNext", $"\"ids\":{Json(new[] { ids[5] })}");
+        Check("queueNext: to the front", Ids(P(State(), "queue")).SequenceEqual(new[] { ids[5], five[2], five[3], five[4], five[0] }), Seq(Ids(P(State(), "queue"))));
+        var qv = N(State(), "queueV");
+        Cmd("queueMove", "\"from\":0,\"to\":2");
+        var sm = State();
+        Check("queueMove 0 -> 2: it ends up at index 2 (and queueV moved)", Ids(P(sm, "queue")).SequenceEqual(new[] { five[2], five[3], ids[5], five[4], five[0] }) && N(sm, "queueV") > qv, Seq(Ids(P(sm, "queue"))));
+        Cmd("queueMove", "\"from\":3,\"to\":0");
+        Check("queueMove 3 -> 0", Ids(P(State(), "queue")).SequenceEqual(new[] { five[4], five[2], five[3], ids[5], five[0] }), Seq(Ids(P(State(), "queue"))));
+        Cmd("queueRemove", "\"index\":1");
+        Check("queueRemove 1", Ids(P(State(), "queue")).SequenceEqual(new[] { five[4], five[3], ids[5], five[0] }), Seq(Ids(P(State(), "queue"))));
+        Check("queueRemove past the end: refused", !Cmd("queueRemove", "\"index\":99"), "");
+        Cmd("queueJump", "\"index\":2");
+        var sj = Until(s => Now(s) == ids[5]);
+        Check("queueJump 2: that song plays, the ones before it are gone", Now(sj) == ids[5] && Ids(P(sj, "queue")).SequenceEqual(new[] { five[0] }), Now(sj) + " / " + Seq(Ids(P(sj, "queue"))));
+        Cmd("next");
+        var sn = Until(s => Now(s) == five[0]);
+        Check("next: the head of Up Next", Now(sn) == five[0] && Ids(P(sn, "queue")).Count == 0, Now(sn));
+
+        // ---- a list from the remote: its end, Repeat All, Prev through it, Shuffle ----
+        Cmd("repeat", "\"mode\":\"off\"");
+        var two = ids.Skip(6).Take(3).ToList();
+        Cmd("playSongs", $"\"ids\":{Json(two)},\"start\":2");
+        var se = Until(s => Now(s) == two[2]);
+        Check("playSongs from the last song: Up Next empty", Now(se) == two[2] && Ids(P(se, "queue")).Count == 0, Now(se));
+        Cmd("next");
+        Thread.Sleep(150);
+        Check("next at the end of the list, Repeat off: it rests on the last song", Now(State()) == two[2], Now(State()));
+        Cmd("repeat", "\"mode\":\"all\"");
+        Cmd("next");
+        var sa = Until(s => Now(s) == two[0]);
+        Check("next at the end, Repeat All: the list from its top, the rest in Up Next", Now(sa) == two[0] && Ids(P(sa, "queue")).SequenceEqual(two.Skip(1)), Now(sa) + " / " + Seq(Ids(P(sa, "queue"))));
+        Cmd("next");
+        Until(s => Now(s) == two[1]);
+        Cmd("prev");
+        var sv2 = Until(s => Now(s) == two[0]);
+        Check("prev inside the list: the song before, the one left back at the front of Up Next",
+              Now(sv2) == two[0] && Ids(P(sv2, "queue")).SequenceEqual(new[] { two[1], two[2] }), Now(sv2) + " / " + Seq(Ids(P(sv2, "queue"))));
+        Cmd("prev");
+        Thread.Sleep(150);
+        Check("prev on the list's first song: the song starts over", Now(State()) == two[0] && N(State(), "positionMs") < 2000, Now(State()));
+        Cmd("repeat", "\"mode\":\"off\"");
+
+        Cmd("shuffle", "\"on\":true");
+        var ten = ids.Skip(1).Take(10).ToList();
+        Cmd("playSongs", $"\"ids\":{Json(ten)},\"start\":4");
+        var sh = Until(s => Now(s) == ten[4]);
+        var shq = Ids(P(sh, "queue"));
+        Check("playSongs with Shuffle on: ids[start] now, every other song of the list in Up Next",
+              Now(sh) == ten[4] && shq.Count == 9 && shq.OrderBy(x => x).SequenceEqual(ten.Where((_, i) => i != 4).OrderBy(x => x)), Now(sh) + " / " + Seq(shq));
+        Cmd("shuffle", "\"on\":false");
+        Cmd("queueClear");
+        var sc = State();
+        Check("queueClear", Ids(P(sc, "queue")).Count == 0, Seq(Ids(P(sc, "queue"))));
+
+        Cmd("playSongs", $"\"ids\":{Json(two)},\"start\":2");
+        Until(s => Now(s) == two[2]);
+        Cmd("queueAdd", $"\"ids\":{Json(new[] { ids[11] })}");
+        Cmd("next");
+        Until(s => Now(s) == ids[11]);
+        Cmd("next");
+        Thread.Sleep(150);
+        Check("queueAdd while a list from VR plays: the songs join it, it rests after them", Now(State()) == ids[11], Now(State()));
+
+        // ---- the desktop's own moves beside the remote's ----
+        var plSongs = pls.EnumerateArray().Select(p => Ids(P(p, "songs"))).ToList();
+        int plAt = plSongs.FindIndex(l => l.Count >= 3);
+        if (plAt < 0) Check("the fixture has a playlist of 3+ songs for the desktop checks", false, "");
+        else
+        {
+            var rows = openPlaylist(plAt);
+            string elsewhere = ids.First(i => !rows.Contains(i));
+            Cmd("playSongs", $"\"ids\":{Json(new[] { rows[0] })},\"start\":0");
+            Until(s => Now(s) == rows[0]);
+            activateRow(0);   // the same song, double-clicked in the list on screen
+            Cmd("next");
+            var sd = Until(s => Now(s) == rows[1]);
+            Check("a song started on the desktop: its list says what follows (the remote's list is let go)", Now(sd) == rows[1], Now(sd));
+            Cmd("queueAdd", $"\"ids\":{Json(new[] { elsewhere })}");
+            Cmd("next");
+            Until(s => Now(s) == elsewhere);
+            Cmd("next");
+            var sl = Until(s => Now(s) == rows[2]);
+            Check("after an Up Next song from elsewhere the list on screen carries on after its own last song", Now(sl) == rows[2], Now(sl));
+        }
+
+        // ---- rate ----
+        if (canRate)
+        {
+            if (askFirst) Check("rate before the session's first-write question is answered: refused, with a reason", !Cmd("rate", "\"stars\":4"), "");
+            confirmWrite();
+            Check("rate 4: ok", Cmd("rate", "\"stars\":4"), "");
+            Check("rate 4: the state has it", N(P(Until(s => N(P(s, "track"), "rating") == 4), "track"), "rating") == 4, "");
+            Cmd("rate", "\"stars\":0");
+        }
+        else Check("rate on a read-only iPod: refused", !Cmd("rate", "\"stars\":4"), "");
+
+        // ---- cover ----
+        string key = S(P(State(), "track"), "cover");
+        foreach (int size in new[] { 64, 128, 256 })
+        {
+            var cv = c.Ask("cover", $"\"key\":\"{key}\",\"size\":{size}");
+            byte[] px = Ok(cv) ? Convert.FromBase64String(S(cv, "bgra")) : Array.Empty<byte>();
+            Check($"cover {size}: w = h = {size}, {size}x{size}x4 bytes", Ok(cv) && N(cv, "w") == size && N(cv, "h") == size && px.Length == size * size * 4, Cut(cv.ToString()));
+            if (px.Length != size * size * 4) continue;
+            int mid = (size / 2 * size + size / 2) * 4;
+            // the 300x200 picture fits as size x size·2/3, centred: a transparent band above and below (premultiplied: all zero)
+            Check($"cover {size}: the picture whole, centred, transparent around (premultiplied)",
+                  px[3] == 0 && px[0] == 0 && px[1] == 0 && px[2] == 0 && px[mid + 3] == 255 && px[(size * 4 * (size - 1)) + 3] == 0,
+                  $"corner a={px[3]} centre a={px[mid + 3]}");
+        }
+        var cv100 = c.Ask("cover", $"\"key\":\"{key}\",\"size\":100");
+        Check("cover 100: the next size up (128)", Ok(cv100) && N(cv100, "w") == 128, Cut(cv100.ToString()));
+        Check("cover with an unknown key: ok false", !Ok(c.Ask("cover", "\"key\":\"c0000000000000000\",\"size\":64")), "");
+        string libKey = S(song0, "cover");
+        Check("cover keys from the library work too", Ok(c.Ask("cover", $"\"key\":\"{libKey}\",\"size\":64")), libKey);
+
+        // ---- lyrics ----   (the sample's .lrc: 1.00 / 3.50 / 6.00 s)
+        var nowId = Now(State());
+        var ly = c.Ask("lyrics");
+        var lines = P(ly, "lines");
+        var ms = lines.ValueKind == System.Text.Json.JsonValueKind.Array ? lines.EnumerateArray().Select(l => N(l, "ms")).ToList() : new List<double>();
+        Check("lyrics: the playing song's id (\"id\", the last of the name, and \"trackId\")", Ok(ly) && S(ly, "id") == nowId && S(ly, "trackId") == nowId, S(ly, "id") + " vs " + nowId);
+        Check("lyrics: synced, the sheet's three lines with their text", B(ly, "synced") && ms.Count == 3
+              && lines.EnumerateArray().Select(l => S(l, "text")).SequenceEqual(new[] { "First line", "Second line", "Third line" }), Cut(ly.ToString()));
+        Check("lyrics: the lines' times (any sync nudge of the song shifts them all alike)", ms.Count == 3 && ms[1] - ms[0] == 2500 && ms[2] - ms[1] == 2500 && ms[0] >= 0, string.Join(",", ms));
+
+        // ---- reconnecting: a client that hangs up, one mid-request, one that never reads ----
+        double vSeen = N(State(), "v");
+        c.Dispose();
+        var c2 = new RemoteTestClient(pipe);
+        var h2 = c2.Ask("hello");
+        var st2 = c2.Ask("state");
+        Check("reconnect: a new client is served, the versions go on (not reset)", Ok(h2) && Ok(st2) && N(st2, "v") >= vSeen, $"{N(st2, "v")} vs {vSeen}");
+        c2.Send("{\"id\":1,\"cmd\":\"library\"}\n");
+        c2.Dispose();   // gone before the answer
+        var c3 = new RemoteTestClient(pipe);
+        Check("a client gone mid-request: the next one is served", Ok(c3.Ask("hello")), "");
+        for (int i = 0; i < 40; i++) c3.Send("{\"id\":" + i + ",\"cmd\":\"library\"}\n");   // and never reads the megabytes it asked for
+        c3.Dispose();
+        var c4 = new RemoteTestClient(pipe, 15000);
+        Check("a client that stopped reading: dropped, the next one is served", Ok(c4.Ask("hello")) && Ok(c4.Ask("state")), "");
+        return c4;
+    }
+
+    private static string Cut(string s) => s.Length > 300 ? s[..300] + "…" : s;
+
+    /// <summary>A mono 16-bit WAV of silence, <paramref name="seconds"/> long.</summary>
+    private static void WriteSilentWav(string path, int seconds, int rate = 22050)
+    {
+        int data = seconds * rate * 2;
+        using var w = new BinaryWriter(File.Create(path));
+        w.Write("RIFF"u8); w.Write(36 + data); w.Write("WAVE"u8);
+        w.Write("fmt "u8); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+        w.Write("data"u8); w.Write(data); w.Write(new byte[data]);
+    }
+
+    /// <summary>The --remotetest client: one connection, its requests answered in order.</summary>
+    private sealed class RemoteTestClient : IDisposable
+    {
+        public readonly System.IO.Pipes.NamedPipeClientStream Pipe;
+        private readonly StreamReader _in;
+        private int _id;
+
+        public RemoteTestClient(string pipe, int connectMs = 3000)
+        {
+            Pipe = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous);
+            Pipe.Connect(connectMs);
+            _in = new StreamReader(Pipe, new UTF8Encoding(false), false, 1 << 16);
+        }
+
+        public void Send(string text) => Send(Encoding.UTF8.GetBytes(text));
+        public void Send(byte[] bytes) { Pipe.Write(bytes, 0, bytes.Length); Pipe.Flush(); }
+        public string ReadLine() => ReadLineOrEnd(15000) ?? throw new IOException("the server hung up");
+
+        public string? ReadLineOrEnd(int ms)
+        {
+            var t = _in.ReadLineAsync();
+            if (!t.Wait(ms)) throw new TimeoutException($"no answer in {ms} ms");
+            return t.Result;
+        }
+
+        /// <summary>One request; its reply must come next and start with the request's own id.</summary>
+        public System.Text.Json.JsonElement Ask(string cmd, string args = "")
+        {
+            int id = ++_id;
+            Send("{\"id\":" + id + ",\"cmd\":\"" + cmd + "\"" + (args.Length > 0 ? "," + args : "") + "}\n");
+            string line = ReadLine();
+            if (!line.StartsWith("{\"id\":" + id + ",", StringComparison.Ordinal)) throw new InvalidDataException($"the reply to #{id} {cmd} was {Cut(line)}");
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            return doc.RootElement.Clone();
+        }
+
+        public void Dispose() { try { Pipe.Dispose(); } catch { } }
+    }
 
     /// <summary>Regression for the LRC parser and the sheet clock — the part of live lyrics that decides
     /// WHEN a line lights up. Pure string work, so it needs no iPod, no network and no window.</summary>
