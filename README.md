@@ -20,6 +20,7 @@ Built because iTunes is effectively gone and Apple's newer apps handle old click
 - **Cover art** — pick from generated covers, or show album art on the iPod's own screen
 - **Built-in player & equalizer** — play songs from the iPod *or* your PC, with a 10-band graphic EQ and a Spotify-style seek bar
 - **Local Music** — point Mixtape at folders on your PC and browse/play them without an iPod plugged in
+- **Remote control from VR** — [OrbitOverlay](https://github.com/Erik1028/OrbitOverlay)'s watch shows what's playing, Up Next, your songs, albums, playlists and synced lyrics, and works the player (a local named pipe for your Windows account only; *Settings › Safety* turns it off)
 - **Drag & drop** songs, videos, photos, or whole folders straight onto the window to add them (or onto Local Music to add PC folders)
 - **No accidental duplicates** — when adding music or video, Mixtape spots items already on the iPod and offers to skip them
 - **Automatic device detection** (plug/unplug auto-refresh) with a per-model iPod illustration and capacity breakdown
