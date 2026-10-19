@@ -36,6 +36,9 @@ internal static class ArtworkService
         }
     }
 
+    /// <summary>Off in the --remotetest harness: its sandbox's covers must not land in the user's thumbnail store.</summary>
+    internal static bool KeepOnDisk = true;
+
     public static string KeyFor(Track t) =>
         !string.IsNullOrEmpty(t.Album) ? "alb:" + t.Album!.ToLowerInvariant()
         : !string.IsNullOrEmpty(t.LocalPath) ? "loc:" + t.LocalPath!.ToLowerInvariant()   // unique per PC file (else albumless locals collide)
@@ -72,7 +75,7 @@ internal static class ArtworkService
                 Bitmap? result = null;
                 // A cover read before is on disk at this size (Kept): a launch no longer opens every song's file and
                 // decodes its full picture again.
-                string? kept = Kept.PathFor(filePath, size);
+                string? kept = KeepOnDisk ? Kept.PathFor(filePath, size) : null;
                 if (kept is not null && Kept.Read(kept) is { } square)
                 {
                     using (square) result = RoundScaled(square, size);
@@ -144,6 +147,35 @@ internal static class ArtworkService
                 return result;
             }
             catch { return null; }   // transient decode failure → don't cache
+        }
+    }
+
+    /// <summary>The cover fitted WHOLE into a size×size square - aspect kept, centred, transparent around, nothing cropped
+    /// or rounded - in premultiplied 32-bit ARGB: what the remote API sends (OrbitOverlay draws its own corners). Not
+    /// cached; the client keeps what it asked for. Caller owns the bitmap; null when the track has no art.</summary>
+    public static Bitmap? LoadFit(string key, string? filePath, int size)
+    {
+        lock (DecodeGate)   // serialized with every other decode (see Load)
+        {
+            try
+            {
+                if (ArtBytes(key, filePath) is not { Length: > 0 } bytes) return null;
+                using var ms = new MemoryStream(bytes);
+                using var src = Image.FromStream(ms);
+                var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using var g = Graphics.FromImage(bmp);
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.CompositingQuality = CompositingQuality.HighQuality;
+                float scale = Math.Min((float)size / src.Width, (float)size / src.Height);   // contain-fit, not the tiles' crop
+                float w = src.Width * scale, h = src.Height * scale;
+                using var edges = new System.Drawing.Imaging.ImageAttributes();
+                edges.SetWrapMode(WrapMode.TileFlipXY);   // the picture's own edge pixels at its border, not a fade into nothing
+                g.DrawImage(src, new Rectangle((int)Math.Round((size - w) / 2f), (int)Math.Round((size - h) / 2f), (int)Math.Round(w), (int)Math.Round(h)),
+                    0, 0, src.Width, src.Height, GraphicsUnit.Pixel, edges);
+                return bmp;
+            }
+            catch { return null; }
         }
     }
 

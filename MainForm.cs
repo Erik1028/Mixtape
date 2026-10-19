@@ -9,7 +9,7 @@ namespace iPodCommander;
 /// table. Writes are gated on <see cref="DeviceProfile.CanWrite"/> and go through
 /// <see cref="SafeDbWriter"/> (backup + verify + rollback).
 /// </summary>
-internal sealed class MainForm : Form, IMessageFilter
+internal sealed partial class MainForm : Form, IMessageFilter
 {
     private readonly Sidebar _sidebar = new() { Dock = DockStyle.Fill };
     private readonly HeaderPanel _header = new() { Dock = DockStyle.Fill, Margin = Padding.Empty };   // no cell margin → fills to the card's corners (so the AA corner-carve rounds the real corner)
@@ -180,6 +180,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
         if (StartupClock.On) StartupBench();
         if (_autoDetect) Shown += (_, _) => RefreshDevices();
+        if (_autoDetect) Shown += (_, _) => ApplyRemote();   // the remote API (OrbitOverlay's VR watch), unless Settings turned it off
         // MIX_TEST_RESTART=1|play|busy (test harness): open Settings the way the gear does, and SettingsForm then
         // restarts the app. "play" first starts a PC song (muted), so there is a live audio engine to shut down;
         // "busy" fakes a write in flight, so the restart must be refused - the message is dismissed, then Settings.
@@ -2059,11 +2060,11 @@ internal sealed class MainForm : Form, IMessageFilter
             return;
         }
         if (MediaType.IsVideo(t.MediaType)) OpenVideoPreview(t, path);
-        else PlayAudio(t, path, rowIndex);
+        else { _remoteList = null; PlayAudio(t, path, rowIndex); }   // started here: the list on screen says what follows, not one from the remote
     }
 
     /// <summary>The on-disk path to play: a Local-Music track carries its own absolute path; iPod tracks resolve via the mount.</summary>
-    private string? ResolvePlayPath(Track t) => t.LocalPath ?? (_device is null ? null : t.ResolveFilePath(_device.MountRoot));
+    private string? ResolvePlayPath(Track t) => PlayPathOverride?.Invoke(t) ?? t.LocalPath ?? (_device is null ? null : t.ResolveFilePath(_device.MountRoot));
 
     private void PlayAudio(Track t, string path, int rowIndex)
     {
@@ -2111,31 +2112,37 @@ internal sealed class MainForm : Form, IMessageFilter
     /// navigation history (important in shuffle); videos and missing files are skipped.</summary>
     private void PlayRelative(int dir)
     {
-        if (_playingTrack is null || _tracks.Rows.Count == 0) { _nowPlaying.StopAndHide(); _playingTrack = null; return; }
+        if (_playingTrack is null) { _nowPlaying.StopAndHide(); return; }
 
         // Prev: replay the most recent still-present track from history before falling back to list order.
         if (dir < 0)
         {
+            if (RemoteListPrev()) return;   // inside a list the remote started: one song back in THAT list
             while (_navHistory.Count > 0)
             {
                 var prev = _navHistory[^1]; _navHistory.RemoveAt(_navHistory.Count - 1);
                 int ri = RowIndexOf(prev);
                 if (ri >= 0 && IsPlayableRow(ri, out var pt, out var pp)) { PlayAudio(pt, pp, ri); return; }
+                if (ri < 0 && PlayOffList(prev)) return;   // a song this list doesn't show (Up Next or the remote played it)
             }
         }
 
-        int cur = RowIndexOf(_playingTrack);
-
-        // Up Next queue takes priority (forward only; Prev never consumes the queue).
+        // Up Next queue takes priority (forward only; Prev never consumes the queue). Its songs play wherever they are:
+        // from their row when this list has one, else straight from the file - Up Next takes songs from any list (and
+        // from the remote), so one that isn't on screen is still what the user lined up.
         if (dir > 0)
         {
+            RemoteListWrap();   // a list the remote started, run out under Repeat All: back into Up Next from its top
             while (_queue.Peek() is Track q)
             {
-                int qi = RowIndexOf(q);
-                if (qi >= 0 && IsPlayableRow(qi, out _, out _)) { _queue.Dequeue(); PlayFromNav(cur, qi); return; }
-                _queue.Dequeue();   // no longer in the current view / unplayable → drop and try the next
+                _queue.Dequeue();
+                if (PlayFromNav(q)) return;   // unplayable now (a video, a missing file) → dropped, try the next
             }
+            if (RemoteListActive) return;   // ...otherwise such a list rests at its end, as the list on screen does
         }
+
+        if (_tracks.Rows.Count == 0) { _nowPlaying.StopAndHide(); _playingTrack = null; return; }
+        int cur = RowIndexOf(_playingTrack);
 
         // Shuffle (forward only): jump to a random other playable row.
         if (dir > 0 && _nowPlaying.Shuffle)
@@ -2147,9 +2154,11 @@ internal sealed class MainForm : Form, IMessageFilter
             if (_nowPlaying.Repeat == NowPlayingBar.RepeatMode.One && IsPlayableRow(cur, out var st, out var sp)) { PlayAudio(st, sp, cur); return; }
         }
 
-        // Sequential scan in the requested direction.
-        if (cur < 0) cur = dir > 0 ? -1 : _tracks.Rows.Count;
-        for (int i = cur + dir; i >= 0 && i < _tracks.Rows.Count; i += dir)
+        // Sequential scan in the requested direction. A song from elsewhere playing (Up Next took it from another list, or
+        // the remote did): the list carries on after the last of its own songs that played, else from its end.
+        int at = cur >= 0 ? cur : ListedBefore();
+        if (at < 0) at = dir > 0 ? -1 : _tracks.Rows.Count;
+        for (int i = at + dir; i >= 0 && i < _tracks.Rows.Count; i += dir)
             if (IsPlayableRow(i, out _, out _)) { PlayFromNav(cur, i); return; }
 
         // Hit an edge: wrap around when Repeat All is on, otherwise rest (paused) on the current track.
@@ -2164,12 +2173,62 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Play row <paramref name="to"/>, pushing the row we left (<paramref name="from"/>) onto nav history.</summary>
     private void PlayFromNav(int from, int to)
     {
-        if (from >= 0 && from < _tracks.Rows.Count && _tracks.Rows[from].Tag is Track ft)
-        {
-            _navHistory.Add(ft);
-            if (_navHistory.Count > 200) _navHistory.RemoveAt(0);
-        }
+        if (from >= 0 && from < _tracks.Rows.Count && _tracks.Rows[from].Tag is Track ft) PushNav(ft);
+        else if (_playingTrack is Track pt) PushNav(pt);   // the song we leave isn't a row of this list (Up Next, the remote): Prev still finds it
         if (IsPlayableRow(to, out var t, out var p)) PlayAudio(t, p, to);
+    }
+
+    /// <summary>The row of the most recent song of the list on screen in the nav history (the one the songs from
+    /// elsewhere followed), or -1.</summary>
+    private int ListedBefore()
+    {
+        for (int h = _navHistory.Count - 1, n = 0; h >= 0 && n < 50; h--, n++)
+            if (RowIndexOf(_navHistory[h]) is int ri and >= 0) return ri;
+        return -1;
+    }
+
+    private void PushNav(Track t)
+    {
+        _navHistory.Add(t);
+        if (_navHistory.Count > 200) _navHistory.RemoveAt(0);
+    }
+
+    /// <summary>Play <paramref name="t"/> wherever it is - its row when the list on screen has one (so prev/next walk the
+    /// list as ever), else straight from its file - pushing the song we leave onto nav history. False, with nothing
+    /// changed, when it can't be played.</summary>
+    private bool PlayFromNav(Track t)
+    {
+        if (!CanPlay(t)) return false;
+        if (_playingTrack is Track from) PushNav(from);
+        return PlayTrack(t);
+    }
+
+    /// <summary>Play <paramref name="t"/> wherever it is (as <see cref="PlayFromNav(Track)"/>, without the history step).</summary>
+    private bool PlayTrack(Track t)
+    {
+        int ri = RowIndexOf(t);
+        if (ri >= 0) { if (!IsPlayableRow(ri, out var rt, out var rp)) return false; PlayAudio(rt, rp, ri); return true; }
+        return PlayOffList(t);
+    }
+
+    private bool CanPlay(Track t)
+    {
+        int ri = RowIndexOf(t);
+        return ri >= 0 ? IsPlayableRow(ri, out _, out _) : OffListPath(t, out _);
+    }
+
+    /// <summary>A song that is not a row of the list on screen, played from its file. False when it can't be played.</summary>
+    private bool PlayOffList(Track t)
+    {
+        if (!OffListPath(t, out string path)) return false;
+        PlayAudio(t, path, -1);
+        return true;
+    }
+
+    private bool OffListPath(Track t, out string path)
+    {
+        path = ResolvePlayPath(t) ?? "";
+        return !MediaType.IsVideo(t.MediaType) && path.Length > 0 && File.Exists(path);
     }
 
     private static NowPlayingBar.RepeatMode ParseRepeat(string? s) => s switch
@@ -2376,7 +2435,7 @@ internal sealed class MainForm : Form, IMessageFilter
     /// <summary>Reset to the "no iPod connected" state (also stops playback off a now-removed device).</summary>
     private void ShowNoDevice()
     {
-        _nowPlaying.StopAndHide(); _playingTrack = null; _queue.Clear();
+        _nowPlaying.StopAndHide(); _playingTrack = null; _queue.Clear(); _remoteList = null;
         _device = null; _lib = null; _db = null; _current = null; _photos = null;
         _viewKind = SidebarRowKind.AllSongs;
         SetCenter();
@@ -2819,6 +2878,7 @@ internal sealed class MainForm : Form, IMessageFilter
         RebuildPlaylists();
         SeedDefaultSort();
         _queue.Clear();   // a freshly-loaded library invalidates any queued track instances
+        _remoteList = null;
         _viewKind = _landOnHome || _viewKind == SidebarRowKind.Home ? SidebarRowKind.Home : SidebarRowKind.AllSongs;   // the first library lands on the home page
         _current = null;
         _browseFilter = null;
@@ -3868,6 +3928,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _snapTimer.Dispose(); _listSnap?.Dispose(); _frostScratch?.Dispose();
         _bRowSel?.Dispose(); _bRowHot?.Dispose(); _bRowBg?.Dispose();
         _deviceResizeTimer.Dispose(); _lyricSave.Dispose(); _volSave.Dispose();
+        _remote?.Dispose(); _remote = null;   // the remote API's pipe goes with the window
         base.OnFormClosed(e);
     }
 
@@ -4342,6 +4403,7 @@ internal sealed class MainForm : Form, IMessageFilter
                 BeginInvoke(() =>
                 {
                     if (gen != _lyricsGen) return;
+                    _lyricsRev++;   // the remote's lyricsV: a sheet found online, another version picked
                     string none = lines.Count > 0 ? "" :
                         online ? Loc.T("No lyrics found for this song.")
                                : Loc.T("No lyrics stored with this song. Turn on “Online lyrics” in Settings to look them up.");
@@ -4507,13 +4569,13 @@ internal sealed class MainForm : Form, IMessageFilter
         catch { return null; }
     }
 
-    /// <summary>Double-click a queued track → jump straight to it (drop it + anything ahead of it).</summary>
+    /// <summary>Double-click a queued track → jump straight to it (drop it + anything ahead of it). It plays wherever it is,
+    /// like every Up Next song (see PlayRelative).</summary>
     private void JumpToQueued(Track t)
     {
-        int ri = RowIndexOf(t);
-        if (ri < 0 || !IsPlayableRow(ri, out var track, out var path)) { _queue.Remove(t); return; }
+        if (!CanPlay(t)) { _queue.Remove(t); return; }
         while (_queue.Peek() is Track q) { bool hit = ReferenceEquals(q, t); _queue.Dequeue(); if (hit) break; }
-        PlayFromNav(RowIndexOf(_playingTrack), ri);
+        PlayFromNav(t);
     }
 
     /// <summary>Activate a cover (centre click / Enter) WITHOUT closing Cover Flow — it stays open as a
@@ -4552,7 +4614,7 @@ internal sealed class MainForm : Form, IMessageFilter
         if (target is null) return;
         int row = RowIndexOf(target);
         if (row >= 0) { ActivateTrackRow(row); return; }
-        if (target.LocalPath is { } p && File.Exists(p)) PlayAudio(target, p, -1);
+        if (target.LocalPath is { } p && File.Exists(p)) { _remoteList = null; PlayAudio(target, p, -1); }
     }
 
     /// <summary>Point the song grid at one album (no view transition — used while Cover Flow is on top).</summary>
@@ -6519,6 +6581,7 @@ internal sealed class MainForm : Form, IMessageFilter
             {
                 if (_localGen != gen) return;
                 _localTracks.Clear(); _localTracks.AddRange(found);
+                _localRev++;   // the remote's libraryV, while the PC library is the one it serves
                 if (_viewKind == SidebarRowKind.LocalMusic) FillLocalGrid();
                 else if (_viewKind is SidebarRowKind.LocalAlbums or SidebarRowKind.LocalArtists or SidebarRowKind.Home) { BuildSidebar(); ShowCurrent(); }
                 StartupClock.Mark("PC library shown");
@@ -7813,15 +7876,20 @@ internal sealed class MainForm : Form, IMessageFilter
     /// selection of <see cref="PlayRelative"/> (shuffle / sequential / repeat-all) but does NOT play it.</summary>
     private (Track track, string path, Bitmap? cover)? PeekNextForGapless()
     {
-        if (_playingTrack is null || _tracks.Rows.Count == 0) return null;
-        int cur = RowIndexOf(_playingTrack);
+        if (_playingTrack is null) return null;
         int pick = -1;
         // Up Next queue wins (PEEK only — gapless re-asks every tick; the dequeue happens in OnGaplessAdvancedToNext).
         foreach (var q in _queue.Items)
         {
             int qi = RowIndexOf(q);
             if (qi >= 0 && IsPlayableRow(qi, out _, out _)) { pick = qi; break; }
+            if (qi < 0 && OffListPath(q, out string qp)) return (q, qp, null);   // from another list (see PlayRelative): its own art, no row thumbnail
         }
+        // A list the remote started decides what follows it: nothing at its end (or, under Repeat All, a fresh pass that
+        // PlayRelative lines up when this song ends - one seam, at the wrap).
+        if (pick < 0 && RemoteListActive) return null;
+        if (_tracks.Rows.Count == 0) return null;
+        int cur = RowIndexOf(_playingTrack);
         if (pick < 0 && _nowPlaying.Shuffle)
         {
             var pool = new List<int>();
@@ -7830,7 +7898,8 @@ internal sealed class MainForm : Form, IMessageFilter
         }
         if (pick < 0)   // sequential (or shuffle with an empty pool) → next playable, then Repeat-All wrap (matches PlayRelative)
         {
-            for (int i = (cur < 0 ? -1 : cur) + 1; i < _tracks.Rows.Count; i++) if (IsPlayableRow(i, out _, out _)) { pick = i; break; }
+            int at = cur >= 0 ? cur : ListedBefore();   // (as PlayRelative: after the list's own last song)
+            for (int i = at + 1; i < _tracks.Rows.Count; i++) if (IsPlayableRow(i, out _, out _)) { pick = i; break; }
             if (pick < 0 && _nowPlaying.Repeat == NowPlayingBar.RepeatMode.All)
                 for (int i = 0; i < _tracks.Rows.Count; i++) if (IsPlayableRow(i, out _, out _)) { pick = i; break; }
         }
@@ -7875,6 +7944,7 @@ internal sealed class MainForm : Form, IMessageFilter
         BuildSidebar();
         ShowCurrent();
         _nowPlaying.ApplyDiscord(_settings.DiscordRichPresence, _settings.DiscordAppId, _settings.DiscordCoverArt);   // connect/disconnect without a restart
+        ApplyRemote();   // the remote API on or off, at once
         CoverDownloads.Enabled = _settings.OnlineCovers; CoverDownloads.EmbedLocal = _settings.EmbedDownloadedCovers;
         Glass.PopupsEnabled = _settings.GlassPopups;   // keep the themed menus' glass gate live (the flyout-open sites also set it, but a menu can open first)
         if (!_settings.GlassPopups) { _listSnap?.Dispose(); _listSnap = null; _nowPlaying.SetFrost(null); }  // toggled off → drop the frost

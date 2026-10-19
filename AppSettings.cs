@@ -122,6 +122,11 @@ internal sealed class AppSettings
     /// feature that uses the network. Off by default; results are cached so each album is asked once.</summary>
     public bool DiscordCoverArt { get; set; }
 
+    // ---- Remote control ----
+    /// <summary>The remote API (RemoteApi.cs): OrbitOverlay's VR watch - or another program of this Windows user - sees
+    /// what plays, the songs and the lyrics, and works the player. On by default; the pipe admits this user only.</summary>
+    public bool RemoteApi { get; set; } = true;
+
     // ---- Video / transcoding ----
     /// <summary>Transcode target: "Safe" (320x240, plays on 5G + Classic) or "High" (640x480, Classic/late).</summary>
     public string VideoQuality { get; set; } = "Safe";
