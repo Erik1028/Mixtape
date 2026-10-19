@@ -418,6 +418,9 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
             restore.Click += (_, _) => RestoreBackup();
             Row(Loc.T("Database backup"), Loc.T("Mixtape backs up before every change and verifies the result. Restore rolls back to the previous state."), restore);
         }
+        Group(Loc.T("Remote control"));
+        Row(Loc.T("Control from other apps"), Loc.T("Let OrbitOverlay's VR watch, or another app you run on this PC, show what's playing, browse your songs and lyrics, and control the player. Only your own Windows account can connect."),
+            Toggle(_s.RemoteApi, v => { _s.RemoteApi = v; _s.Save(); _applyChanged(); }));
     }
 
     private void BuildDevice()

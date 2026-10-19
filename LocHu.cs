@@ -417,6 +417,12 @@ internal static partial class LocHu
         ["words only, no timing"] = "csak a szöveg, időzítés nélkül",
         ["No timing — the sheet can't follow along."] = "Nincs időzítés — nem tudja követni a dalt.",
 
+        // ---- Settings: the remote API (OrbitOverlay) ----
+        ["Remote control"] = "Távvezérlés",
+        ["Control from other apps"] = "Vezérlés más alkalmazásokból",
+        ["Let OrbitOverlay's VR watch, or another app you run on this PC, show what's playing, browse your songs and lyrics, and control the player. Only your own Windows account can connect."] =
+            "Az OrbitOverlay VR-órája – vagy egy másik, ezen a gépen futtatott alkalmazásod – megmutathatja, mi szól, böngészheti a dalaidat és a dalszövegeket, és vezérelheti a lejátszót. Csak a saját Windows-fiókod csatlakozhat.",
+
         // ---- Settings: Discord Rich Presence ----
         ["Discord"] = "Discord",
         ["Show on Discord"] = "Megjelenítés a Discordon",
