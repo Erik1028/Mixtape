@@ -18,8 +18,11 @@
 <link rel="icon" href="favicon.png" type="image/png">
 <link rel="preload" href="fonts/permanent-marker.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="looks.css">
+<script>try{var l=(location.hash.match(/^#look-(95|cyber)$/)||[])[1]||localStorage.getItem("mixtape-look");if(/^(95|cyber)$/.test(l))document.documentElement.setAttribute("data-look",l)}catch(e){}</script>
 </head>
 <body data-repo="Erik1028/Mixtape">
+<script src="family.js"></script>
 
 <div class="band">
 <header class="top">
@@ -34,9 +37,10 @@
 <p>Your click-wheel iPod on Windows, without iTunes. Copy music, videos and photos onto it, copy songs back to your PC, make playlists, pick the cover art.</p>
 <div class="get">
 <a class="btn" href="https://github.com/Erik1028/Mixtape/releases/latest/download/Mixtape.exe" data-asset="^Mixtape\.exe$"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M6 10l6 6 6-6M4 21h16"/></svg>Download Mixtape.exe</a>
-<span class="mono" id="ver">v0.21.0 · 2 Oct 2026</span>
-<span class="alt"><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="win-x64\.zip$">Small zip<span class="size"> (7.6 MB)</span></a> needs the .NET 8 Desktop Runtime · <a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="\.AppImage$">Linux AppImage</a>, a separate, simpler version</span>
+<span class="mono" id="ver">v0.23.0 · 19 Oct 2026</span>
+<span class="alt"><a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="win-x64\.zip$">Small zip<span class="size"> (10 MB)</span></a> needs the .NET 8 Desktop Runtime · <a href="https://github.com/Erik1028/Mixtape/releases/latest" data-asset="\.AppImage$">Linux AppImage</a>, a separate, simpler version</span>
 </div>
+<div class="looks" role="group" aria-label="Page look, as in Settings › Appearance › Look"><span>Look</span><button type="button" data-look="modern" aria-pressed="true">Modern</button><button type="button" data-look="95" aria-pressed="false">Windows 95</button><button type="button" data-look="cyber" aria-pressed="false">Cyber</button></div>
 </div>
 <div class="tape"><svg class="cassette" viewBox="0 0 360 232" role="img" aria-label="A cassette tape with turning reels">
 <defs>
@@ -97,6 +101,7 @@
 <li><span class="no">A1</span><div><b class="hand">Your library</b><p>Songs, albums, artists and playlists, with star ratings and play counts. A player with a 10-band equalizer plays from the iPod or from music folders on your PC.</p></div></li>
 <li><span class="no">A2</span><div><b class="hand">On and off</b><p>Drag music, videos, photos or whole folders onto the window. Formats the iPod can't play are converted (with FFmpeg), and songs already on the iPod are caught before they're copied twice. Songs copy back to your PC too.</p></div></li>
 <li><span class="no">A3</span><div><b class="hand">Safe writes</b><p>It backs up the iPod's database before every change, checks the result and rolls back if anything doesn't match.</p></div></li>
+<li><span class="no">A4</span><div><b class="hand">In VR</b><p>In <a href="https://erik1028.github.io/OrbitOverlay/">OrbitOverlay</a>, the watch's Now playing shows Mixtape's song and opens into a full player: Up Next, your albums and playlists, synced lyrics. Mixtape does the playing; <i>Settings › Safety</i> turns it off.</p></div></li>
 </ol>
 </div>
 <div class="jside">
@@ -108,16 +113,17 @@
 <li><span class="no">B4</span><b class="hand">Cover Flow</b></li>
 <li><span class="no">B5</span><b class="hand">Smart playlists</b></li>
 <li><span class="no">B6</span><b class="hand">A real tag editor</b></li>
-<li><span class="no">B7</span><b class="hand">A Windows 95 look</b></li>
-<li><span class="no">B8</span><b class="hand">English and Magyar</b></li>
-<li class="faint"><span class="no">B9</span><b class="hand">Something hidden</b></li>
+<li><span class="no">B7</span><b class="hand">Windows 95 and Cyber looks</b></li>
+<li><span class="no">B8</span><b class="hand">Knows Rockbox and Encore OS</b></li>
+<li><span class="no">B9</span><b class="hand">English and Magyar</b></li>
+<li class="faint"><span class="no">B10</span><b class="hand">Something hidden</b></li>
 </ol>
 </div>
 </div>
 <div class="cards" data-stagger="110">
 <article class="card"><div class="shot"><img src="img/coverflow.webp" width="800" height="500" alt="Cover Flow: album covers turning in a row, the middle one large with its title underneath" loading="lazy"></div><h3>Cover Flow</h3><p>Albums, songs or artists as a row of turning covers. Type a letter to jump; Enter plays the album in the middle.</p></article>
 <article class="card"><div class="shot"><img src="img/ipod-page.webp" width="800" height="500" alt="The iPod's page: a storage ring with music, video, photos and free space, the model, its signature and the last automatic backup" loading="lazy"></div><h3>The iPod's page</h3><p>What fills the space, which model it is, whether it can be written, and the backup taken before the last change, with Restore.</p></article>
-<article class="card"><div class="shot"><img src="img/windows95.webp" width="800" height="500" alt="The same song list in the Windows 95 look: grey 3D panels, a tree of folders, navy selection and a status bar" loading="lazy"></div><h3>A Windows 95 look</h3><p>Settings › Appearance › Look. The whole window the way a program looked in 1995: grey 3D panels, square corners, navy selection.</p></article>
+<article class="card"><div class="shot"><img src="img/windows95.webp" width="800" height="500" alt="The same song list in the Windows 95 look: grey 3D panels, a tree of folders, navy selection and a status bar" loading="lazy"></div><h3>Windows 95, or Cyber</h3><p>Settings › Appearance › Look. The whole window the way a program looked in 1995: grey 3D panels, square corners, navy selection. Or Cyber: a sci-fi HUD with cut corners and yellow tags, a scan line sweeping each page.</p></article>
 </div>
 </section>
 
@@ -141,7 +147,7 @@
 <div><h2>Download</h2></div>
 <div>
 <ol>
-<li><a href="https://github.com/Erik1028/Mixtape/releases/latest/download/Mixtape.exe" data-asset="^Mixtape\.exe$">Download Mixtape.exe<span class="size"> (181 MB)</span></a> and run it. No installer, nothing to set up.</li>
+<li><a href="https://github.com/Erik1028/Mixtape/releases/latest/download/Mixtape.exe" data-asset="^Mixtape\.exe$">Download Mixtape.exe<span class="size"> (187 MB)</span></a> and run it. No installer, nothing to set up.</li>
 <li>Plug in your iPod.</li>
 </ol>
 <p class="aside">Windows 10 or 11, 64-bit. Mixtape.exe is big because .NET comes inside it; the small zip needs the <a href="https://dotnet.microsoft.com/download/dotnet/8.0">.NET 8 Desktop Runtime</a>. Converting FLAC, OGG, Opus, WMA and videos needs <a href="https://ffmpeg.org/">FFmpeg</a> (<code>winget install Gyan.FFmpeg</code>), which Mixtape finds by itself. Lyrics and missing covers are looked up online by artist and title; Settings can turn that off.</p>
@@ -152,7 +158,7 @@
 
 <section class="block" data-reveal>
 <h2>Latest update</h2>
-<div class="latest" id="latest"><span class="v">v0.21.0</span><div><h3>Something hidden</h3><p>The first iPods hid a game. Windows 95 hid its credits. This version of Mixtape hides a few things of its own — they’re not in any menu, and these notes won’t tell you where they are.</p><p><a href="https://github.com/Erik1028/Mixtape/releases/tag/v0.21.0">Release notes</a> · 2 Oct 2026</p></div></div>
+<div class="latest" id="latest"><span class="v">v0.23.0</span><div><h3>Mixtape on OrbitOverlay's watch</h3><p>In OrbitOverlay 1.16 (the SteamVR overlay), the watch's Now playing card shows Mixtape's song while Mixtape plays, and opens into a full player: what's playing, Up Next, your songs, albums and playlists, and synced lyrics.</p><p><a href="https://github.com/Erik1028/Mixtape/releases/tag/v0.23.0">Release notes</a> · 19 Oct 2026</p></div></div>
 </section>
 
 </main>
@@ -167,6 +173,7 @@
 <script src="site.js"></script>
 <script src="mixtape.js"></script>
 <script src="ipod.js"></script>
+<script src="looks.js"></script>
 <script src="handoff.js"></script>
 <script src="motion.js"></script>
 </body>

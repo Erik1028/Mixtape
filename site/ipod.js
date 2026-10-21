@@ -363,21 +363,23 @@
   }
   function draw(g, py) {
     var c = g.ctx;
-    c.fillStyle = '#f3f5f7'; c.fillRect(0, 0, GW, GH);
-    c.fillStyle = '#3d454e'; c.font = '700 10px "Helvetica Neue", Arial, sans-serif'; c.textBaseline = 'middle';
+    // the screen's own colours, so the game follows the page's look (Modern and 95 light, Cyber dark)
+    var cs = getComputedStyle(scr), bg = cs.backgroundColor, ink = cs.color;
+    c.fillStyle = bg; c.fillRect(0, 0, GW, GH);
+    c.fillStyle = ink; c.globalAlpha = 0.8; c.font = '700 10px "Helvetica Neue", Arial, sans-serif'; c.textBaseline = 'middle';
     c.textAlign = 'left'; c.fillText('Score ' + g.score, 6, 7);
     for (var l = 0; l < g.lives; l++) { c.beginPath(); c.arc(GW - 8 - l * 9, 7, 2.6, 0, 7); c.fill(); }
-    c.fillStyle = '#b6bdc5'; c.fillRect(0, 13, GW, 1);
+    c.globalAlpha = 0.3; c.fillRect(0, 13, GW, 1); c.globalAlpha = 1;
     g.bricks.forEach(function (b) {
       if (!b.on) return;
       var r = brickRect(b);
       c.fillStyle = BCOL[b.r]; c.fillRect(r.x, r.y, r.w, r.h);
       c.fillStyle = 'rgba(255,255,255,.35)'; c.fillRect(r.x, r.y, r.w, 2);
     });
-    c.fillStyle = '#2b3138'; c.fillRect(g.px, py, PW, 4);
+    c.fillStyle = ink; c.fillRect(g.px, py, PW, 4);
     c.fillStyle = '#4f9d44'; c.beginPath(); c.arc(g.x, g.y, BR, 0, 7); c.fill();
     var msg = g.state === 'ready' ? 'Press the middle' : g.state === 'over' ? 'Game over · middle to retry' : g.state === 'won' ? 'Cleared! · middle to retry' : '';
-    if (msg) { c.fillStyle = '#3d454e'; c.textAlign = 'center'; c.font = '700 11px "Helvetica Neue", Arial, sans-serif'; c.fillText(msg, GW / 2, 92); }
+    if (msg) { c.fillStyle = ink; c.textAlign = 'center'; c.font = '700 11px "Helvetica Neue", Arial, sans-serif'; c.fillText(msg, GW / 2, 92); }
   }
 
   // ---------- the wheel ----------

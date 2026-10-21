@@ -1,0 +1,144 @@
+/* Mixtape's three looks on its own page, as in the app's Settings › Appearance › Look (looks.js): Modern is style.css;
+   Windows 95 and Cyber are put on by html[data-look]. The J-card and the cassette stay paper and plastic in every look;
+   the click-wheel player keeps its body and dresses its screen. Fonts for Cyber (SIL OFL, fonts/LICENSE-*) load only
+   when it is on. */
+@font-face{font-family:"Barlow Condensed";src:url(fonts/barlow-condensed-500.woff2) format("woff2");font-weight:500;font-display:swap}
+@font-face{font-family:"Barlow Condensed";src:url(fonts/barlow-condensed-700.woff2) format("woff2");font-weight:700;font-display:swap}
+@font-face{font-family:"Barlow Condensed";src:url(fonts/barlow-condensed-800.woff2) format("woff2");font-weight:800;font-display:swap}
+@font-face{font-family:"IBM Plex Mono";src:url(fonts/ibm-plex-mono-600.woff2) format("woff2");font-weight:600;font-display:swap}
+
+/* ---------- the switcher (on the green band), and a link on the J-card's paper ---------- */
+.looks{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:22px;font-size:13.5px;color:rgba(255,255,255,.82)}
+.looks > span{margin-right:4px}
+.looks button{font:inherit;color:#fff;background:rgba(0,0,0,.14);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:0 13px;min-height:34px;cursor:pointer}
+.looks button:hover{background:rgba(0,0,0,.26)}
+.looks button[aria-pressed="true"]{background:#0e1a12;border-color:#0e1a12}
+.looks button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.jcard a{color:#17262a;text-decoration-color:#5b3196}
+.jcard a:hover{color:#5b3196}
+
+/* ---------- Windows 95: a teal desktop, grey 3D panels, navy selection ---------- */
+html[data-look="95"]{--face:#c0c0c0;--w95:Tahoma,"Microsoft Sans Serif","MS Sans Serif",Arial,sans-serif;--dim:#d8ecec;
+  --raised:inset -1px -1px #0a0a0a,inset 1px 1px #fff,inset -2px -2px #808080,inset 2px 2px #dfdfdf;
+  --sunken:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #0a0a0a;color-scheme:light}
+[data-look="95"] body{background:#008080;color:#fff;font-family:var(--w95);font-size:15.5px;-webkit-font-smoothing:auto}
+[data-look="95"] h1,[data-look="95"] h2,[data-look="95"] h3{font-family:Arial,Helvetica,sans-serif;letter-spacing:0}
+[data-look="95"] a{color:#fff;text-decoration-color:#fff;text-decoration-thickness:1px}
+[data-look="95"] a:hover{color:#ff0}
+[data-look="95"] .band{background:var(--face);color:#000;box-shadow:inset 0 -1px #0a0a0a,inset 0 -2px #808080}
+[data-look="95"] .band .top{background:linear-gradient(90deg,#000080,#1084d0)}
+[data-look="95"] .band .top .wrap{padding-block:7px}
+[data-look="95"] .band .logo{color:#fff;font:700 15px var(--w95)}
+[data-look="95"] .band .logo img{width:22px;height:22px;border-radius:0}
+[data-look="95"] .band .top nav a{color:#fff;font-size:14px}
+[data-look="95"] .band .intro h1{color:#000}
+[data-look="95"] .band .intro p{color:#000}
+[data-look="95"] .band a{color:#0000ee;text-decoration-color:#0000ee}
+[data-look="95"] .band a:hover{color:#f00}
+[data-look="95"] .btn,[data-look="95"] .band .btn{background:var(--face);color:#000;border-radius:0;box-shadow:var(--raised);font-family:var(--w95);filter:none}
+[data-look="95"] .btn:hover,[data-look="95"] .band .btn:hover{background:var(--face);color:#000}
+[data-look="95"] .btn:active{box-shadow:var(--sunken)}
+[data-look="95"] .band .get .mono,[data-look="95"] .band .get .alt{color:#000}
+[data-look="95"] .looks{color:#000;font-size:13px}
+[data-look="95"] .looks button{border:0;border-radius:0;background:var(--face);box-shadow:var(--raised);color:#000;font:13px var(--w95);min-height:28px;padding:0 12px}
+[data-look="95"] .looks button[aria-pressed="true"]{box-shadow:var(--sunken);background:repeating-conic-gradient(#c0c0c0 0 25%,#fff 0 50%) 0 0/2px 2px;font-weight:700}
+[data-look="95"] .looks button:focus-visible{outline:1px dotted #000;outline-offset:-5px}
+[data-look="95"] .shot{border-radius:0;border:2px solid;border-color:#808080 #fff #fff #808080;background:#c0c0c0}
+[data-look="95"] .hero-shot figcaption,[data-look="95"] .cap{color:#d8ecec}
+[data-look="95"] .try .text p,[data-look="95"] .try .text b{color:#fff}
+[data-look="95"] .try kbd{background:var(--face);color:#000;border:0;border-radius:0;box-shadow:var(--raised)}
+[data-look="95"] .card{background:var(--face);box-shadow:var(--raised);padding:4px 4px 12px}
+[data-look="95"] .card h3,[data-look="95"] .card p{padding:0 8px;color:#000}
+[data-look="95"] .tbl{background:#fff;box-shadow:var(--sunken);padding:2px}
+[data-look="95"] th{background:var(--face);box-shadow:var(--raised);color:#000;padding:4px 8px;font-weight:400}
+[data-look="95"] td{color:#000;border-top:0;padding:4px 8px}
+[data-look="95"] td:nth-child(2){color:#404040}
+[data-look="95"] .yes{color:#008000}[data-look="95"] .no{color:#808080}
+[data-look="95"] .two{background:var(--face);box-shadow:var(--raised);padding:18px 20px;color:#000}
+[data-look="95"] .two h2,[data-look="95"] .two a{color:#000}
+[data-look="95"] .two a{color:#0000ee;text-decoration-color:#0000ee}
+[data-look="95"] .two ol li::marker{color:#000080}
+[data-look="95"] .aside{color:#000;border-top:1px solid #808080;box-shadow:0 1px #fff inset}
+[data-look="95"] .aside code,[data-look="95"] code{background:#fff;color:#000;border:0;border-radius:0;box-shadow:var(--sunken)}
+[data-look="95"] .latest{background:var(--face);box-shadow:var(--raised);padding:14px 16px;border:0;color:#000}
+[data-look="95"] .latest p{color:#000}
+[data-look="95"] .latest a{color:#0000ee}
+[data-look="95"] .latest .v{color:#000080}
+[data-look="95"] footer{border-top:0}
+[data-look="95"] footer .wrap{color:#fff}
+[data-look="95"] .scr{font-family:var(--w95)}
+[data-look="95"] .scr .bar{background:var(--face);border-bottom:1px solid #808080}
+[data-look="95"] .scr .row.on{background:#000080;color:#fff;text-shadow:none}
+[data-look="95"] .scr .np .prog b,[data-look="95"] .scr .bat b{background:#000080}
+[data-look="95"] .handoff{background:#fff;color:#000;border:1px solid #808080;border-radius:0}
+[data-look="95"] .handoff button,[data-look="95"] .handoff .ho-share{border:0;border-radius:0;background:var(--face);color:#000;box-shadow:var(--raised)}
+
+/* ---------- Cyber: near-black, a faint grid, cut corners, yellow tags, cyan for what plays ---------- */
+html[data-look="cyber"]{--y:#fbe600;--r:#ff4f4f;--c:#3ff3f0;--cond:"Barlow Condensed","Bahnschrift SemiCondensed","Arial Narrow",sans-serif;
+  --cm:"IBM Plex Mono","Cascadia Mono",Consolas,monospace;--bg:#0c0a0b;--panel:#151214;--line:rgba(255,79,79,.38);--text:#f2efe0;--dim:#a39d8e;
+  --accent:#fbe600;--on-accent:#0c0a0b}
+[data-look="cyber"] body{background:#0c0a0b linear-gradient(rgba(255,79,79,.05) 1px,transparent 1px) 0 0/100% 28px;font-family:var(--cond);font-weight:500;font-size:18.5px}
+[data-look="cyber"] h1,[data-look="cyber"] h2,[data-look="cyber"] h3{font-family:var(--cond);text-transform:uppercase;letter-spacing:.01em}
+[data-look="cyber"] h2{font-weight:800;font-size:clamp(30px,4vw,44px)}
+[data-look="cyber"] h3{font-weight:700;font-size:22px}
+[data-look="cyber"] a{color:var(--y);text-decoration:none}
+[data-look="cyber"] a:hover{color:var(--y);text-decoration:underline}
+[data-look="cyber"] .band{background:transparent;border-bottom:1px solid rgba(255,79,79,.45)}
+[data-look="cyber"] .band .logo{color:var(--text);font-family:var(--cond);text-transform:uppercase;font-size:22px}
+[data-look="cyber"] .band .logo img{clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);border-radius:0}
+[data-look="cyber"] .band .top nav a{font:600 13px var(--cm);text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+[data-look="cyber"] .band .top nav a:hover{color:var(--y);text-decoration:none}
+[data-look="cyber"] .band .intro h1{color:var(--y);font-weight:800;text-shadow:-3px 0 rgba(255,79,79,.75),3px 0 rgba(63,243,240,.75)}
+[data-look="cyber"] .band .intro p{color:#c9c4b0}
+[data-look="cyber"] .band a{color:var(--y)}
+[data-look="cyber"] .btn,[data-look="cyber"] .band .btn{background:var(--y);color:#0c0a0b;border-radius:0;font-family:var(--cm);font-weight:600;text-transform:uppercase;font-size:15px;letter-spacing:.04em;
+  clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+[data-look="cyber"] .btn:hover,[data-look="cyber"] .band .btn:hover{background:#fff35a;color:#0c0a0b;text-decoration:none}
+[data-look="cyber"] .band .get .mono{font-family:var(--cm);color:var(--c)}
+[data-look="cyber"] .band .get .alt{color:var(--dim);font-size:16px}
+[data-look="cyber"] .looks{font:600 12px var(--cm);text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+[data-look="cyber"] .looks button{border:1px solid rgba(255,79,79,.55);border-radius:0;background:transparent;color:var(--text);min-height:32px;padding:0 14px;
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px)}
+[data-look="cyber"] .looks button:hover{border-color:var(--y);color:var(--y)}
+[data-look="cyber"] .looks button[aria-pressed="true"]{background:var(--y);border-color:var(--y);color:#0c0a0b}
+[data-look="cyber"] .shot{border-radius:0;border-color:rgba(255,79,79,.45);clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px)}
+[data-look="cyber"] .hero-shot figcaption,[data-look="cyber"] .cap{font-family:var(--cm);font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+[data-look="cyber"] .try .text b{color:var(--y)}
+[data-look="cyber"] .try kbd{font-family:var(--cm);background:#151214;border-color:rgba(255,79,79,.55);border-radius:0;color:var(--c)}
+[data-look="cyber"] .card p{color:#c9c4b0}
+[data-look="cyber"] th{font:600 12px var(--cm);text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+[data-look="cyber"] td{border-top-color:rgba(255,79,79,.35)}
+[data-look="cyber"] .yes{color:var(--c)}
+[data-look="cyber"] .two ol li::marker{color:var(--y)}
+[data-look="cyber"] code{background:#151214;border-color:rgba(255,79,79,.45);border-radius:0;color:var(--c)}
+[data-look="cyber"] .latest .v{color:var(--y);font-family:var(--cm)}
+[data-look="cyber"] .latest p{color:#c9c4b0}
+[data-look="cyber"] footer .wrap{font:600 12.5px var(--cm);text-transform:uppercase;letter-spacing:.04em}
+[data-look="cyber"] .jcard{clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);border-radius:0}
+/* the player's screen as a HUD */
+[data-look="cyber"] .scr{background:#0c0a0b;color:var(--text);font-family:var(--cm)}
+[data-look="cyber"] .scr::after{background:repeating-linear-gradient(to bottom,rgba(0,0,0,.25) 0 1px,transparent 1px 3px)}
+[data-look="cyber"] .scr .bar{background:#0c0a0b;border-bottom:1px solid var(--r);color:var(--y);font:600 10.5px var(--cm);text-transform:uppercase;letter-spacing:.08em}
+[data-look="cyber"] .scr .st{fill:var(--c)}
+[data-look="cyber"] .scr .bat{border-color:var(--y);border-radius:0}
+[data-look="cyber"] .scr .bat::after{background:var(--y)}
+[data-look="cyber"] .scr .bat b{background:var(--c)}
+[data-look="cyber"] .scr .row{font:600 11px var(--cm);text-transform:uppercase;letter-spacing:.03em}
+[data-look="cyber"] .scr .row.on{background:var(--y);color:#0c0a0b;text-shadow:none}
+[data-look="cyber"] .scr .row i,[data-look="cyber"] .scr .row em{color:var(--dim)}
+[data-look="cyber"] .scr .row.on i,[data-look="cyber"] .scr .row.on em{color:#0c0a0b}
+[data-look="cyber"] .scr .split .list{border-right-color:rgba(255,79,79,.5)}
+[data-look="cyber"] .scr .sb{background:#151214;border-left-color:rgba(255,79,79,.5)}
+[data-look="cyber"] .scr .sb b{background:var(--y);border-radius:0}
+[data-look="cyber"] .np .cnt,[data-look="cyber"] .np .meta span,[data-look="cyber"] .np .times,[data-look="cyber"] .clk span{color:var(--dim)}
+[data-look="cyber"] .np .meta b{color:var(--y)}
+[data-look="cyber"] .np .prog{background:#151214;box-shadow:inset 0 0 0 1px rgba(255,79,79,.6);border-radius:0}
+[data-look="cyber"] .np .prog b{background:var(--c)}
+[data-look="cyber"] .np .vol{color:var(--c)}
+[data-look="cyber"] .clk b{font-family:var(--cond);font-weight:700;color:var(--y)}
+[data-look="cyber"] .handoff{background:#151214;border:1px solid rgba(255,79,79,.45);border-radius:0}
+[data-look="cyber"] .handoff button{border-radius:0;font-family:var(--cm);text-transform:uppercase;font-size:13px;letter-spacing:.04em}
+[data-look="cyber"] .handoff .ho-share{background:var(--y);color:#0c0a0b}
+/* the J-card is paper in every look: its link stays ink */
+[data-look] .jcard a{color:#17262a;text-decoration:underline;text-decoration-color:#5b3196;text-decoration-thickness:2px}
+[data-look] .jcard a:hover{color:#5b3196}
