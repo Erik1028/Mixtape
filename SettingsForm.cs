@@ -159,6 +159,9 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
     /// <summary>Render-harness hook: switch to a category by index (used by <c>--render settingsN</c>).</summary>
     public void RenderCategory(int index) { int i = Math.Clamp(index, 0, Categories.Length - 1); if (_sheet is not null) _sheet.SelectedIndex = i; else _nav.SelectedIndex = i; }
 
+    /// <summary>Render-harness hook (MIX_SETTINGS_SCROLL): the page scrolled down by <paramref name="px"/> (clamped).</summary>
+    public void RenderScroll(int px) => _paneBody.Top = -Math.Clamp(px, 0, Math.Max(0, _paneBody.Height - _pane.ClientSize.Height));
+
     private void Rebuild() => ShowCategory(_sheet?.SelectedIndex ?? _nav.SelectedIndex);
 
     private int _lastCat;
@@ -425,7 +428,13 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
 
     private void BuildDevice()
     {
-        if (_device is null) { Row(Loc.T("No iPod"), Loc.T("Connect an iPod to see its details."), null); return; }
+        bool calendars = (_s.EncoreCalendars ??= new()).Count > 0;
+        if (_device is null)
+        {
+            Row(Loc.T("No iPod"), Loc.T("Connect an iPod to see its details."), null);
+            if (calendars) BuildEncore();   // calendars already set up stay reachable without the iPod
+            return;
+        }
         var p = _device.Profile;
         var rows = new List<(string, string)>
         {
@@ -444,6 +453,92 @@ internal sealed class SettingsForm : GlassDialog, IMessageFilter
         InfoGroup(rows);
         if (!p.CanWrite && p.WriteBlockReason.Length > 0)
             Row(Loc.T("Why read-only"), p.WriteBlockReason, null);
+        if (fw.IsEncore || calendars) BuildEncore();
+    }
+
+    /// <summary>Encore OS: the calendars a sync puts on the iPod, and how videos are converted for it. Shown for an iPod
+    /// that runs Encore (and, once calendars are set up, for any - they are this PC's list, not the iPod's).</summary>
+    private void BuildEncore()
+    {
+        var cals = _s.EncoreCalendars;
+        var rows = new List<(string Title, string? Sub, Control? Ctl)>();
+        var add = new ThemedButton { Text = Loc.T("Add…"), Pill = true, Width = 96, Height = 30 };
+        add.Click += (_, _) =>
+        {
+            var m = ThemedMenu.New();
+            var file = new ToolStripMenuItem(Loc.T("A calendar file (.ics)…"));
+            file.Click += (_, _) => AddCalendarFile();
+            var link = new ToolStripMenuItem(Loc.T("A calendar's address…"));
+            link.Click += (_, _) => AddCalendarLink();
+            m.Items.Add(file);
+            m.Items.Add(link);
+            m.Show(add, new Point(0, add.Height + 2));
+        };
+        string how = Loc.T("An .ics file on this PC, or a calendar's address: in Google Calendar, a calendar's settings → “Secret address in iCal format”. Sync on the iPod's page puts them on the iPod; Encore shows them under Extras → Calendar.");
+        // modern: one card headed by what it is; 1995: a group box says that, the Add button closes the list
+        if (!Theme.Classic) rows.Add((Loc.T("Encore OS calendars"), how, add));
+        foreach (var c in cals.ToList())
+        {
+            var remove = new ThemedButton { Text = Loc.T("Remove"), Pill = true, Width = 96, Height = 30 };
+            remove.Click += (_, _) => { cals.Remove(c); _s.Save(); Rebuild(); };
+            rows.Add((c.Name, c.Display, remove));
+        }
+        if (Theme.Classic) rows.Add((Loc.T("Add a calendar"), how, add));
+        Group(Loc.T("Encore OS calendars"));
+        RowCard(rows);
+
+        rows.Clear();
+        rows.Add((Loc.T("Encore OS videos"), Loc.T("How “Add videos…” on the iPod's page converts a video into Encore's own format."), null));
+        var fpsNames = Array.ConvertAll(EvfOptions.FpsChoices, f => f.ToString());
+        var fps = new SegmentedControl { Options = fpsNames, SelectedIndex = Math.Max(0, Array.IndexOf(EvfOptions.FpsChoices, _s.EncoreVideoFps)), Width = 260 };
+        fps.SelectedChanged += () => { _s.EncoreVideoFps = EvfOptions.FpsChoices[fps.SelectedIndex]; _s.Save(); };
+        rows.Add((Loc.T("Frames per second"), Loc.T("Smoother motion takes more space; 15 suits most videos."), fps));
+        var quality = new SegmentedControl { Options = new[] { Loc.T("Smaller file"), Loc.T("Balanced"), Loc.T("Better picture") }, SelectedIndex = Math.Clamp(_s.EncoreVideoQuality, 0, 2), Width = 360 };
+        quality.SelectedChanged += () => { _s.EncoreVideoQuality = quality.SelectedIndex; _s.Save(); };
+        rows.Add((Loc.T("Picture"), Loc.T("How closely the picture is kept."), quality));
+        rows.Add((Loc.T("Fill the screen"), Loc.T("Crop a wide video's sides so it fills the iPod's screen, instead of showing the whole picture with bars."),
+            Toggle(_s.EncoreVideoFill, v => { _s.EncoreVideoFill = v; _s.Save(); })));
+        Group(Loc.T("Encore OS videos"));
+        RowCard(rows);
+    }
+
+    /// <summary>Rows that belong together: one card on the modern page (its first row says what they are), the usual
+    /// rows in the 1995 group box.</summary>
+    private void RowCard(List<(string Title, string? Sub, Control? Ctl)> rows)
+    {
+        if (Theme.Classic) { foreach (var (t, s, c) in rows) Row(t, s, c); return; }
+        var card = new CardPanel(CardW) { Left = ContentLeft, Top = _y };
+        foreach (var (t, s, c) in rows) card.AddRow(t, s, c, s is null ? 52 : MeasureRowHeight(s, c));
+        card.Finish();
+        _paneBody.Controls.Add(card);
+        _y += card.Height + 10;
+    }
+
+    private void AddCalendarFile()
+    {
+        using var d = new OpenFileDialog { Title = Loc.T("Choose a calendar file"), Filter = Loc.T("Calendar") + " (*.ics)|*.ics|" + Loc.T("All files") + "|*.*" };
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        string? name = PromptDialog.Show(this, Loc.T("Add a calendar"), Loc.T("Name on the iPod:"), Path.GetFileNameWithoutExtension(d.FileName));
+        if (string.IsNullOrWhiteSpace(name)) return;
+        _s.EncoreCalendars.Add(new EncoreCalendarSource { Name = name.Trim(), Location = d.FileName });
+        _s.Save(); Rebuild();
+    }
+
+    private void AddCalendarLink()
+    {
+        string? url = PromptDialog.Show(this, Loc.T("Add a calendar"), Loc.T("The calendar's address (https://… or webcal://…):"), "");
+        if (string.IsNullOrWhiteSpace(url)) return;
+        var src = new EncoreCalendarSource { Location = url.Trim() };
+        if (!src.IsLink)
+        {
+            MessageDialog.Show(this, Loc.T("That isn't a calendar's address. It starts with https:// or webcal://."), Loc.T("Add a calendar"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        string? name = PromptDialog.Show(this, Loc.T("Add a calendar"), Loc.T("Name on the iPod:"), Loc.T("Calendar"));
+        if (string.IsNullOrWhiteSpace(name)) return;
+        src.Name = name.Trim();
+        _s.EncoreCalendars.Add(src);
+        _s.Save(); Rebuild();
     }
 
     /// <summary>The build's own version, read from the assembly — a literal here went stale for a whole

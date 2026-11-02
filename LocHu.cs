@@ -27,6 +27,77 @@ internal static partial class LocHu
         ["{0} file(s) ({1}) aren't in iTunes' list, but Encore plays them and they're the only copy, so they stay."] =
             "{0} fájl ({1}) nincs az iTunes listájában, de az Encore lejátssza őket, és ez az egyetlen példányuk, ezért megmaradnak.",
 
+        // ---- Encore OS: calendars, photos and videos put on the iPod (MainForm.Encore.cs, Settings ▸ This iPod) ----
+        // Encore's own menus are English ("Extras → Calendar"), so they stay so here.
+        ["ENCORE OS"] = "ENCORE OS",
+        ["Add…"] = "Hozzáadás…",
+        ["A calendar file (.ics)…"] = "Naptárfájl (.ics)…",
+        ["A calendar's address…"] = "Naptár címe…",
+        ["An .ics file on this PC, or a calendar's address: in Google Calendar, a calendar's settings → “Secret address in iCal format”. Sync on the iPod's page puts them on the iPod; Encore shows them under Extras → Calendar."] =
+            "Egy .ics fájl ezen a gépen, vagy egy naptár címe: a Google Naptárban a naptár beállításai → „Titkos cím iCal formátumban”. Az iPod oldalán a Szinkronizálás teszi fel őket az iPodra; az Encore az Extras → Calendar alatt mutatja őket.",
+        ["Encore OS calendars"] = "Naptárak az Encore OS-hez",
+        ["Add a calendar"] = "Naptár hozzáadása",
+        ["Encore OS videos"] = "Videók az Encore OS-hez",
+        ["How “Add videos…” on the iPod's page converts a video into Encore's own format."] = "Ahogy az iPod oldalán a „Videók hozzáadása…” az Encore saját formátumára alakítja a videót.",
+        ["Frames per second"] = "Képkocka másodpercenként",
+        ["Smoother motion takes more space; 15 suits most videos."] = "A simább mozgás több helyet foglal; a legtöbb videóhoz elég a 15.",
+        ["Smaller file"] = "Kisebb fájl",
+        ["Balanced"] = "Kiegyensúlyozott",
+        ["Better picture"] = "Jobb kép",
+        ["Picture"] = "Kép",
+        ["How closely the picture is kept."] = "Mennyire marad hű a kép az eredetihez.",
+        ["Fill the screen"] = "Kitölti a képernyőt",
+        ["Crop a wide video's sides so it fills the iPod's screen, instead of showing the whole picture with bars."] =
+            "A széles videó két szélét levágja, hogy kitöltse az iPod képernyőjét, ahelyett hogy csíkokkal az egész képet mutatná.",
+        ["Choose a calendar file"] = "Válassz naptárfájlt",
+        ["Calendar"] = "Naptár",
+        ["Name on the iPod:"] = "Neve az iPodon:",
+        ["The calendar's address (https://… or webcal://…):"] = "A naptár címe (https://… vagy webcal://…):",
+        ["That isn't a calendar's address. It starts with https:// or webcal://."] = "Ez nem egy naptár címe. Az https://-sel vagy webcal://-lal kezdődik.",
+        ["Sync now"] = "Szinkronizálás",
+        ["Set up…"] = "Beállítás…",
+        ["Calendars"] = "Naptárak",
+        ["Add an .ics file or a calendar's address in Settings, then sync it here. Encore shows it under Extras → Calendar."] =
+            "Adj meg egy .ics fájlt vagy egy naptár címét a Beállításokban, aztán itt szinkronizáld. Az Encore az Extras → Calendar alatt mutatja.",
+        ["{0} set up in Settings, {1} on the iPod. Sync puts their latest version on the iPod (Extras → Calendar)."] =
+            "{0} van beállítva, {1} van az iPodon. A szinkronizálás a legfrissebb változatukat teszi fel (Extras → Calendar).",
+        ["Photos…"] = "Fényképek…",
+        ["A folder, as an album…"] = "Egy mappa, albumként…",
+        ["Add photos or a whole folder — each folder is an album. Encore shows the newest first, by the date each was taken."] =
+            "Adj hozzá fényképeket vagy egy egész mappát — minden mappa egy album. Az Encore elöl mutatja a legújabbat, a készítés ideje szerint.",
+        ["{0} on the iPod in {1} album(s), newest first. Big photos are made smaller on the way, the date each was taken is kept."] =
+            "{0} kép van az iPodon, {1} albumban, elöl a legújabb. A nagy képek útközben kisebbek lesznek, a készítés ideje megmarad.",
+        ["Add videos…"] = "Videók hozzáadása…",
+        ["Any video, converted to Encore's own format on the way (needs ffmpeg). Encore picks up where you stopped watching."] =
+            "Bármilyen videó, útközben az Encore saját formátumára alakítva (ffmpeg kell hozzá). Az Encore ott folytatja, ahol abbahagytad.",
+        ["{0} on the iPod. Any video is converted to Encore's own format on the way (needs ffmpeg)."] =
+            "{0} van az iPodon. Bármilyen videót útközben az Encore saját formátumára alakít (ffmpeg kell hozzá).",
+        ["Putting calendars on your iPod"] = "Naptárak feltöltése az iPodra",
+        ["Reading “{0}”…"] = "„{0}” beolvasása…",
+        ["Writing to the iPod…"] = "Írás az iPodra…",
+        ["Couldn't put the calendars on the iPod:\n\n{0}"] = "Nem sikerült feltenni a naptárakat az iPodra:\n\n{0}",
+        ["{0} calendar(s) with {1} event(s) are on the iPod."] = "{0} naptár van az iPodon, {1} eseménnyel.",
+        ["Nothing had changed."] = "Semmi sem változott.",
+        ["Removed {0} calendar(s) that are no longer set up."] = "{0} naptár lekerült, mert már nincs beállítva.",
+        ["{0} repeating event(s) were rewritten so that Encore shows their skipped and moved dates right."] =
+            "{0} ismétlődő esemény át lett írva, hogy az Encore a kihagyott és áthelyezett alkalmaikat is jól mutassa.",
+        ["{0} event(s) furthest in the past were left out: Encore reads at most 4,000."] = "A {0} legrégebbi esemény kimaradt: az Encore legfeljebb 4000-et olvas be.",
+        ["“{0}” couldn't be read, so the iPod keeps its earlier copy: {1}"] = "„{0}” nem olvasható, ezért az iPodon a korábbi példánya marad: {1}",
+        ["“{0}”: the iPod already has a calendar file named {1} that Mixtape didn't put there, so it was left alone. Rename the calendar in Settings."] =
+            "„{0}”: az iPodon már van {1} nevű naptárfájl, amelyet nem a Mixtape tett oda, ezért érintetlen maradt. Nevezd át a naptárt a Beállításokban.",
+        ["“{0}”: Encore reads at most 64 calendar files."] = "„{0}”: az Encore legfeljebb 64 naptárfájlt olvas be.",
+        ["Choose a folder — its photos and its subfolders' go onto the iPod as an album"] = "Válassz egy mappát — a benne és az almappáiban lévő képek albumként kerülnek az iPodra",
+        ["Album on the iPod (leave it empty for none):"] = "Album az iPodon (üresen hagyva nincs album):",
+        ["{0} of them were made smaller or saved anew so the iPod opens them quickly."] = "Ebből {0} kisebb lett vagy újra lett mentve, hogy az iPod gyorsan megnyissa.",
+        ["{0} were already on the iPod."] = "{0} már az iPodon volt.",
+        ["Converting a video for Encore OS needs ffmpeg, and it wasn't found.\n\nInstall it (for example: winget install Gyan.FFmpeg) and it is found by itself, or show Mixtape where ffmpeg.exe is in Settings ▸ Video.\n\nOpen Settings now?"] =
+            "A videók Encore OS-re alakításához ffmpeg kell, de nem található.\n\nTelepítsd (például: winget install Gyan.FFmpeg), és magától megtalálja, vagy mutasd meg a Mixtape-nek az ffmpeg.exe helyét a Beállítások ▸ Videó oldalon.\n\nMegnyitod most a Beállításokat?",
+        ["Select videos to convert for the iPod"] = "Válaszd ki az iPodra átalakítandó videókat",
+        ["Converting videos for your iPod"] = "Videók átalakítása az iPodra",
+        ["They take {0} on the iPod."] = "{0} helyet foglalnak az iPodon.",
+        ["Already on the iPod: {0}"] = "Már az iPodon van: {0}",
+        ["not a picture Mixtape can read"] = "nem olyan kép, amelyet a Mixtape be tud olvasni",
+
         // ---- Sidebar sections & navigation ----
         ["DEVICE"] = "ESZKÖZ",
         ["LIBRARY"] = "KÖNYVTÁR",

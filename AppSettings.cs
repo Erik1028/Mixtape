@@ -139,6 +139,16 @@ internal sealed class AppSettings
     /// <summary>Also store a full-screen image (not just the tiny browse thumbnail) so photos look sharp.</summary>
     public bool PhotoStoreFullResolution { get; set; } = true;
 
+    // ---- Encore OS (an iPod running Erik's own firmware reads plain folders: see EncoreSync.cs) ----
+    /// <summary>Calendars put into the iPod's /Calendars on a sync: a name each, and a .ics file or a calendar's address.</summary>
+    public List<EncoreCalendarSource> EncoreCalendars { get; set; } = new();
+    /// <summary>Videos converted for Encore: frames per second (10, 15, 20 or 24).</summary>
+    public int EncoreVideoFps { get; set; } = 15;
+    /// <summary>0 = smaller file, 1 = balanced, 2 = better picture (EvfOptions.Lambdas).</summary>
+    public int EncoreVideoQuality { get; set; } = 1;
+    /// <summary>Fill the iPod's 4:3 screen (cropping the sides of a wide video) instead of showing the whole picture.</summary>
+    public bool EncoreVideoFill { get; set; }
+
     // ---- Safety ----
     /// <summary>Ask for confirmation before the first write of a session.</summary>
     public bool ConfirmWrites { get; set; } = true;

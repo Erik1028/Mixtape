@@ -5210,6 +5210,8 @@ internal sealed partial class MainForm : Form, IMessageFilter
             fix.Finish(); Add(fix);
         }
 
+        if (fw.IsEncore) { SectionLabel(Loc.T("ENCORE OS")); Add(EncoreCard(dev, cardW)); }   // calendars, photos, videos: plain folders Encore reads (MainForm.Encore.cs)
+
         SectionLabel(Loc.T("BACKUPS"));
         var backups = new CardPanel(cardW);
         string db = dev.ITunesDbPath, bak = db + ".bak", orig = db + ".original";

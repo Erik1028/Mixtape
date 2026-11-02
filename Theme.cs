@@ -441,8 +441,8 @@ internal static class Theme
         if (!Classic || string.IsNullOrEmpty(s)) return s;
         var lower = s.ToLower(System.Globalization.CultureInfo.CurrentCulture);
         var t = char.ToUpper(lower[0], System.Globalization.CultureInfo.CurrentCulture) + lower[1..];
-        // an acronym stays one ("On this PC", not "On this pc")
-        return System.Text.RegularExpressions.Regex.Replace(t, @"\bpc\b", "PC");
+        // an acronym stays one ("On this PC", not "On this pc"; "Encore OS")
+        return System.Text.RegularExpressions.Regex.Replace(t, @"\b(pc|os)\b", m => m.Value.ToUpperInvariant());
     }
 
     /// <summary>The close button of a 95 caption, drawn in place (for chrome that is painted, not a control).</summary>

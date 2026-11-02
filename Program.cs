@@ -182,6 +182,13 @@ internal static class Program
         // (which stray files are extra copies it hides vs the only copy it plays) and its play-count overlay,
         // on a sandbox "iPod" built here. → ipod-encoretest.txt
         if (args.Contains("--encoretest")) { RunEncoreTest(); return; }
+        // What Mixtape puts on an Encore OS iPod, on a sandbox "iPod" in %TEMP%: calendars as Encore will read them (its
+        // own parser, events.c, ported), the calendar sync, photos (dates, sizes, albums) and EVF videos (decoded back
+        // the way the player decodes them; with ffmpeg also a real conversion). → ipod-encoresynctest.txt
+        if (args.Contains("--encoresynctest")) { RunEncoreSyncTest(); return; }
+        // A video → Encore's .evf from the command line, the way "Add videos…" converts it.
+        // Usage: --evf <video> <out.evf> [fps 10|15|20|24] [quality 0|1|2] [fill]
+        if (args.Length >= 3 && args[0] == "--evf") { RunEvf(args); return; }
 
         // Lyrics probe: what the Lyrics panel would show for a song, and from which source.
         // Usage: --lyricstest "<artist>" "<title>" [durationSeconds] -> console
@@ -1119,6 +1126,314 @@ internal static class Program
         Console.WriteLine(log.ToString());
     }
 
+    /// <summary>Render harness (MIX_ENCORE=1): the sandbox iPod boots Encore OS (its signature in rockbox.ipod) and holds
+    /// what Mixtape put there - three photos in two albums, a video, a calendar.</summary>
+    private static void EncoreSandbox(string root)
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".rockbox"));
+        var bin = new byte[4096];
+        "EncoreOS"u8.CopyTo(bin.AsSpan(32));
+        "0.10.15\0Encore OS\0"u8.CopyTo(bin.AsSpan(512));
+        File.WriteAllBytes(Path.Combine(root, ".rockbox", "rockbox.ipod"), bin);
+        foreach (var (album, name) in new[] { ("Balaton", "IMG_20260712_101500.jpg"), ("Balaton", "IMG_20260712_181022.jpg"), ("", "PXL_20261023_142530.jpg") })
+        {
+            string dir = Path.Combine(root, "Photos", album);
+            Directory.CreateDirectory(dir);
+            using var b = new Bitmap(32, 24);
+            b.Save(Path.Combine(dir, name), System.Drawing.Imaging.ImageFormat.Jpeg);
+        }
+        Directory.CreateDirectory(Path.Combine(root, "Videos"));
+        using (var fs = File.Create(Path.Combine(root, "Videos", "Kirándulás.evf")))
+        {
+            var wr = new EvfWriter(fs, 32, 24, 15, null);
+            wr.Frame(new EvfFrameEncoder(32, 24, 300).Encode(new byte[32 * 24 * 4], true), true);
+            wr.Close();
+        }
+        Directory.CreateDirectory(Path.Combine(root, "Calendars"));
+        File.WriteAllText(Path.Combine(root, "Calendars", "Család.ics"), EncoreCalendar.Write(Array.Empty<EncoreCalendar.OutEvent>(), "Család"));
+    }
+
+    private static void RunEvf(string[] args)
+    {
+        var ff = FfmpegService.Detect(AppSettings.Load().FfmpegPath);
+        if (ff is null) { Console.WriteLine("ffmpeg not found"); return; }
+        var o = new EvfOptions(args.Length > 3 && int.TryParse(args[3], out int fps) ? fps : 15,
+                               EvfOptions.Lambdas[args.Length > 4 && int.TryParse(args[4], out int q) ? Math.Clamp(q, 0, 2) : 1], args.Contains("fill"));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string done = EvfConverter.Convert(ff.FfmpegPath, args[1], args[2], o, (_, _) => { }, () => false, Math.Max(1, Environment.ProcessorCount / 2));
+        var e = EvfFile.Read(done);
+        Console.WriteLine($"{done}: {e?.Width}x{e?.Height}, {e?.Frames} frames, {e?.Duration:mm\\:ss}, {new FileInfo(done).Length / 1e6:0.0} MB, {sw.Elapsed.TotalSeconds:0.0} s");
+    }
+
+    private static void RunEncoreSyncTest()
+    {
+        var log = new StringBuilder();
+        int pass = 0, fail = 0;
+        void Check(string what, object? got, object? want)
+        {
+            bool ok = Equals(got?.ToString(), want?.ToString());
+            log.AppendLine($"{(ok ? "PASS" : "FAIL")}  {what}: got {got}, want {want}");
+            if (ok) pass++; else fail++;
+        }
+        string root = Path.Combine(Path.GetTempPath(), "mixtape-encoresynctest-" + Environment.ProcessId);
+        try
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            Directory.CreateDirectory(root);
+            var now = new DateTime(2026, 11, 2, 12, 0, 0);
+
+            // (1) Calendars, judged by what Encore shows: its own parser and repeat rules (events.c) read Mixtape's file.
+            static string Cal(params string[] evs) => "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Google Inc//Google Calendar 70.9054//EN\r\nX-WR-CALNAME:Teszt\r\n" + string.Join("", evs) + "END:VCALENDAR\r\n";
+            static string Ev(string body) => "BEGIN:VEVENT\r\n" + body.Trim().Replace("\n", "\r\n") + "\r\nEND:VEVENT\r\n";
+            string Rewrite(string ics) => EncoreCalendar.Write(EncoreCalendar.Simplify(ics, now).Events, "Teszt");
+            string Shows(string ics, string from, string to) => string.Join(" | ", EncoreCalendar.EncoreReader.Starts(Rewrite(ics), DateTime.Parse(from), DateTime.Parse(to)));
+
+            Check("UTC time in summer → +2 h", Shows(Cal(Ev("UID:a\nDTSTART:20260715T080000Z\nDTEND:20260715T090000Z\nSUMMARY:Nyár")), "2026-07-01", "2026-07-31"), "2026-07-15 10:00 Nyár");
+            Check("UTC time in winter → +1 h", Shows(Cal(Ev("UID:b\nDTSTART:20261203T080000Z\nSUMMARY:Tél")), "2026-12-01", "2026-12-31"), "2026-12-03 09:00 Tél");
+            Check("New York time → Hungarian time", Shows(Cal(Ev("UID:c\nDTSTART;TZID=America/New_York:20261110T090000\nDTEND;TZID=America/New_York:20261110T100000\nSUMMARY:NY")), "2026-11-01", "2026-11-30"), "2026-11-10 15:00 NY");
+            string london = Cal(Ev("UID:d\nDTSTART;TZID=Europe/London:20261102T090000\nRRULE:FREQ=WEEKLY;BYDAY=MO\nSUMMARY:London"));
+            Check("London weekly repeat stays one repeat", EncoreCalendar.Simplify(london, now).Events.Count, 1);
+            Check("… one hour later on the iPod, winter and summer", Shows(london, "2026-11-09", "2026-11-09") + " / " + Shows(london, "2027-07-05", "2027-07-05"), "2026-11-09 10:00 London / 2027-07-05 10:00 London");
+
+            string training = Cal(
+                Ev("UID:edzes@x\nDTSTART;TZID=Europe/Budapest:20261102T180000\nDTEND;TZID=Europe/Budapest:20261102T190000\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE\nEXDATE;TZID=Europe/Budapest:20261111T180000\nSUMMARY:Edzés\nBEGIN:VALARM\nACTION:DISPLAY\nDESCRIPTION:This is an event reminder\nTRIGGER:-P0DT0H10M0S\nEND:VALARM\nDESCRIPTION:Hozz vizet"),
+                Ev("UID:edzes@x\nRECURRENCE-ID;TZID=Europe/Budapest:20261116T180000\nDTSTART;TZID=Europe/Budapest:20261117T200000\nDTEND;TZID=Europe/Budapest:20261117T210000\nSUMMARY:Edzés (áttéve)"));
+            Check("EXDATE and a moved date, in a weekly repeat", Shows(training, "2026-11-01", "2026-11-30"),
+                "2026-11-02 18:00 Edzés | 2026-11-04 18:00 Edzés | 2026-11-09 18:00 Edzés | 2026-11-17 20:00 Edzés (áttéve) | 2026-11-18 18:00 Edzés | 2026-11-23 18:00 Edzés | 2026-11-25 18:00 Edzés | 2026-11-30 18:00 Edzés");
+            Check("… and it goes on for ever after", Shows(training, "2027-06-07", "2027-06-09"), "2027-06-07 18:00 Edzés | 2027-06-09 18:00 Edzés");
+            Check("… cut into runs, not spelled out", EncoreCalendar.Simplify(training, now).Events.Count(e => e.RRule is not null), 2);
+            Check("the reminder's text doesn't replace the event's", EncoreCalendar.EncoreReader.Parse(Rewrite(training)).First().Desc, "Hozz vizet");
+
+            string second = Cal(Ev("UID:e\nDTSTART;TZID=Europe/Budapest:20261013T183000\nRRULE:FREQ=MONTHLY;BYDAY=2TU\nSUMMARY:Klub"));
+            Check("second Tuesday of the month", Shows(second, "2026-11-01", "2027-01-31"), "2026-11-10 18:30 Klub | 2026-12-08 18:30 Klub | 2027-01-12 18:30 Klub");
+            Check("last Friday of the month", Shows(Cal(Ev("UID:f\nDTSTART;VALUE=DATE:20261030\nRRULE:FREQ=MONTHLY;BYDAY=-1FR\nSUMMARY:Bér")), "2026-11-01", "2026-12-31"), "2026-11-27 Bér | 2026-12-25 Bér");
+            Check("COUNT", Shows(Cal(Ev("UID:g\nDTSTART:20261105T070000\nRRULE:FREQ=DAILY;COUNT=3\nSUMMARY:Gyógyszer")), "2026-11-01", "2026-11-30"), "2026-11-05 07:00 Gyógyszer | 2026-11-06 07:00 Gyógyszer | 2026-11-07 07:00 Gyógyszer");
+            Check("UNTIL in UTC ends before the last Tuesday's evening", Shows(Cal(Ev("UID:h\nDTSTART;TZID=Europe/Budapest:20261103T180000\nRRULE:FREQ=WEEKLY;UNTIL=20261124T165959Z\nSUMMARY:Tanfolyam")), "2026-11-01", "2026-12-31"),
+                "2026-11-03 18:00 Tanfolyam | 2026-11-10 18:00 Tanfolyam | 2026-11-17 18:00 Tanfolyam");
+            Check("a repeat in UTC keeps its UTC time over the clock change", Shows(Cal(Ev("UID:i\nDTSTART:20261020T080000Z\nRRULE:FREQ=WEEKLY;COUNT=3\nSUMMARY:Hívás")), "2026-10-01", "2026-11-30"),
+                "2026-10-20 10:00 Hívás | 2026-10-27 09:00 Hívás | 2026-11-03 09:00 Hívás");
+            string bday = Cal(Ev("UID:j\nDTSTART;VALUE=DATE:19900315\nDTEND;VALUE=DATE:19900316\nRRULE:FREQ=YEARLY\nSUMMARY:Anya szülinapja"));
+            Check("yearly all-day birthday", Shows(bday, "2027-03-01", "2027-03-31"), "2027-03-15 Anya szülinapja");
+            Check("… kept as a repeat", EncoreCalendar.Simplify(bday, now).Events.Single().RRule, "FREQ=YEARLY");
+            Check("cancelled event left out", Shows(Cal(Ev("UID:k\nDTSTART:20261110T100000\nSTATUS:CANCELLED\nSUMMARY:Elmarad")), "2026-11-01", "2026-11-30"), "");
+            Check("every weekday (DAILY+BYDAY) → weekly on those days", EncoreCalendar.Simplify(Cal(Ev("UID:l\nDTSTART:20261102T083000\nRRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR\nSUMMARY:Munka")), now).Events.Single().RRule, "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR");
+            var many = new List<EncoreCalendar.OutEvent>();
+            for (int i = 0; i < 4100; i++) many.Add(new EncoreCalendar.OutEvent { Uid = "m" + i, Start = new DateTime(2020, 1, 1).AddDays(i), LastDay = new DateTime(2020, 1, 1).AddDays(i), Summary = "x" });
+            Check("over 4,000 events: the oldest go", EncoreCalendar.Fit(new[] { many }, now) + " dropped, first kept " + many[0].Start.ToString("yyyy-MM-dd"), "100 dropped, first kept 2020-04-10");
+
+            // (2) The calendar sync on a sandbox iPod: Mixtape's files only, unchanged files left alone.
+            string ipod = Path.Combine(root, "ipod");
+            string calDir = Path.Combine(ipod, "Calendars");
+            Directory.CreateDirectory(calDir);
+            string own = Path.Combine(calDir, "Sajat.ics");
+            File.WriteAllText(own, Cal(Ev("UID:own\nDTSTART:20261110T100000\nSUMMARY:Saját")));
+            string srcDir = Path.Combine(root, "src");
+            Directory.CreateDirectory(srcDir);
+            File.WriteAllText(Path.Combine(srcDir, "a.ics"), training);
+            File.WriteAllText(Path.Combine(srcDir, "b.ics"), second);
+            var sources = new List<EncoreCalendarSource>
+            {
+                new() { Name = "Edzés", Location = Path.Combine(srcDir, "a.ics") },
+                new() { Name = "Klub: estek", Location = Path.Combine(srcDir, "b.ics") },
+            };
+            var rep = EncoreCalendarSync.Sync(ipod, sources, now, EncoreCalendarSync.Fetch);
+            Check("sync: written", $"{rep.Written} written, {rep.Calendars} calendars, problems {rep.Problems.Count}", "2 written, 2 calendars, problems 0");
+            Check("sync: file names", string.Join(", ", Directory.GetFiles(calDir, "*.ics").Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal)), "Edzés.ics, Klub estek.ics, Sajat.ics");
+            Check("sync: marked as Mixtape's", EncoreCalendar.IsMixtapes(Path.Combine(calDir, "Edzés.ics")) && !EncoreCalendar.IsMixtapes(own), true);
+            var stamp = File.GetLastWriteTimeUtc(Path.Combine(calDir, "Edzés.ics"));
+            rep = EncoreCalendarSync.Sync(ipod, sources, now, EncoreCalendarSync.Fetch);
+            Check("sync again: nothing rewritten", $"{rep.Written} written, {rep.Unchanged} unchanged", "0 written, 2 unchanged");
+            Check("sync again: file time kept", File.GetLastWriteTimeUtc(Path.Combine(calDir, "Edzés.ics")) == stamp, true);
+            sources[0].Location = Path.Combine(srcDir, "missing.ics");
+            sources.RemoveAt(1);
+            sources.Add(new() { Name = "Sajat", Location = Path.Combine(srcDir, "b.ics") });
+            string ownBefore = File.ReadAllText(own);
+            rep = EncoreCalendarSync.Sync(ipod, sources, now, EncoreCalendarSync.Fetch);
+            Check("unreadable source: reported, its old file kept", rep.Problems.Any(p => p.Kind == EncoreCalendarSync.ProblemKind.Fetch) && File.Exists(Path.Combine(calDir, "Edzés.ics")), true);
+            Check("calendar no longer set up: removed", rep.Removed + " removed, " + File.Exists(Path.Combine(calDir, "Klub estek.ics")), "1 removed, False");
+            Check("someone else's file of the same name: left alone", rep.Problems.Any(p => p.Kind == EncoreCalendarSync.ProblemKind.NameTaken) && File.ReadAllText(own) == ownBefore, true);
+            Check("safe file name", EncoreFolders.SafeName("A: B/C?. ", "x"), "A BC");
+            Check("a link shows only its host", new EncoreCalendarSource { Location = "https://calendar.google.com/calendar/ical/abc%40group/private-SECRET/basic.ics" }.Display, "calendar.google.com/…");
+
+            // (3) Photos.
+            static void Exif(Image img, int id, short type, byte[] value)
+            {
+                var pi = (System.Drawing.Imaging.PropertyItem)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(System.Drawing.Imaging.PropertyItem));
+                pi.Id = id; pi.Type = type; pi.Len = value.Length; pi.Value = value;
+                img.SetPropertyItem(pi);
+            }
+            static Bitmap Picture(int w, int h)
+            {
+                var b = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                using var g = Graphics.FromImage(b);
+                using var br = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, w, h), Color.SteelBlue, Color.Orange, 30f);
+                g.FillRectangle(br, 0, 0, w, h);
+                g.FillRectangle(Brushes.White, 0, 0, w / 4, h / 8);   // marks the top-left corner
+                return b;
+            }
+            string pics = Path.Combine(root, "pics");
+            Directory.CreateDirectory(pics);
+            string p1 = Path.Combine(pics, "IMG_20261023_142530.jpg");
+            using (var b = Picture(800, 600)) { Exif(b, 0x9003, 2, Encoding.ASCII.GetBytes("2026:10:23 14:25:30\0")); b.Save(p1, System.Drawing.Imaging.ImageFormat.Jpeg); }
+            string p2 = Path.Combine(pics, "DSC_0042.JPG");
+            using (var b = Picture(3000, 2000)) b.Save(p2, System.Drawing.Imaging.ImageFormat.Jpeg);
+            File.SetLastWriteTime(p2, new DateTime(2025, 6, 1, 10, 0, 0));
+            string p3 = Path.Combine(pics, "Portrait.jpg");
+            using (var b = Picture(2400, 1600)) { Exif(b, 0x0112, 3, new byte[] { 6, 0 }); b.Save(p3, System.Drawing.Imaging.ImageFormat.Jpeg); }
+            string p4 = Path.Combine(pics, "Screenshot_2026-10-23-14-25-30.png");
+            using (var b = Picture(1440, 3120)) b.Save(p4, System.Drawing.Imaging.ImageFormat.Png);
+            string p5 = Path.Combine(pics, "prog.jpg");
+            File.WriteAllBytes(p5, Convert.FromBase64String("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wgARCAAQABgDASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAABQYA/8QAFQEBAQAAAAAAAAAAAAAAAAAABAb/2gAMAwEAAhADEAAAAY9B9BA5/WGFUf/EABYQAAMAAAAAAAAAAAAAAAAAAAACBP/aAAgBAQABBQJJxJxJxJxJxJz/xAAYEQACAwAAAAAAAAAAAAAAAAAABQMEIv/aAAgBAwEBPwGkwIWGT//EABgRAAIDAAAAAAAAAAAAAAAAAAAEAgMh/9oACAECAQE/AbHSTun/xAAUEAEAAAAAAAAAAAAAAAAAAAAg/9oACAEBAAY/Al//xAAVEAEBAAAAAAAAAAAAAAAAAAAAYf/aAAgBAQABPyGSCSSST//aAAwDAQACAAMAAAAQBw//xAAWEQEBAQAAAAAAAAAAAAAAAAAhADH/2gAIAQMBAT8QxYTf/8QAFhEBAQEAAAAAAAAAAAAAAAAAAFFh/9oACAECAQE/ENlD/8QAFhAAAwAAAAAAAAAAAAAAAAAAADHB/9oACAEBAAE/EESKkRIiREiJP//Z"));
+            string p6 = Path.Combine(pics, "Rajz.bmp");
+            using (var b = Picture(320, 200)) b.Save(p6, System.Drawing.Imaging.ImageFormat.Bmp);
+
+            string phone = Path.Combine(root, "ipod2");
+            Directory.CreateDirectory(phone);
+            static (int W, int H, bool Turned) Dims(string f)
+            {
+                using var fs = File.OpenRead(f);
+                using var img = Image.FromStream(fs, false, false);
+                return (img.Width, img.Height, img.PropertyIdList.Contains(0x0112));
+            }
+            string album = Path.Combine(phone, "Photos", "Ősz 2026");
+            Check("tagged photo: copied as it is", EncorePhotos.Add(phone, p1, "Ősz 2026"), EncorePhotos.Outcome.Copied);
+            Check("… byte for byte", File.ReadAllBytes(Path.Combine(album, "IMG_20261023_142530.jpg")).SequenceEqual(File.ReadAllBytes(p1)), true);
+            Check("… its time = EXIF taken", EncorePhotos.GetTime(Path.Combine(album, "IMG_20261023_142530.jpg")).ToString("yyyy-MM-dd HH:mm:ss"), "2026-10-23 14:25:30");
+            Check("the same photo again: left", EncorePhotos.Add(phone, p1, "Ősz 2026"), EncorePhotos.Outcome.AlreadyThere);
+            Check("big photo: drawn smaller", EncorePhotos.Add(phone, p2, "Ősz 2026"), EncorePhotos.Outcome.Redrawn);
+            Check("… to 2048 on the long side", Dims(Path.Combine(album, "DSC_0042.JPG")).ToString(), "(2048, 1365, False)");
+            Check("… baseline", EncorePhotos.IsProgressive(Path.Combine(album, "DSC_0042.JPG")), false);
+            Check("… no EXIF date: the original's time", EncorePhotos.GetTime(Path.Combine(album, "DSC_0042.JPG")).ToString("yyyy-MM-dd HH:mm"), "2025-06-01 10:00");
+            Check("turned photo: drawn upright", EncorePhotos.Add(phone, p3, "") + " " + Dims(Path.Combine(phone, "Photos", "Portrait.jpg")), "Redrawn (1365, 2048, False)");
+            Check("tall screenshot PNG: under 3 MP, name kept", EncorePhotos.Add(phone, p4, "Screens") + " " + (Dims(Path.Combine(phone, "Photos", "Screens", "Screenshot_2026-10-23-14-25-30.png")) is var d4 && (long)d4.W * d4.H <= EncorePhotos.MaxWholePixels), "Redrawn True");
+            Check("progressive JPEG recognised", EncorePhotos.IsProgressive(p5) + "/" + EncorePhotos.IsProgressive(p1), "True/False");
+            Check("progressive JPEG: saved as baseline", EncorePhotos.Add(phone, p5, "") + " " + EncorePhotos.IsProgressive(Path.Combine(phone, "Photos", "prog.jpg")), "Redrawn False");
+            Check("BMP: becomes a JPEG", EncorePhotos.Add(phone, p6, "") + " " + File.Exists(Path.Combine(phone, "Photos", "Rajz.jpg")), "Redrawn True");
+            string p7 = Path.Combine(pics, "broken.jpg");
+            File.WriteAllBytes(p7, new byte[] { 0xFF, 0xD8, 1, 2, 3, 4, 5, 6 });
+            Check("not a picture: a reason, nothing left behind", Record.Throws(() => EncorePhotos.Add(phone, p7, "")) is InvalidDataException && !File.Exists(Path.Combine(phone, "Photos", "broken.jpg")), true);
+            Check("Encore's count", EncorePhotos.Count(phone).ToString(), "(6, 3)");
+            Directory.CreateDirectory(Path.Combine(phone, "Fotók"));
+            Check("an existing Fotók folder is the one Encore reads", Path.GetFileName(EncoreFolders.PhotoRoot(phone)), "Fotók");
+
+            // (4) EVF: the encoder's picture is exactly what the player decodes; the sound adds up; the index points at keyframes.
+            const int W = 64, H = 48, N = 40;
+            string evf = Path.Combine(root, "synthetic.evf");
+            var enc = new EvfFrameEncoder(W, H, 300, threads: 4);
+            var shown = new List<byte[]>();
+            var audio = new EvfAudio(2, 15);
+            var pcm = new short[44100 * 3 * 2];
+            for (int i = 0; i < pcm.Length / 2; i++) pcm[2 * i] = pcm[2 * i + 1] = (short)(9000 * Math.Sin(i * 2 * Math.PI * 440 / 44100));
+            audio.Write(pcm, pcm.Length / 2);
+            using (var fs = File.Create(evf))
+            {
+                var wr = new EvfWriter(fs, W, H, 15, audio);
+                var rgba = new byte[W * H * 4];
+                for (int f = 0; f < N; f++)
+                {
+                    for (int y = 0; y < H; y++)
+                        for (int x = 0; x < W; x++)
+                        {
+                            bool box = x >= f && x < f + 12 && y >= 10 && y < 30;
+                            int o = (y * W + x) * 4;
+                            rgba[o] = (byte)(box ? 250 : x * 4); rgba[o + 1] = (byte)(box ? 30 : y * 5); rgba[o + 2] = (byte)(box ? 40 : (x + y) * 2 + f); rgba[o + 3] = 255;
+                        }
+                    bool key = f % 30 == 0;
+                    wr.Frame(enc.Encode(rgba, key), key);
+                    shown.Add(enc.Shown.ToArray());
+                }
+                wr.Close();
+            }
+            var ef = EvfFile.Read(evf);
+            Check("EVF header", $"{ef?.Width}x{ef?.Height}, {ef?.Frames} frames, {ef?.FpsMilli}, {ef?.Rate} Hz, {ef?.Channels} ch", "64x48, 40 frames, 15000, 44100 Hz, 2 ch");
+            Check("EVF keyframe index", string.Join(",", ef!.Index.Select(e => e.Frame)), "0,30");
+            int same = 0;
+            bool played = ef.Play(evf, (fr, fb) =>
+            {
+                var rec = shown[(int)fr];
+                bool eq = true;
+                for (int i = 0; i < W * H && eq; i++)
+                {
+                    int c = fb[i];
+                    eq = rec[i * 3] == ((c >> 11) & 31) * 255 / 31 && rec[i * 3 + 1] == ((c >> 5) & 63) * 255 / 63 && rec[i * 3 + 2] == (c & 31) * 255 / 31;
+                }
+                if (eq) same++;
+            }, out long samples);
+            Check("EVF plays through", played, true);
+            Check("every decoded frame = the encoder's picture", same, N);
+            Check("sound: one chunk per frame", samples, (long)Math.Floor(N * 44100.0 / 15 + 0.5));
+            using (var fs = File.OpenRead(evf))
+            {
+                var h8 = new byte[8];
+                bool ok = true;
+                foreach (var (fr, v, a) in ef.Index)
+                {
+                    fs.Position = v; fs.ReadExactly(h8); ok &= h8[0] == 'V' && h8[1] == 1;
+                    fs.Position = a; fs.ReadExactly(h8); ok &= h8[0] == 'A';
+                }
+                Check("index → keyframe 'V' and the 'A' before it", ok, true);
+            }
+            var a1 = new EvfAudio(2, 15);
+            a1.Write(pcm, 44100);
+            var ch0 = a1.Chunk(0)!;
+            Check("first sound chunk: 2940 sample pairs", BitConverter.ToInt32(ch0, 0), 2940);
+            // IMA ADPCM back, as video.c decodes it: it must be the sine again (≥ 25 dB)
+            double sig = 0, noise = 0;
+            int pred = BitConverter.ToInt16(ch0, 4), idx = ch0[6], si = 0;
+            for (int k = 12; k < ch0.Length; k++, si++)
+            {
+                int code = ch0[k] & 15, step = EvfAudio.Step[idx], delta = step >> 3;
+                if ((code & 4) != 0) delta += step;
+                if ((code & 2) != 0) delta += step >> 1;
+                if ((code & 1) != 0) delta += step >> 2;
+                pred = Math.Clamp((code & 8) != 0 ? pred - delta : pred + delta, -32768, 32767);
+                idx = Math.Clamp(idx + EvfAudio.Idx[code], 0, 88);
+                sig += (double)pcm[2 * si] * pcm[2 * si];
+                noise += (double)(pcm[2 * si] - pred) * (pcm[2 * si] - pred);
+            }
+            Check("ADPCM decodes back to the sine (≥ 25 dB)", 10 * Math.Log10(sig / Math.Max(1, noise)) >= 25, true);
+
+            var ff = FfmpegService.Detect(AppSettings.Load().FfmpegPath);
+            if (ff is null) log.AppendLine("SKIP  real conversion: no ffmpeg");
+            else
+            {
+                string clip = Path.Combine(root, "clip.mp4");
+                var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ff.FfmpegPath,
+                    $"-v error -y -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 3 -ac 2 -c:v libx264 -pix_fmt yuv420p -c:a aac \"{clip}\"")
+                    { UseShellExecute = false, CreateNoWindow = true })!;
+                mk.WaitForExit(60_000);
+                string vids = EncoreFolders.VideoRoot(ipod);
+                Directory.CreateDirectory(vids);
+                double last = 0;
+                string got = EvfConverter.Convert(ff.FfmpegPath, clip, Path.Combine(vids, "clip.evf"), new EvfOptions(15), (f, _) => last = f, () => false, 4);
+                var ce = EvfFile.Read(got);
+                Check("ffmpeg → EVF: 16:9 into 320 wide", $"{ce?.Width}x{ce?.Height}, {ce?.Frames} frames, {ce?.Rate} Hz, {ce?.Channels} ch", "320x180, 45 frames, 44100 Hz, 2 ch");
+                Check("ffmpeg → EVF: keyframes every 2 s", string.Join(",", ce!.Index.Select(e => e.Frame)), "0,30");
+                Check("ffmpeg → EVF: plays through", ce.Play(got, (_, _) => { }, out long s2) && Math.Abs(s2 - 3 * 44100) <= 2940, true);
+                Check("ffmpeg → EVF: progress reached the end", last, 1.0);
+                Check("already converted: found", Path.GetFileName(EvfConverter.Existing(vids, "clip")), "clip.evf");
+                Check("a second copy gets a number", Path.GetFileName(EvfConverter.Convert(ff.FfmpegPath, clip, Path.Combine(vids, "clip.evf"), new EvfOptions(10, 800), (_, _) => { }, () => false)), "clip (2).evf");
+                bool cancelledOk = false;
+                try { EvfConverter.Convert(ff.FfmpegPath, clip, Path.Combine(vids, "stop.evf"), new EvfOptions(15), (_, _) => { }, () => true); }
+                catch (OperationCanceledException) { cancelledOk = true; }
+                Check("cancelled: nothing left behind", cancelledOk && !Directory.EnumerateFiles(vids, "stop*").Any(), true);
+                string txt = Path.Combine(root, "notes.txt");
+                File.WriteAllText(txt, "not a video");
+                Check("not a video: a reason", Record.Throws(() => EvfConverter.Convert(ff.FfmpegPath, txt, Path.Combine(vids, "x.evf"), new EvfOptions(), (_, _) => { }, () => false)) is InvalidDataException, true);
+            }
+        }
+        catch (Exception ex) { log.AppendLine("FAIL  exception: " + ex); fail++; }
+        finally { try { Directory.Delete(root, true); } catch { } }
+        log.Insert(0, $"Encore sync test: {pass} passed, {fail} failed{Environment.NewLine}");
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-encoresynctest.txt"), log.ToString());
+        Console.WriteLine(log.ToString());
+    }
+
+    private static class Record
+    {
+        public static Exception? Throws(Action a) { try { a(); return null; } catch (Exception ex) { return ex; } }
+    }
+
     private static void RunDupGuardTest()
     {
         var log = new StringBuilder();
@@ -1982,6 +2297,7 @@ internal static class Program
             for (int i = 0; i < 10; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
             File.Copy(dbPath, Path.Combine(control, "iTunes", "iTunesDB"));
             File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: M9807\n");
+            if (Environment.GetEnvironmentVariable("MIX_ENCORE") == "1") EncoreSandbox(sandbox);   // the iPod runs Encore OS: its card, its Settings rows
             device = DeviceDetector.Build(sandbox);
         }
 
@@ -2251,6 +2567,12 @@ internal static class Program
         if (view.StartsWith("settings"))
         {
             var settings = AppSettings.Load();
+            if (Environment.GetEnvironmentVariable("MIX_ENCORE") == "1" && settings.EncoreCalendars.Count == 0)   // two calendars set up (in memory: Frozen)
+                settings.EncoreCalendars.AddRange(new EncoreCalendarSource[]
+                {
+                    new() { Name = "Család", Location = "https://calendar.google.com/calendar/ical/example/private-0000/basic.ics" },
+                    new() { Name = "Edzések", Location = @"C:\Users\Erik\Documents\Edzések.ics" },
+                });
             Theme.SetAccent(settings.Accent); // match the live app so the render is accurate
             string tail = view.Substring("settings".Length);
 
@@ -2281,6 +2603,7 @@ internal static class Program
             { StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600) };
             single.Show();
             if (int.TryParse(tail, out int catIndex)) single.RenderCategory(catIndex);
+            if (int.TryParse(Environment.GetEnvironmentVariable("MIX_SETTINGS_SCROLL"), out int sscroll)) single.RenderScroll(sscroll);   // further down a long page
             Snap(single, outPng);
             single.Close();
             return;
