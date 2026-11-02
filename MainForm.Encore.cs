@@ -28,6 +28,9 @@ internal sealed partial class MainForm
         return (photos, albums, videos, cals);
     }
 
+    /// <summary>The iPod boots Encore OS (IPodFirmware: cached per rockbox.ipod, so cheap enough for a drag-over).</summary>
+    private static bool IsEncore(IPodDevice dev) => IPodFirmware.Detect(dev.MountRoot).IsEncore;
+
     private void EncoreChanged(IPodDevice dev)
     {
         _encoreCounts = null;
@@ -62,9 +65,13 @@ internal sealed partial class MainForm
 
         var videoBtn = new ThemedButton { Text = Loc.T("Add videos…"), Pill = true, Width = 130, Height = 30 };
         videoBtn.Click += (_, _) => AddEncoreVideos(dev);
-        card.AddRow(Loc.T("Videos"), videos == 0
+        string videoNote = videos == 0
             ? Loc.T("Any video, converted to Encore's own format on the way (needs ffmpeg). Encore picks up where you stopped watching.")
-            : Loc.T("{0} on the iPod. Any video is converted to Encore's own format on the way (needs ffmpeg).", videos), videoBtn, 64);
+            : Loc.T("{0} on the iPod. Any video is converted to Encore's own format on the way (needs ffmpeg).", videos);
+        // videos added for Apple's own software (iTunes' list, iPod_Control) never show on Encore
+        int apple = _db?.Tracks.Count(t => MediaType.IsVideo(t.MediaType)) ?? 0;
+        if (apple > 0) videoNote += " " + Loc.T("Also {0} video(s) in Apple's format, which Encore can't play: delete them under Videos and add them again here.", apple);
+        card.AddRow(Loc.T("Videos"), videoNote, videoBtn, apple > 0 ? 82 : 64);
         card.Finish();
         return card;
     }
@@ -180,22 +187,28 @@ internal sealed partial class MainForm
 
     // ---- videos ----
 
-    private void AddEncoreVideos(IPodDevice dev)
+    /// <summary>Videos onto an Encore iPod: <paramref name="files"/> (a drop, the Videos page's Add), or the ones picked
+    /// here. Every way of adding a video to such an iPod ends here - Encore never lists an Apple .m4v.</summary>
+    private void AddEncoreVideos(IPodDevice dev, string[]? files = null)
     {
         var ff = FfmpegService.Detect(_settings.FfmpegPath);
         if (ff is null)
         {
-            if (MessageDialog.Show(this, Loc.T("Converting a video for Encore OS needs ffmpeg, and it wasn't found.\n\nInstall it (for example: winget install Gyan.FFmpeg) and it is found by itself, or show Mixtape where ffmpeg.exe is in Settings ▸ Video.\n\nOpen Settings now?"),
+            if (MessageDialog.Show(this, Loc.T("This iPod runs Encore OS, which plays only videos converted to its own format. Converting needs ffmpeg, and it wasn't found, so nothing was copied.\n\nInstall it (for example: winget install Gyan.FFmpeg) and it is found by itself, or show Mixtape where ffmpeg.exe is in Settings ▸ Video.\n\nOpen Settings now?"),
                     Loc.T("ffmpeg not found"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes) OpenSettings(2);
             return;
         }
-        using var od = new OpenFileDialog
+        if (files is null)
         {
-            Multiselect = true, Title = Loc.T("Select videos to convert for the iPod"),
-            Filter = Loc.T("Video files") + "|*.mp4;*.m4v;*.mov;*.avi;*.mkv;*.wmv;*.flv;*.webm;*.mpg;*.mpeg;*.ts;*.3gp|" + Loc.T("All files") + "|*.*",
-        };
-        if (od.ShowDialog(this) != DialogResult.OK || od.FileNames.Length == 0) return;
-        string[] files = od.FileNames;
+            using var od = new OpenFileDialog
+            {
+                Multiselect = true, Title = Loc.T("Select videos to convert for the iPod"),
+                Filter = Loc.T("Video files") + "|*.mp4;*.m4v;*.mov;*.avi;*.mkv;*.wmv;*.flv;*.webm;*.mpg;*.mpeg;*.ts;*.3gp|" + Loc.T("All files") + "|*.*",
+            };
+            if (od.ShowDialog(this) != DialogResult.OK || od.FileNames.Length == 0) return;
+            files = od.FileNames;
+        }
+        string[] pick = files;
         var opts = new EvfOptions(EvfOptions.FpsChoices.Contains(_settings.EncoreVideoFps) ? _settings.EncoreVideoFps : 15,
                                   EvfOptions.Lambdas[Math.Clamp(_settings.EncoreVideoQuality, 0, 2)], _settings.EncoreVideoFill);
         string dir = EncoreFolders.VideoRoot(dev.MountRoot);
@@ -205,33 +218,34 @@ internal sealed partial class MainForm
         var added = new List<(string Name, long Bytes)>();
         var there = new List<string>();
         var errors = new List<string>();
-        using (var prog = new CopyProgressDialog(Loc.T("Converting videos for your iPod"), files.Length * 1000, (report, cancelled) =>
+        using (var prog = new CopyProgressDialog(Loc.T("Converting videos for your iPod"), pick.Length * 1000, (report, cancelled) =>
         {
             Directory.CreateDirectory(dir);
-            for (int i = 0; i < files.Length; i++)
+            for (int i = 0; i < pick.Length; i++)
             {
                 if (cancelled()) break;
-                string name = EncoreFolders.SafeName(Path.GetFileNameWithoutExtension(files[i]), "Video");
+                string name = EncoreFolders.SafeName(Path.GetFileNameWithoutExtension(pick[i]), "Video");
                 if (EvfConverter.Existing(dir, name) is not null) { there.Add(name); continue; }
                 int at = i * 1000;
-                report(at, Loc.T("Converting {0} of {1}   ·   {2}", i + 1, files.Length, name));
+                report(at, Loc.T("Converting {0} of {1}   ·   {2}", i + 1, pick.Length, name));
                 try
                 {
-                    string done = EvfConverter.Convert(ff.FfmpegPath, files[i], Path.Combine(dir, name + ".evf"), opts,
-                        (f, t) => report(at + (int)(f * 999), Loc.T("Converting {0} of {1}   ·   {2}%   ·   {3}", i + 1, files.Length, (int)(f * 100), name)),
+                    string done = EvfConverter.Convert(ff.FfmpegPath, pick[i], Path.Combine(dir, name + ".evf"), opts,
+                        (f, t) => report(at + (int)(f * 999), Loc.T("Converting {0} of {1}   ·   {2}%   ·   {3}", i + 1, pick.Length, (int)(f * 100), name)),
                         cancelled, threads);
                     added.Add((name, new FileInfo(done).Length));
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex) { errors.Add($"{name}: {ex.Message}"); }
             }
-            report(files.Length * 1000, Loc.T("Done"));
+            report(pick.Length * 1000, Loc.T("Done"));
         }, CopyFlight.ToIPod))
         {
             prog.ShowDialog(this);
             EncoreChanged(dev);
             var sb = new StringBuilder(prog.WasCancelled ? Loc.T("Stopped — added {0} video(s).", added.Count) : Loc.T("Added {0} video(s).", added.Count));
-            if (added.Count > 0) sb.Append(' ').Append(Loc.T("They take {0} on the iPod.", CapacityBar.Human(added.Sum(a => a.Bytes))));
+            if (added.Count > 0) sb.Append(' ').Append(Loc.T("They take {0} on the iPod.", CapacityBar.Human(added.Sum(a => a.Bytes))))
+                                   .Append("\n\n").Append(Loc.T("Encore lists them under Videos. (Mixtape's Videos page shows the videos in Apple's format only.)"));
             if (there.Count > 0) sb.Append("\n\n").Append(Loc.T("Already on the iPod: {0}", string.Join(", ", there)));
             if (errors.Count > 0) sb.Append(Loc.T("\n\n{0} could not be added:\n• ", errors.Count)).Append(string.Join("\n• ", errors));
             MessageDialog.Show(this, sb.ToString(), "Mixtape", MessageBoxButtons.OK, errors.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);

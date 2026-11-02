@@ -11,9 +11,13 @@ namespace iPodCommander;
 /// </summary>
 internal sealed class MessageDialog : GlassDialog
 {
+    /// <summary>Test harness: answers every message instead of showing it (it gets the text, for the log).</summary>
+    internal static Func<string, DialogResult>? TestAnswer;
+
     public static DialogResult Show(IWin32Window? owner, string text, string caption,
         MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None)
     {
+        if (TestAnswer is { } answer) return answer(text ?? "");
         using var dlg = new MessageDialog(text ?? "", caption ?? "", DefsFor(buttons), icon);
         return owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
     }
@@ -23,6 +27,7 @@ internal sealed class MessageDialog : GlassDialog
     public static DialogResult Show(IWin32Window? owner, string text, string caption,
         (string label, DialogResult result, bool primary)[] customButtons, MessageBoxIcon icon = MessageBoxIcon.None)
     {
+        if (TestAnswer is { } answer) return answer(text ?? "");
         using var dlg = new MessageDialog(text ?? "", caption ?? "", customButtons, icon);
         return owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
     }

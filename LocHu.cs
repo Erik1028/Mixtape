@@ -90,8 +90,12 @@ internal static partial class LocHu
         ["Album on the iPod (leave it empty for none):"] = "Album az iPodon (üresen hagyva nincs album):",
         ["{0} of them were made smaller or saved anew so the iPod opens them quickly."] = "Ebből {0} kisebb lett vagy újra lett mentve, hogy az iPod gyorsan megnyissa.",
         ["{0} were already on the iPod."] = "{0} már az iPodon volt.",
-        ["Converting a video for Encore OS needs ffmpeg, and it wasn't found.\n\nInstall it (for example: winget install Gyan.FFmpeg) and it is found by itself, or show Mixtape where ffmpeg.exe is in Settings ▸ Video.\n\nOpen Settings now?"] =
-            "A videók Encore OS-re alakításához ffmpeg kell, de nem található.\n\nTelepítsd (például: winget install Gyan.FFmpeg), és magától megtalálja, vagy mutasd meg a Mixtape-nek az ffmpeg.exe helyét a Beállítások ▸ Videó oldalon.\n\nMegnyitod most a Beállításokat?",
+        ["This iPod runs Encore OS, which plays only videos converted to its own format. Converting needs ffmpeg, and it wasn't found, so nothing was copied.\n\nInstall it (for example: winget install Gyan.FFmpeg) and it is found by itself, or show Mixtape where ffmpeg.exe is in Settings ▸ Video.\n\nOpen Settings now?"] =
+            "Ezen az iPodon Encore OS fut, amely csak a saját formátumára alakított videókat játssza le. Az átalakításhoz ffmpeg kell, de nem található, ezért semmi sem került fel.\n\nTelepítsd (például: winget install Gyan.FFmpeg), és magától megtalálja, vagy mutasd meg a Mixtape-nek az ffmpeg.exe helyét a Beállítások ▸ Videó oldalon.\n\nMegnyitod most a Beállításokat?",
+        ["Also {0} video(s) in Apple's format, which Encore can't play: delete them under Videos and add them again here."] =
+            "Van még {0} Apple-formátumú videó is, ezeket az Encore nem játssza le: töröld őket a Videók alatt, és add hozzá újra itt.",
+        ["Encore lists them under Videos. (Mixtape's Videos page shows the videos in Apple's format only.)"] =
+            "Az Encore a Videos alatt mutatja őket. (A Mixtape Videók oldala csak az Apple-formátumú videókat mutatja.)",
         ["Select videos to convert for the iPod"] = "Válaszd ki az iPodra átalakítandó videókat",
         ["Converting videos for your iPod"] = "Videók átalakítása az iPodra",
         ["They take {0} on the iPod."] = "{0} helyet foglalnak az iPodon.",

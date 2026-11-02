@@ -186,6 +186,10 @@ internal static class Program
         // own parser, events.c, ported), the calendar sync, photos (dates, sizes, albums) and EVF videos (decoded back
         // the way the player decodes them; with ffmpeg also a real conversion). → ipod-encoresynctest.txt
         if (args.Contains("--encoresynctest")) { RunEncoreSyncTest(); return; }
+        // A video dropped onto the window, on a sandbox iPod that runs Encore OS: it must become an .evf in Encore's
+        // video folder, never an Apple .m4v in iTunes' list; the same drop on a stock sandbox iPod still goes the Apple
+        // way. Needs ffmpeg. → ipod-encorevideotest.txt
+        if (args.Contains("--encorevideotest")) { RunEncoreVideoTest(); return; }
         // A video → Encore's .evf from the command line, the way "Add videos…" converts it.
         // Usage: --evf <video> <out.evf> [fps 10|15|20|24] [quality 0|1|2] [fill]
         if (args.Length >= 3 && args[0] == "--evf") { RunEvf(args); return; }
@@ -1151,6 +1155,15 @@ internal static class Program
         }
         Directory.CreateDirectory(Path.Combine(root, "Calendars"));
         File.WriteAllText(Path.Combine(root, "Calendars", "Család.ics"), EncoreCalendar.Write(Array.Empty<EncoreCalendar.OutEvent>(), "Család"));
+        if (Environment.GetEnvironmentVariable("MIX_ENCORE_APPLEVIDEO") == "1")   // and a video added the Apple way, which Encore can't play
+        {
+            string m4v = Path.Combine(root, "Holiday.m4v");
+            File.WriteAllBytes(m4v, new byte[4096]);
+            var lib = IpodLibrary.Load(DeviceDetector.Build(root)!);
+            lib.AddMediaFile(m4v, MediaType.Movie, "Holiday", 60);
+            lib.Save();
+            File.Delete(m4v);
+        }
     }
 
     private static void RunEvf(string[] args)
@@ -1427,6 +1440,134 @@ internal static class Program
         log.Insert(0, $"Encore sync test: {pass} passed, {fail} failed{Environment.NewLine}");
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-encoresynctest.txt"), log.ToString());
         Console.WriteLine(log.ToString());
+    }
+
+    private static void RunEncoreVideoTest()
+    {
+        var log = new StringBuilder();
+        int pass = 0, fail = 0;
+        void Check(string what, object? got, object? want)
+        {
+            bool ok = Equals(got?.ToString(), want?.ToString());
+            log.AppendLine($"{(ok ? "PASS" : "FAIL")}  {what}: got {got}, want {want}");
+            if (ok) pass++; else fail++;
+        }
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        Loc.Lang = "en";
+        AppSettings.Frozen = true;
+        Anim.MotionEnabled = false;
+        ArtworkService.KeepOnDisk = false;
+        string root = Path.Combine(Path.GetTempPath(), "mixtape-encorevideotest-" + Environment.ProcessId);
+        var said = new List<string>();
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            Directory.CreateDirectory(root);
+            var ff = FfmpegService.Detect(AppSettings.Load().FfmpegPath);
+            if (ff is null) { log.AppendLine("SKIP  no ffmpeg"); return; }
+            string clip = Path.Combine(root, "clip.mp4");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ff.FfmpegPath,
+                $"-v error -y -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 3 -ac 2 -c:v libx264 -pix_fmt yuv420p -c:a aac \"{clip}\"")
+                { UseShellExecute = false, CreateNoWindow = true })!.WaitForExit(60_000);
+
+            // a sandbox iPod Video (no signature: writable), the synthetic two-song database
+            string Ipod(string name, bool encore)
+            {
+                string r = Path.Combine(root, name), control = Path.Combine(r, "iPod_Control");
+                Directory.CreateDirectory(Path.Combine(control, "iTunes"));
+                Directory.CreateDirectory(Path.Combine(control, "Device"));
+                for (int i = 0; i < 10; i++) Directory.CreateDirectory(Path.Combine(control, "Music", $"F{i:00}"));
+                File.WriteAllBytes(Path.Combine(control, "iTunes", "iTunesDB"), SyntheticDb.Build());
+                File.WriteAllText(Path.Combine(control, "Device", "SysInfo"), "ModelNumStr: MA448\n");
+                if (encore) EncoreSandbox(r);
+                return r;
+            }
+            (int Tracks, int Videos) Db(string r)
+            {
+                var db = ITunesDbReader.Read(File.ReadAllBytes(Path.Combine(r, "iPod_Control", "iTunes", "iTunesDB")));
+                return (db.Tracks.Count, db.Tracks.Count(t => MediaType.IsVideo(t.MediaType)));
+            }
+            int M4v(string r) => Directory.EnumerateFiles(Path.Combine(r, "iPod_Control"), "*.m4v", SearchOption.AllDirectories).Count();
+            MainForm Window(string r)
+            {
+                var f = new MainForm(autoDetect: false)
+                {
+                    StartPosition = FormStartPosition.Manual, Location = new Point(-2600, -2600), Size = new Size(1080, 700),
+                    ShowInTaskbar = false, FormBorderStyle = FormBorderStyle.None,
+                };
+                f.Show();
+                f.PreviewDevice(DeviceDetector.Build(r)!);
+                Application.DoEvents();
+                return f;
+            }
+            // every message is answered (and kept): OK, but never "open Settings" (that would be a window of its own)
+            MessageDialog.TestAnswer = text => { said.Add(text); return text.Contains("Open Settings now?") ? DialogResult.No : DialogResult.OK; };
+
+            // (1) Encore OS: the drop becomes an .evf in /Videos; iTunes' list and its folders stay as they were
+            string enc = Ipod("encore", encore: true);
+            var before = Db(enc);
+            using (var w = Window(enc))
+            {
+                w.AddDroppedFiles(new[] { clip });
+                string evf = Path.Combine(enc, "Videos", "clip.evf");
+                var e = EvfFile.Read(evf);
+                Check("Encore: dropped video → Videos/clip.evf", e is null ? "missing" : $"{e.Width}x{e.Height}, {e.Frames} frames", "320x180, 45 frames");
+                Check("Encore: iTunes' list unchanged, no video in it", Db(enc).ToString(), before.ToString());
+                Check("Encore: no .m4v under iPod_Control", M4v(enc), 0);
+                Check("Encore: says where it went", said.LastOrDefault()?.Contains("Encore lists them under Videos") == true, true);
+                w.AddDroppedFiles(new[] { clip });
+                Check("Encore: the same video again is left", said.LastOrDefault()?.Contains("Already on the iPod: clip") == true
+                                                              && Directory.GetFiles(Path.Combine(enc, "Videos"), "clip*").Length == 1, true);
+                string dropDir = Path.Combine(root, "drop", "sub");   // a dropped folder: its videos (in subfolders too) the same way
+                Directory.CreateDirectory(dropDir);
+                File.Copy(clip, Path.Combine(dropDir, "clip.mp4"));
+                w.AddDroppedFiles(new[] { Path.Combine(root, "drop") });
+                Check("Encore: a dropped folder goes the same way", said.LastOrDefault()?.Contains("Already on the iPod: clip") == true && Db(enc).ToString() + " " + M4v(enc) == before + " 0", true);
+
+                // without ffmpeg: it says so, points to Settings, and writes nothing - not even the Apple copy
+                string clip2 = Path.Combine(root, "clip2.mp4");
+                File.Copy(clip, clip2);
+                var sField = typeof(MainForm).GetField("_settings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                var st = (AppSettings)sField.GetValue(w)!;
+                string? kept = st.FfmpegPath;
+                st.FfmpegPath = Path.Combine(root, "no-ffmpeg-here.exe");
+                Environment.SetEnvironmentVariable("PATH", "");
+                int n = said.Count;
+                w.AddDroppedFiles(new[] { clip2 });
+                Environment.SetEnvironmentVariable("PATH", path);
+                st.FfmpegPath = kept;
+                Check("Encore, no ffmpeg: explained", said.Count > n && said[n].Contains("needs ffmpeg") && said[n].Contains("Settings"), true);
+                Check("Encore, no ffmpeg: nothing written", $"{File.Exists(Path.Combine(enc, "Videos", "clip2.evf"))} {M4v(enc)} {Db(enc)}", $"False 0 {before}");
+                w.Close();
+            }
+
+            // (2) a stock iPod: the same drop still goes Apple's way (an .m4v in iTunes' list, no Encore folder)
+            string stock = Ipod("stock", encore: false);
+            var sb0 = Db(stock);
+            using (var w = Window(stock))
+            {
+                w.AddDroppedFiles(new[] { clip });
+                var after = Db(stock);
+                Check("stock iPod: one video added to iTunes' list", $"{after.Tracks - sb0.Tracks} track, {after.Videos} video", "1 track, 1 video");
+                Check("stock iPod: its .m4v under iPod_Control, no Videos folder", $"{M4v(stock)} {Directory.Exists(Path.Combine(stock, "Videos"))}", "1 False");
+                w.Close();
+            }
+        }
+        catch (Exception ex) { log.AppendLine("FAIL  exception: " + ex); fail++; }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", path);
+            MessageDialog.TestAnswer = null;
+            try { Directory.Delete(root, true); } catch { }
+            log.AppendLine("messages:");
+            foreach (string s in said) log.AppendLine("  » " + s.Replace("\n", " / "));
+            log.Insert(0, $"Encore video test: {pass} passed, {fail} failed{Environment.NewLine}");
+            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "ipod-encorevideotest.txt"), log.ToString());
+            Console.WriteLine(log.ToString());
+        }
     }
 
     private static class Record

@@ -6887,8 +6887,9 @@ internal sealed partial class MainForm : Form, IMessageFilter
         c.DragLeave += (_, _) => ScheduleHideDrop();
     }
 
-    /// <summary>Can the current view receive a file drop? Local Music always; an iPod view only when writable.</summary>
-    private bool CanAcceptDrop() => _viewKind == SidebarRowKind.LocalMusic || (_device is not null && _device.Profile.CanWrite);
+    /// <summary>Can the current view receive a file drop? Local Music always; an iPod view when writable, or when it runs
+    /// Encore OS (its videos go to a folder of its own, not into iTunes' list).</summary>
+    private bool CanAcceptDrop() => _viewKind == SidebarRowKind.LocalMusic || (_device is not null && (_device.Profile.CanWrite || IsEncore(_device)));
 
     private void OnDragOverAny(object? sender, DragEventArgs e)
     {
@@ -6929,8 +6930,14 @@ internal sealed partial class MainForm : Form, IMessageFilter
 
         // On the Local Music view, a drop adds PC folders to the library (no iPod needed).
         if (_viewKind == SidebarRowKind.LocalMusic) { AddDroppedToLocal(paths); return; }
+        AddDroppedFiles(paths);
+    }
 
-        if (_device is null || !_device.Profile.CanWrite)
+    /// <summary>Files or folders dropped onto the iPod, routed by type (the test harness drops here too).</summary>
+    internal void AddDroppedFiles(string[] paths)
+    {
+        // Encore OS takes videos into a folder of its own, so they need no writable iTunes database
+        if (_device is null || (!_device.Profile.CanWrite && !IsEncore(_device)))
         {
             SetStatus(Loc.T("Connect a writable iPod, or open Local Music, to add files by dropping them."));
             return;
@@ -6950,7 +6957,7 @@ internal sealed partial class MainForm : Form, IMessageFilter
         }
         // Each runs its own progress dialog; a mixed drop processes them in turn.
         if (audio.Length > 0) AddMusicFiles(audio);
-        if (video.Length > 0) AddVideoFiles(video);
+        if (video.Length > 0) AddVideoFiles(video);   // Encore OS: converted into its own format and folder
         if (images.Length > 0) AddPhotoFiles(images);
     }
 
@@ -6989,6 +6996,7 @@ internal sealed partial class MainForm : Form, IMessageFilter
 
     private void OnAddVideo()
     {
+        if (_device is not null && IsEncore(_device)) { AddEncoreVideos(_device); return; }   // Encore plays only its own format
         if (_lib is null || _device is null || !_device.Profile.CanWrite) return;
         using var dlg = new OpenFileDialog
         {
@@ -7003,6 +7011,8 @@ internal sealed partial class MainForm : Form, IMessageFilter
     /// <summary>Core video-add (shared by the button and drag-and-drop): detect ffmpeg, transcode if needed, save.</summary>
     private void AddVideoFiles(string[] files)
     {
+        // Encore OS lists only its own .evf files in its video folder: an Apple .m4v in iTunes' list would never show
+        if (_device is not null && IsEncore(_device) && files.Length > 0) { AddEncoreVideos(_device, files); return; }
         if (_lib is null || _device is null || !_device.Profile.CanWrite || files.Length == 0) return;
 
         files = FilterAlreadyOnIpod(files, Loc.T("videos"), isVideo: true); // skip/keep duplicates already on the iPod
