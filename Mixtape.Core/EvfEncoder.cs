@@ -452,6 +452,7 @@ internal sealed class EvfFile
     public static void DecodeFrame(ushort[] fb, int w, int h, ReadOnlySpan<byte> d)
     {
         int bw = w / 4, total = bw * (h / 4), blk = 0, at = 0;
+        Span<ushort> c = stackalloc ushort[4];   // a four-colour block's palette
         while (blk < total && at < d.Length)
         {
             int op = d[at++], n = (op & 0x3F) + 1, kind = op >> 6;
@@ -463,8 +464,8 @@ internal sealed class EvfFile
                 if (kind == 1)
                 {
                     if (at + 2 > d.Length) return;
-                    ushort c = BinaryPrimitives.ReadUInt16LittleEndian(d[at..]); at += 2;
-                    for (int y = 0; y < 4; y++, p += w) fb[p] = fb[p + 1] = fb[p + 2] = fb[p + 3] = c;
+                    ushort flat = BinaryPrimitives.ReadUInt16LittleEndian(d[at..]); at += 2;
+                    for (int y = 0; y < 4; y++, p += w) fb[p] = fb[p + 1] = fb[p + 2] = fb[p + 3] = flat;
                 }
                 else if (kind == 2)
                 {
@@ -477,7 +478,6 @@ internal sealed class EvfFile
                 else
                 {
                     if (at + 12 > d.Length) return;
-                    Span<ushort> c = stackalloc ushort[4];
                     for (int k = 0; k < 4; k++) c[k] = BinaryPrimitives.ReadUInt16LittleEndian(d[(at + 2 * k)..]);
                     uint m = BinaryPrimitives.ReadUInt32LittleEndian(d[(at + 8)..]); at += 12;
                     for (int y = 0; y < 4; y++, p += w, m >>= 8)
